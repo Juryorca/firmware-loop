@@ -4,6 +4,7 @@
 # 白名单 = 我们自己的管线工具,禁止清理。
 ALLOW='start_mcp.py|keepalive.py|idalog.txt'
 removed=0
+rm -rf /mnt/d/ida_test/submit 2>/dev/null    # 提交中转件(win_stage.sh 放的)一并清掉
 rm -f /mnt/d/ida_test/.port-* /mnt/d/ida_test/boot_*.py /mnt/d/ida_test/STOP* /mnt/d/ida_test/READY* /mnt/d/ida_test/BEAT* 2>/dev/null
 for f in /mnt/d/ida_test/*; do
   [ -e "$f" ] || continue
