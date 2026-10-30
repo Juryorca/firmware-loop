@@ -1,0 +1,12 @@
+# 本仓库只管「agent 框架本体」:AGENTS.md / LOOP.md / .pi/ / tools/ / knowledge/ / prompts/
+# 目标现场与固件一律不进库(可重下 / 可重建 / 非框架)
+/state/
+/intel/
+/tmp/
+*.log
+unblob.log
+*.pid
+*.lock
+knowledge/.kb.lock
+knowledge/.snapshots/**
+.pi/guard-off-*
