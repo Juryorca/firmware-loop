@@ -62,5 +62,12 @@ EOF
 _tl=$(grep -rlE "^[[:space:]]*##[[:space:]]*(Timeline|时间线)[[:space:]]*$" state/*/report/*.md 2>/dev/null | tr '\n' ' ')
 [ -z "$_tl" ] && ok "advisory 无 Timeline 节" || bad "advisory 仍有 Timeline: $_tl"
 
+# 框架文件版本控制:有未提交改动就提示(不是错误,只是提醒 commit)
+if [ -d .git ]; then
+  _dirty=$(git status --porcelain -- AGENTS.md LOOP.md .pi tools knowledge prompts 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$_dirty" = "0" ]; then ok "框架改动已全部提交"; else
+    info "框架有 $_dirty 处未提交改动(建议 commit;git diff 可核对)"; fi
+else info "非 git 仓库(框架改动无法回滚)"; fi
+
 echo "=== pass=$pass fail=$fail ==="
 [ $fail -eq 0 ]
