@@ -852,7 +852,7 @@ A = pristine(setup 态) / B = 预设版(已配置 + 多主体 + 自签 CA);同�
 - **坑**: WSL2 默认 NAT ⇒ `127.0.0.1` 到不了 Windows;`networkingMode=Mirrored` 下才直通 ✓;`--autoConnect` 是 **stdio 服务**,进程起来不会报错 ✗ ⇒ 必须**真调一个工具**才知道通不通 ✓。
 - 证据/产物: 2026-10-30 实测 `--autoConnect --userDataDir /mnt/c/Users/<u>/AppData/Local/Google/Chrome/User Data` 从 WSL 接上 Windows Chrome 156,`list_pages` 返回真实标签页 ✓;不带 `--userDataDir` 报 `Could not find DevToolsActivePort at /home/<u>/.config/google-chrome/…` ✗。
 
-## 提交前先判「收不收」:范围/类别 5 道门 + 拿不到赏金时的 CVE 路由
+## 提交前先判「收不收」:先读该项目 scope/policy 原文 + 拿不到赏金时的 CVE 路由
 - **原则:不凭印象判"收不收"** ✗ —— 每个项目在提交页/政策页都写明 scope 与排除项,**必须读原文并引用**;KB 里不预存"某类一定不收"的结论(项目会变、各家差别大)✓。
 - **做法**:①找到该项目的 scope / policy / program rules 原文(记 URL + 摘录关键句)②逐条核对"我们的 finding 是否落在任何一条排除项里"③把**项目原文**与**我们的对应事实**并列写进 notes(判据 = 原文,不是"我觉得")④原文没写到的项 ⇒ 记「未知」,**照常提交**观察 ✓,不得用"我猜不收"当理由 ✗。
 - **去原文里核对的项(不是清单式臆断)**:哪些产品/版本在 scope、是否接受**后认证**、是否排除 DoS/资源耗尽、是否排除**第三方组件**、是否排除需非默认配置、对 PoC 与版本的要求、披露时限与禁止公开条款、是否提供 CVE、上报渠道与是否要 PGP ✓。
