@@ -10,6 +10,7 @@
   kb.py add <file> --title T [--body F|-] 追加新条目(标题须唯一、单行、不含目标内路径)
   kb.py append-line <file> --entry KEY --line TEXT   往既有条目追加一行(如"实例"行)
   kb.py replace <file> --entry KEY --old S --new S   条目内替换一处措辞(须恰好命中 1 行)
+  kb.py rewrite <file> --entry KEY --body FILE       整条重写正文(保留标题;条目数不变)
   kb.py downgrade <file> --entry KEY --note "..."    降级:条目内插 `> 降级说明(日期): …` + INDEX 状态列改"降级(仅核对)"
   kb.py index-sync                       重算各文件条数与最后更新,写回 INDEX.md
   kb.py snapshot [--note X]              打包快照到 knowledge/.snapshots/
@@ -117,7 +118,7 @@ def content_invariant(op, old, new):
     iss = []
     # 拦"截断"(丢内容),不拦"改措辞":replace 允许小幅缩短;其它操作要求不缩短
     shrink = len(old) - len(new)
-    tol = max(200, int(len(old) * 0.02)) if op == "replace" else 0
+    tol = len(old) if op == "rewrite" else (max(200, int(len(old) * 0.02)) if op == "replace" else 0)
     if shrink > tol: iss.append(f"内容变短({len(old)}→{len(new)} 字节,容差 {tol})")
     o = [h for h, _, _ in entries(old)]; n = [h for h, _, _ in entries(new)]
     lost = [h for h in o if h not in n]
@@ -205,6 +206,23 @@ def cmd_append_line(root, name, key, line):
         return "\n".join(ls[:end] + ["- " + line.strip()] + ls[end:])
     try: return mutate(root, name, fn, op="append-line")
     except SystemExit as ex: print(str(ex)); return 2
+
+def cmd_rewrite(root, name, key, body_path):
+    body = open(body_path, encoding="utf-8").read().strip()
+    if not body: print("  ✗ 正文为空"); return 2
+    def fn(text):
+        hit = find_entry(text, key)
+        if not hit: raise SystemExit(f"  ✗ 找不到条目: {key}")
+        h, s, e = hit
+        ls = text.split("\n")
+        tail = []
+        for j in range(e - 1, s, -1):
+            if ls[j].strip() == "": tail.append(ls[j])
+            else: break
+        return "\n".join(ls[:s + 1] + body.split("\n") + list(reversed(tail)) + ls[e:])
+    try: return mutate(root, name, fn, op="rewrite")
+    except SystemExit as ex: print(str(ex)); return 2
+
 
 def cmd_replace(root, name, key, old, new):
     if "\n" in old or "\n" in new: print("  ✗ --old/--new 必须单行"); return 2
@@ -352,6 +370,7 @@ def main():
     p = sub.add_parser("list"); p.add_argument("file")
     p = sub.add_parser("add"); p.add_argument("file"); p.add_argument("--title", required=True); p.add_argument("--body", default="-")
     p = sub.add_parser("append-line"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--line", required=True)
+    p = sub.add_parser("rewrite"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--body", required=True)
     p = sub.add_parser("replace"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--old", required=True); p.add_argument("--new", required=True)
     p = sub.add_parser("downgrade"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--note", required=True)
     sub.add_parser("index-sync")
@@ -367,6 +386,7 @@ def main():
     if a.cmd == "append-line":return cmd_append_line(r, a.file, a.entry, a.line)
     if a.cmd == "downgrade":  return cmd_downgrade(r, a.file, a.entry, a.note)
     if a.cmd == "replace":    return cmd_replace(r, a.file, a.entry, a.old, a.new)
+    if a.cmd == "rewrite":    return cmd_rewrite(r, a.file, a.entry, a.body)
     if a.cmd == "index-sync":
         with open(os.path.join(r, ".kb.lock"), "a+") as lf:
             fcntl.flock(lf, fcntl.LOCK_EX); index_sync(r)
