@@ -345,6 +345,8 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 
 ### 提交(仅当用户要求时;2026-10-30)
 - 两条浏览器 MCP:①`chrome-devtools`(headless,自起 Chromium — 抓取)②`chrome-live`(`--autoConnect`,连**用户日常 Chrome**,带其登录态)。
+- **先判收不收**:过 KB「提交前先判「收不收」」的 5 道门(范围/类别排除/前置条件/影响/证据);大概率不收 ⇒ 先告诉用户并给
+  **CVE 路由**(厂商 CNA → MITRE → 对口 CNA → 平台代申请),不要闷头填表 ✓;赏金与 CVE 独立 ✓。
 - **流程**:用户说"提交某份报告" ⇒ ①`python3 tools/chrome-live-probe.py` 探活 ②`ON` 才继续填 ③`OFF` **就地提醒用户**开
   `chrome://inspect/#remote-debugging`(唯一需要用户动手的一步),不要自己去点 ✗ ④填完贴待确认清单,**不点提交** ✗。
 - `chrome-live` **默认常开(`enabled:true`)**:改 `enabled` 要 `/reload`,而 `/reload`/`/mcp` 只有**用户**能执行 ✗ ⇒ 不要让 agent 靠改配置开工 ✓。

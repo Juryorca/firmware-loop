@@ -851,3 +851,14 @@ A = pristine(setup 态) / B = 预设版(已配置 + 多主体 + 自签 CA);同�
 - **步骤**:①MCP 参数加 `--autoConnect --userDataDir <Windows 的 .../Google/Chrome/User Data>`(**不带 `--userDataDir` 会去找 Linux 的 `~/.config/google-chrome` ✗**)②让用户在**自己的** Chrome 打开 `chrome://inspect/#remote-debugging` 并开启(这一步无法由 agent 代做 ✗,是 Chrome 136+ 的授权设计 ✓)③探活:先看 profile 下出现 `DevToolsActivePort`(首行=端口),再用 stdio 真调一次 `list_pages` 判定 ✓。
 - **坑**: WSL2 默认 NAT ⇒ `127.0.0.1` 到不了 Windows;`networkingMode=Mirrored` 下才直通 ✓;`--autoConnect` 是 **stdio 服务**,进程起来不会报错 ✗ ⇒ 必须**真调一个工具**才知道通不通 ✓。
 - 证据/产物: 2026-10-30 实测 `--autoConnect --userDataDir /mnt/c/Users/<u>/AppData/Local/Google/Chrome/User Data` 从 WSL 接上 Windows Chrome 156,`list_pages` 返回真实标签页 ✓;不带 `--userDataDir` 报 `Could not find DevToolsActivePort at /home/<u>/.config/google-chrome/…` ✗。
+
+## 提交前先判「收不收」:范围/类别 5 道门 + 拿不到赏金时的 CVE 路由
+- **先过 5 道门**(任一道不过 ⇒ 按"可能不收"处理,先别急着填表):
+  ①**范围**:产品/固件版本在不在项目 scope、是否 EOL、是否需要物理接触;
+  ②**类别排除**(最常见的"不收"清单):DoS/资源耗尽、**第三方组件/上游库缺陷**、已知 CVE 的重复、加固建议/最佳实践、缺安全头或 Cookie 标志、日志注入、单纯速率限制缺失、需用户交互的社工、自我 XSS;
+  ③**前置条件**:是否需要管理员已登录(纯后认证)、是否需要非默认/调试配置、是否只在 beta;
+  ④**影响**:能不能指出攻击者实际拿到什么(数据/权限/代码执行);只有崩溃且同类已报 ⇒ 大概率低价值或重复;
+  ⑤**证据**:是否在**最新 stable** 复现、有没有版本号与可复现 PoC。
+- **关键认知:赏金与 CVE 是两条独立的路** —— 项目不收 ≠ 不给 CVE ✓(不少厂商给致谢或 CVE 但不给钱,或压根没赏金计划)。
+- **拿 CVE 的路由(按性价比排序,别跳步)**:①**先私下通知厂商**(security@ / PSIRT / 平台),给 90 天或按其政策,留证据(邮件/工单号);②**查该厂商是不是 CNA**(cve.org 的 CNA 目录)→ 是 ⇒ 请求其分配(通常随修复给,最省事);③不是 CNA / 不回应 ⇒ **MITRE 直接申请**,附受影响产品与版本、根因、复现、**已通知厂商的时间与结果**(MITRE 通常要先给厂商时间);④仍不行 ⇒ 找对口 CNA(开源组件 → GitHub;工控 → CISA ICS;日系 → JPCERT/CC);⑤平台侧:部分赏金项目在报告被接受时**代为申请 CVE**(报告里明确写请求 ✓)。
+- **纪律**:未修复/未过通知期**不擅自公开** ✗,公开由用户决定 ✓;厂商拒收但技术成立 ⇒ 记录拒收理由、继续走 CVE 路由,**不因此改写结论措辞** ✓。
