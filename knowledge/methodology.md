@@ -852,11 +852,11 @@ A = pristine(setup 态) / B = 预设版(已配置 + 多主体 + 自签 CA);同�
 - **坑**: WSL2 默认 NAT ⇒ `127.0.0.1` 到不了 Windows;`networkingMode=Mirrored` 下才直通 ✓;`--autoConnect` 是 **stdio 服务**,进程起来不会报错 ✗ ⇒ 必须**真调一个工具**才知道通不通 ✓。
 - 证据/产物: 2026-10-30 实测 `--autoConnect --userDataDir /mnt/c/Users/<u>/AppData/Local/Google/Chrome/User Data` 从 WSL 接上 Windows Chrome 156,`list_pages` 返回真实标签页 ✓;不带 `--userDataDir` 报 `Could not find DevToolsActivePort at /home/<u>/.config/google-chrome/…` ✗。
 
-## 提交前先判「收不收」:先读该项目 scope/policy 原文 + 上报渠道与 CVE 路由
-- **原则:不凭印象判"收不收"** ✗ —— 每个项目在提交页/政策页都写明 scope 与排除项,**必须读原文并引用**;KB 里不预存"某类一定不收"的结论(项目会变、各家差别大)✓。
-- **做法**:①找到该项目的 scope / policy / program rules 原文(记 URL + 摘录关键句)②逐条核对"我们的 finding 是否落在任何一条排除项里"③把**项目原文**与**我们的对应事实**并列写进 notes(判据 = 原文,不是"我觉得")④原文没写到的项 ⇒ 记「未知」,**照常提交**观察 ✓,不得用"我猜不收"当理由 ✗。
-- **去原文里核对的项(不是清单式臆断)**:哪些产品/版本在 scope、是否接受**后认证**、是否排除 DoS/资源耗尽、是否排除**第三方组件**、是否排除需非默认配置、对 PoC 与版本的要求、披露时限与禁止公开条款、是否提供 CVE、上报渠道与是否要 PGP ✓。
-- **赏金与 CVE 是两条独立的路**:项目不收 ≠ 不给 CVE(很多厂商给 CVE 不给钱,或没有赏金计划)✓。
-- **上报渠道:先查厂商"公开指定的"入口,不要硬编码邮箱** ✗ —— 顺序:①`https://<厂商>/.well-known/security.txt`(RFC 9116,通常写明渠道/邮件/表单与 PGP 键)②该厂商的安全响应 / PSIRT / 漏洞报告页 ③赏金平台的项目页。渠道**是平台就提平台、是表单就填表单、是邮箱才发邮件** ✓;三者都没有才退到 `security@` 之类兜底猜测 ✓。
-- **拒收 / 不属 scope 时的 CVE 路由**:①**报告本身即通知**(不必为"留证据"额外造一步 ✗,回执/工单本身就是记录)②查该厂商**是不是 CNA**(cve.org 的 CNA 目录)⇒ 是则请其分配(通常随修复给)③不是 CNA 或不回应 ⇒ **MITRE 申请**:产品+版本 / 根因 / 复现 / "是否已通知厂商 + 结果 + 时间"**如实填** ④对口 CNA(开源组件→GitHub、ICS→CISA ICS、日系→JPCERT/CC)⑤平台侧:部分项目在接受报告时**代为申请**,报告里明确写请求 ✓。**90 天是行业惯例不是硬规定** ✓;厂商长期不回应不构成申请/披露障碍 ✓。
-- **纪律**:未修复/未过通知期**不擅自公开** ✗,公开由用户决定 ✓;厂商拒收但技术成立 ⇒ 记录拒收理由、继续走 CVE 路由,**不改写结论措辞** ✓。
+## 提交前先判「收不收」:读 scope 原文 + 上报渠道(security.txt→PSIRT→平台)+ CVE 走 CNA/CNA-LR 而非猜邮箱
+- **原则:不凭印象判"收不收"** ✗ —— 每个项目在提交页/政策页都写明 scope 与排除项,**必须读原文并引用**;KB 不预存"某类一定不收"的结论 ✓。
+- **做法**:①找到该项目 scope / policy 原文(记 URL + 摘句)②逐条核对我们的 finding 是否落在排除项里 ③把**项目原文**与**我们的对应事实**并列写进 notes(判据 = 原文)④原文没写到的项 ⇒ 记「未知」、**照常提交** ✓。
+- **上报渠道:先查厂商"公开指定的"入口,不硬编码邮箱** ✗ —— ①`https://<厂商>/.well-known/security.txt`(RFC 9116:写明渠道/表单/邮件 + PGP 键,如 QNAP 实测为 `mailto:security@qnap.com` + PGP)②厂商安全响应 / PSIRT / 漏洞报告页 ③赏金平台项目页。**是平台就提平台、是表单就填表单、是邮箱才发邮件** ✓。
+- **厂商联系不上 / 该产品没有 CNA 时的官方兜底 = CNA of Last Resort(不是猜 `security@`** ✗):cve.org「Report/Request for Non-CNAs」给出的三步 —— ①在 CNA 名单(List of Partners)里找 scope 覆盖该产品的 CNA ②**按其披露政策、用它指定的联系方法**报告并请求 CVE ID ③判断不出 ⇒ 找 CNA-LR:**CISA ICS CNA-LR**(`us-cert.cisa.gov/report`,ICS 与医疗设备)或 **MITRE CNA-LR**(`cveform.mitre.org`,其余全部、以及未被任何 CNA 覆盖的开源)✓。MITRE CNA-LR 自述适用场景 = 供应商**没有指定 CNA**,或分配**存在争议** ✓。
+- **CVE 请求的最小字段**(MITRE 表单):problem types / vendor 或 project / product name / version / vulnerability description / references URL(+CVSS 可选)✓ —— 与赏金报告要的"在 scope 内 + 严重性 + 可复现"**不是一回事** ✓;表单可匿名、**不要求先有赏金** ✓。
+- **赏金 ≠ CVE(两条独立的路)**:赏金 = 项目方按 scope 与 severity 决定**给不给奖励**;CVE = **标识符**,由 CNA 按 CNA Rules 分配,任何人可请求 ✓。CVE 的 CNA 定义里明确包含 bug bounty provider ⇒ 平台本身可能就是 CNA ✓;部分项目在被接受时**代申请**(以项目页为准,别假定 ✓)。
+- **纪律**:90 天是行业惯例不是硬规定 ✓;未修复/未过通知期**不擅自公开** ✗,公开由用户决定 ✓;厂商拒收但技术成立 ⇒ 记录拒收理由、继续走 CVE 路由、**不改写结论措辞** ✓。
