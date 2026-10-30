@@ -56,6 +56,8 @@ $PY - <<'EOF' >/dev/null 2>&1 && ok "MCP 配置可解析" || info "MCP 配置缺
 import json,os
 d=json.load(open(os.path.expanduser("~/.pi/agent/mcp.json"),encoding="utf-8"))
 assert all("command" in v or "url" in v for v in d["mcpServers"].values())
+cl=d["mcpServers"].get("chrome-live")
+assert cl is None or cl.get("enabled", True), "chrome-live 被禁用了(提交流程会卡在 disabled)" 
 EOF
 
 # 报告不放 Timeline 节(2026-10-30:一行"发现并验证"= 零信息,用户明确否掉)

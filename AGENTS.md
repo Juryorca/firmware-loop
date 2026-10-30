@@ -347,6 +347,8 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - 两条浏览器 MCP:①`chrome-devtools`(headless,自起 Chromium — 抓取)②`chrome-live`(`--autoConnect`,连**用户日常 Chrome**,带其登录态)。
 - **流程**:用户说"提交某份报告" ⇒ ①`python3 tools/chrome-live-probe.py` 探活 ②`ON` 才继续填 ③`OFF` **就地提醒用户**开
   `chrome://inspect/#remote-debugging`(唯一需要用户动手的一步),不要自己去点 ✗ ④填完贴待确认清单,**不点提交** ✗。
+- `chrome-live` **默认常开(`enabled:true`)**:改 `enabled` 要 `/reload`,而 `/reload`/`/mcp` 只有**用户**能执行 ✗ ⇒ 不要让 agent 靠改配置开工 ✓。
+  会话开始后才打开 Chrome 或服务连不上 ⇒ 让用户在 `/mcp` 里 **reconnect 一次** ✓。
 - ⚠️ **WSL 必带 `--userDataDir`**:`--autoConnect` 默认找**本机(Linux)** profile(`~/.config/google-chrome/`)⇒ 指向 Windows 的
   `C:\Users\<u>\AppData\Local\Google\Chrome\User Data` 才认(实测:不带 ⇒ `Could not find DevToolsActivePort at /home/…` ✗)。
 - **探活判据(已在 2026-10-30 验证走通 ✓)**:开关打开后 Chrome 在该 profile 写 `DevToolsActivePort`(首行=端口,本机 9222)⇒
