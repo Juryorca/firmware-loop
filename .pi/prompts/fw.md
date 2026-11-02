@@ -41,6 +41,12 @@ argument-hint: <固件路径或型号名>
 - IDA headless: `tools/ida_start.sh` → `tools/ida_open.sh <二进制> [会话]` → `tools/ida_call.sh <tool> '<json 含 database=会话id>'`;收尾 `tools/ida_stop.sh` + `tools/ida_clean.sh`。
 - 信号判定以 `tools/parse_signal.py` 为准;它不覆盖的类别用**自定义差分/对比实验** —— 但"可复现"≠"是漏洞",先过 `knowledge/misreports.md`。
 
+## 取件(下载/版本核实)
+
+- 厂商下载页是 **JS 壳**、`curl` 只拿到骨架/拿不到固件直链 ⇒ **用无头浏览器 MCP 取件**:
+  `mcp__chrome-devtools__navigate_page` → `take_snapshot` / `list_network_requests`(找真实下载 API)→ 拿到直链后**回到 `curl` + md5**,
+  写 `intel/firmware/<目标>/SOURCE_URL.txt` ✓。边界:只碰公开页、不代填密码(细则见 `AGENTS.md`「环境清单 → 取件 / JS 页面」)。
+
 ## 受众与范围(硬性)
 
 默认不提交:产出落 `state/<目标>/report/` 即终点 ✓。**用户明确要求提交时**用可填不可提交(只填表单/草稿、**不点提交**、贴待确认清单给用户 ✓,见 `AGENTS.md`「提交红线」+「环境清单 → 提交」)。
