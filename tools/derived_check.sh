@@ -342,6 +342,15 @@ for adv in advs:
         d = os.path.dirname(os.path.join(rd, L))
         if not os.path.isfile(os.path.join(d, "shots.json")): bad(f"{adv}: {os.path.basename(d)}/ 缺 shots.json")
         if not [f for f in os.listdir(d) if f.endswith(".png.provenance")]: bad(f"{adv}: {os.path.basename(d)}/ 缺 *.png.provenance")
+        # 包必须自含:符号链接 = 指向包外(提交后必坏)✗;README 缺失 = 别人跑不起来 ✗
+        _links = []
+        for _r, _ds, _fs in os.walk(d):
+            for _n in _ds + _fs:
+                _p2 = os.path.join(_r, _n)
+                if os.path.islink(_p2): _links.append(os.path.relpath(_p2, d) + " -> " + os.readlink(_p2))
+        if _links: bad(f"{adv}: {os.path.basename(d)}/ 含符号链接(包不自含): " + "; ".join(_links[:3]))
+        if not any(f.lower().startswith("readme") for f in os.listdir(d)):
+            bad(f"{adv}: {os.path.basename(d)}/ 缺 README(须说明依赖怎么准备、怎么跑)")
     if not miss and links and all(os.path.isfile(os.path.join(rd, L)) for L in links):
         ok(f"{adv}: 骨架 {len(NEED)}/{(len(NEED))} 节 + 图链 + 包完整")
 
