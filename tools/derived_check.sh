@@ -348,7 +348,7 @@ for adv in advs:
             for _n in _ds + _fs:
                 _p2 = os.path.join(_r, _n)
                 if os.path.islink(_p2): _links.append(os.path.relpath(_p2, d) + " -> " + os.readlink(_p2))
-        if _links: bad(f"{adv}: {os.path.basename(d)}/ 含符号链接(包不自含): " + "; ".join(_links[:3]))
+        if _links: bad(f"{adv}: {os.path.basename(d)}/ 含符号链接(包不自含 ⇒ 压缩/上传后必坏): " + "; ".join(_links[:3]) + " ⇒ 删链接,让 PoC 用参数(默认 ./rootfs)并在 README 写明怎么准备")
         if not any(f.lower().startswith("readme") for f in os.listdir(d)):
             bad(f"{adv}: {os.path.basename(d)}/ 缺 README(须说明依赖怎么准备、怎么跑)")
     if not miss and links and all(os.path.isfile(os.path.join(rd, L)) for L in links):
