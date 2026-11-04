@@ -118,9 +118,13 @@ class Registry:
             status = "error"
         dur = int((time.time() - t0) * 1000)
         with _db.Tx(ctx.domain.con) as c:
+            meta = out.get("meta") or {}
             c.execute(
-                "UPDATE tool_calls SET status=?, exit_code=?, duration_ms=?, stdout_path=?, stderr_path=? WHERE id=?",
-                (status, out.get("exit_code"), dur, out.get("stdout_path"), out.get("stderr_path"), cid),
+                "UPDATE tool_calls SET status=?, exit_code=?, duration_ms=?, stdout_path=?, stderr_path=?,"
+                " provider=?, capability=?, arch=?, env_json=? WHERE id=?",
+                (status, out.get("exit_code"), dur, out.get("stdout_path"), out.get("stderr_path"),
+                 meta.get("provider"), meta.get("capability"), meta.get("arch"),
+                 json.dumps(meta, ensure_ascii=False) if meta else None, cid),
             )
         out["status"] = status
         out["tool_call_id"] = cid

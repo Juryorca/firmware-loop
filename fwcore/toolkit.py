@@ -13,7 +13,19 @@ import os
 from .tools import Registry, ToolContext, ToolSpec, shell_exec
 
 
-def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 3000) -> dict:
+OBSERVERS = {}
+
+
+def observer(name: str):
+    """注册"工具输出 → 结构化观测"的解析器(解析不出来就如实标 unparsed)。"""
+    def deco(fn):
+        OBSERVERS[name] = fn
+        return fn
+    return deco
+
+
+def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 3000,
+         tool: str | None = None, meta: dict | None = None) -> dict:
     out = shell_exec(ctx, {"command": cmd, "timeout": timeout})
     text = ""
     for key in ("stdout_path", "stderr_path"):
@@ -23,7 +35,72 @@ def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 3000) -
                 f.seek(max(0, os.path.getsize(p) - keep))
                 text += f.read().decode("utf-8", errors="replace")
     out["output_tail"] = text[-keep:]
+    if tool:
+        fn = OBSERVERS.get(tool)
+        if fn:
+            try:
+                out["observation"] = fn(text)
+            except Exception as e:                     # 解析失败不算工具失败,但要如实标注
+                out["observation"] = {"status": "unparsed", "error": f"{type(e).__name__}: {e}"}
+        else:
+            out["observation"] = {"status": "unparsed", "reason": "该工具尚无结构化解析器"}
+    if meta:
+        out["meta"] = meta
     return out
+
+
+@observer("research_derived")
+def _obs_derived(text: str) -> dict:
+    import re as _re
+
+    m = _re.search(r"=== derived_check: (PASS|FAIL x(\d+)) ===", text)
+    fails = [ln for ln in text.splitlines() if ln.startswith("FAIL")]
+    oks = [ln for ln in text.splitlines() if ln.startswith("OK")]
+    return {"status": "ok" if m and m.group(1) == "PASS" else "fail" if m else "unparsed",
+            "verdict": m.group(1) if m else None, "fail_count": len(fails),
+            "ok_count": len(oks),
+            "fails": [ln[:160] for ln in fails[:5]]}
+
+
+@observer("research_queue")
+def _obs_queue(text: str) -> dict:
+    import re as _re
+
+    kv = dict(_re.findall(r"(OPEN|BAD|ROUND|STOP|POOL|NEXT)=([^ ]*)", text))
+    try:
+        pool, faces = (kv.get("POOL") or "0/0").split("/", 1)
+        return {"status": "ok", "open": int(kv.get("OPEN", 0)), "bad": int(kv.get("BAD", 0)),
+                "round": kv.get("ROUND"), "pool": int(pool), "faces": int(faces),
+                "next": kv.get("NEXT", "")[:160]}
+    except (TypeError, ValueError):
+        return {"status": "unparsed", "raw": text[-160:]}
+
+
+@observer("research_signal")
+def _obs_signal(text: str) -> dict:
+    hits = [ln for ln in text.splitlines() if ln.strip().startswith("HIT")]
+    return {"status": "hit" if hits else "miss", "hits": [h[:160] for h in hits[:5]],
+            "hit_count": len(hits)}
+
+
+@observer("fuzz_cgi")
+def _obs_fuzz(text: str) -> dict:
+    import re as _re
+
+    tuples = _re.findall(r"tuples[:=]\s*(\d+)", text)
+    crash = bool(_re.search(r"SIGSEGV|SIGILL|SIGBUS|uncaught signal|crash", text, _re.I))
+    if not tuples and not crash:
+        return {"status": "unparsed", "raw": text[-160:]}
+    return {"status": "ok", "tuples": int(tuples[-1]) if tuples else None, "crash": crash}
+
+
+@observer("emu_run")
+def _obs_emu(text: str) -> dict:
+    import re as _re
+
+    rc = _re.findall(r"(?:rc|exit)[=: ]\s*(\d+)", text)
+    return {"status": "ok", "exit_code": int(rc[-1]) if rc else None,
+            "raw_tail": text[-160:]}
 
 
 def register_repo_tools(reg: Registry, root: str) -> None:
@@ -36,21 +113,27 @@ def register_repo_tools(reg: Registry, root: str) -> None:
             "research_derived",
             "重算派生量/覆盖度/材料完整性(程序可核):KB 条数、A2 覆盖度、finding 包、收尾前置",
             {"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
-            lambda ctx, a: _run(ctx, f"bash tools/derived_check.sh {a['target']}", 90)))
+            lambda ctx, a: _run(ctx, f"bash tools/derived_check.sh {a['target']}", 90,
+                                tool="research_derived",
+                                meta={"capability": "gate.derived", "provider": "repo:derived_check.sh"})))
 
     if exists("tools/queue_state.sh"):
         reg.register(ToolSpec(
             "research_queue",
             "队列/轮/池状态探针(只读):OPEN/BAD/ROUND/STOP/POOL/NEXT",
             {"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
-            lambda ctx, a: _run(ctx, f"bash tools/queue_state.sh {a['target']}", 60)))
+            lambda ctx, a: _run(ctx, f"bash tools/queue_state.sh {a['target']}", 60,
+                                tool="research_queue",
+                                meta={"capability": "state.queue", "provider": "repo:queue_state.sh"})))
 
     if exists("tools/parse_signal.py"):
         reg.register(ToolSpec(
             "research_signal",
             "按仓库信号约定判读工具输出(命令注入/崩溃等);返回 HIT/MISS 与依据",
             {"type": "object", "properties": {"log": {"type": "string"}}, "required": ["log"]},
-            lambda ctx, a: _run(ctx, f"python3 tools/parse_signal.py {a['log']}", 60)))
+            lambda ctx, a: _run(ctx, f"python3 tools/parse_signal.py {a['log']}", 60,
+                                tool="research_signal",
+                                meta={"capability": "signal.parse", "provider": "repo:parse_signal.py"})))
 
     if exists("tools/cgi_fuzz.sh"):
         reg.register(ToolSpec(
@@ -60,7 +143,9 @@ def register_repo_tools(reg: Registry, root: str) -> None:
                 "args": {"type": "string", "description": "透传给 cgi_fuzz.sh 的参数串"},
                 "timeout": {"type": "number"}}, "required": ["args"]},
             lambda ctx, a: _run(ctx, f"bash tools/cgi_fuzz.sh {a['args']}",
-                                float(a.get("timeout", 300))), risk="high"))
+                                float(a.get("timeout", 300)), tool="fuzz_cgi",
+                                meta={"capability": "fuzz.cgi", "provider": "repo:cgi_fuzz.sh"}),
+            risk="high"))
 
     if exists("tools/emu_run.sh"):
         reg.register(ToolSpec(
@@ -69,4 +154,6 @@ def register_repo_tools(reg: Registry, root: str) -> None:
             {"type": "object", "properties": {
                 "args": {"type": "string"}, "timeout": {"type": "number"}}, "required": ["args"]},
             lambda ctx, a: _run(ctx, f"bash tools/emu_run.sh {a['args']}",
-                                float(a.get("timeout", 180))), risk="high"))
+                                float(a.get("timeout", 180)), tool="emu_run",
+                                meta={"capability": "emu.run", "provider": "repo:emu_run.sh"}),
+            risk="high"))
