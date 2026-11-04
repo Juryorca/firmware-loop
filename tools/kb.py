@@ -118,13 +118,13 @@ def content_invariant(op, old, new):
     iss = []
     # 拦"截断"(丢内容),不拦"改措辞":replace 允许小幅缩短;其它操作要求不缩短
     shrink = len(old) - len(new)
-    tol = len(old) if op == "rewrite" else (max(200, int(len(old) * 0.02)) if op == "replace" else 0)
+    tol = len(old) if op in ("rewrite", "delete") else (max(200, int(len(old) * 0.02)) if op == "replace" else 0)
     if shrink > tol: iss.append(f"内容变短({len(old)}→{len(new)} 字节,容差 {tol})")
     o = [h for h, _, _ in entries(old)]; n = [h for h, _, _ in entries(new)]
     lost = [h for h in o if h not in n]
-    if lost and op != "rewrite":   # rewrite 允许改标题(条目数仍受下面校验)
+    if lost and op not in ("rewrite", "delete"):   # rewrite/delete 允许改/删标题(条目数仍受校验)
         iss.append("条目丢失: " + " | ".join(x[:30] for x in lost[:2]))
-    want = 1 if op == "add" else 0
+    want = {"add": 1, "delete": -1}.get(op, 0)
     if len(n) - len(o) != want: iss.append(f"条目数变化异常({len(o)}→{len(n)},应为+{want})")
     return iss
 
@@ -207,6 +207,20 @@ def cmd_append_line(root, name, key, line):
         return "\n".join(ls[:end] + ["- " + line.strip()] + ls[end:])
     try: return mutate(root, name, fn, op="append-line")
     except SystemExit as ex: print(str(ex)); return 2
+
+def cmd_delete(root, name, key):
+    """删掉整条(事故叙事/过期条目清理用)。带锁 + 原子 + 自检 + INDEX 同步。"""
+    def fn(text):
+        hit = find_entry(text, key)
+        if not hit: raise SystemExit(f"  ✗ 找不到条目: {key}")
+        h, s, e = hit
+        ls = text.split("\n")
+        end = e
+        while end > s and ls[end - 1].strip() == "": end -= 1
+        return "\n".join(ls[:s] + ls[end:])
+    try: return mutate(root, name, fn, op="delete")
+    except SystemExit as ex: print(str(ex)); return 2
+
 
 def cmd_rewrite(root, name, key, body_path, new_title=None):
     body = open(body_path, encoding="utf-8").read().strip()
@@ -382,6 +396,7 @@ def main():
     p = sub.add_parser("list"); p.add_argument("file")
     p = sub.add_parser("add"); p.add_argument("file"); p.add_argument("--title", required=True); p.add_argument("--body", default="-")
     p = sub.add_parser("append-line"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--line", required=True)
+    p = sub.add_parser("delete"); p.add_argument("file"); p.add_argument("--entry", required=True)
     p = sub.add_parser("rewrite"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--body", required=True); p.add_argument("--title", default=None)
     p = sub.add_parser("replace"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--old", required=True); p.add_argument("--new", required=True)
     p = sub.add_parser("downgrade"); p.add_argument("file"); p.add_argument("--entry", required=True); p.add_argument("--note", required=True)
@@ -398,6 +413,7 @@ def main():
     if a.cmd == "append-line":return cmd_append_line(r, a.file, a.entry, a.line)
     if a.cmd == "downgrade":  return cmd_downgrade(r, a.file, a.entry, a.note)
     if a.cmd == "replace":    return cmd_replace(r, a.file, a.entry, a.old, a.new)
+    if a.cmd == "delete":     return cmd_delete(r, a.file, a.entry)
     if a.cmd == "rewrite":    return cmd_rewrite(r, a.file, a.entry, a.body, a.title)
     if a.cmd == "index-sync":
         with open(os.path.join(r, ".kb.lock"), "a+") as lf:
