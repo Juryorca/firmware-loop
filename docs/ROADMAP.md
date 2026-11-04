@@ -32,7 +32,7 @@
 | 项 | 状态 | 下一步 |
 |---|---|---|
 | **Gate 迁移到权威状态** | 🟡 第一步完成 | `fwcore/gates_db.py`(覆盖度/收尾/三镜/材料全部只读 SQLite)+ `tests/test_gates_db.py`;下一步:把 `derived_check.sh` 的 KB/引用/材料检查也接上,并加 `fw-core gates --legacy` 对比模式 |
-| Pi 兼容适配器 | ⬜ | 在 `.pi/extensions/` 加薄桥:Pi 工具事件 → `fwcore.domain` 写操作;禁止 Pi 侧另存研究状态 |
+| Pi 兼容适配器 | 🟡 桥已实现 | `fwcore/pi_bridge.py` + `fw-core pi-event`(stdin 事件流,幂等,坏事件不写);`tests/test_pi_bridge.py` 4 条 ✓;待:`.pi/extensions/` 里真正的 hook 接线 |
 | 独立 MCP 客户端 | ⬜ | `fwcore/mcp_client.py`(stdio JSON-RPC:initialize/tools.list/tools.call)+ 假 server 测试;配置源用 `state/mcp.json`,pi 配置只作过渡 |
 | 结构化研究工具 | ⬜ | IDA/Ghidra/仿真/fuzz 输出 → 结构化观测(字段而非文本尾巴),并记录 provider/arch/env |
 | 研究评测加难 | ⬜ | 加"无漏洞对照"任务(测假阳性)、诱饵注释、竞争解释;评分要能核对结论↔证据因果 |

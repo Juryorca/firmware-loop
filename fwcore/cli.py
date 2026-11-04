@@ -69,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("conclude"); p.add_argument("hypothesis"); p.add_argument("verdict")
     p.add_argument("--scope", required=True)
 
+    p = sub.add_parser("pi-event", help="从 stdin 读 Pi 研究事件(一行一个 JSON)并写入权威状态")
     p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
     sub.add_parser("status"); p.add_argument("target") if False else None
     p = sub.add_parser("status"); p.add_argument("target")
@@ -113,6 +114,13 @@ def main(argv: list[str] | None = None) -> int:
             print(dom.add_observation(args.target, args.text, attempt_id=args.attempt))
         elif args.cmd == "conclude":
             print(dom.conclude(args.hypothesis, args.verdict, args.scope))
+        elif args.cmd == "pi-event":
+            import sys as _sys
+
+            from .pi_bridge import handle_stream
+            res = handle_stream(con, args.root, _sys.stdin.read())
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return 0 if all(r.get("status") in ("ok", "duplicate") for r in res) else 1
         elif args.cmd == "capabilities":
             from .providers import inventory
             print(json.dumps(inventory(args.root), ensure_ascii=False, indent=2))
