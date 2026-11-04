@@ -16,7 +16,7 @@ def _stub(root: str, rel: str, body: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(body)
-    os.chmod(path, 0o755)
+    os.chmod(path, 0o700)
 
 
 def _setup(tmp_path):
@@ -74,3 +74,30 @@ def test_missing_script_is_error_not_silent(tmp_path):
     reg = Registry()
     register_repo_tools(reg, root)          # 没有 tools/* ⇒ 不注册任何仓库工具
     assert not [s for s in reg.describe() if s["name"].startswith(("research_", "fuzz_", "emu_"))]
+
+
+def test_ida_query_structured_json_and_fallback(tmp_path):
+    """IDA 输出:JSON 优先结构化;纯文本抽取函数名;都不行标 unparsed(不编字段)。"""
+    from fwcore.toolkit import OBSERVERS
+
+    json_out = OBSERVERS["ida_query"]('{"functions": ["sub_401000"], "count": 1}')
+    assert json_out["status"] == "ok" and json_out["format"] == "json" and "count" in json_out["fields"]
+
+    text_out = OBSERVERS["ida_query"]("hmm sub_4010a0 called at loc_402000 and sub_4010a0 again")
+    assert text_out["status"] == "ok" and text_out["function_count"] == 2
+
+    assert OBSERVERS["ida_query"]("什么都没有")["status"] == "unparsed"
+
+
+def test_ida_tool_registered_and_uses_lifecycle(tmp_path):
+    con, dom, root, reg, ctx = _setup(tmp_path)
+    _stub(root, "tools/ida_start.sh", '#!/bin/sh\necho started\n')
+    _stub(root, "tools/ida_call.sh", '#!/bin/sh\necho "{\\"functions\\": [], \\"count\\": 0}"\n')
+    reg2 = Registry()
+    register_repo_tools(reg2, root)
+    assert "ida_query" in {s["name"] for s in reg2.describe()}
+    out = reg2.call(ctx, "ida_query", {"args": "--x"})
+    assert out["observation"]["status"] == "ok"
+    row = con.execute("SELECT provider, capability FROM tool_calls WHERE tool='ida_query'"
+                      " ORDER BY created_at DESC LIMIT 1").fetchone()
+    assert row["provider"] == "repo:ida_call.sh" and row["capability"] == "debug.ida"

@@ -23,3 +23,10 @@
   + 评分器 `eval/scoring.py`(对照组抓假阳性;`vulnerable` 结论必须挂**自己名下**证据 = 因果检查)
 - 证据:`tests/test_eval_scoring.py` 3 passed in 0.48s
 - 下一项:诱饵/竞争解释任务;随后 Pi hook 接线(Pi 事件 → fw-core pi-event)
+
+### Iteration 3/5
+- 完成:IDA 结构化封装 —— `ida_query` 工具(复用 `tools/ida_start.sh` 生命周期 + `ida_call.sh`),
+  输出结构化(JSON 优先 → 文本抽函数名 → 否则 unparsed),`tool_calls` 记录 provider/capability/arch
+- 顺带修:`eval/run.py` 丢失的 `_write_evidence`(编译失败);测试 stub 脚本权限收到 0o700
+- 证据:`tests/test_toolkit_structured.py` 6 passed in 0.66s
+- 下一项:诱饵/竞争解释评测任务;随后 Pi hook 接线

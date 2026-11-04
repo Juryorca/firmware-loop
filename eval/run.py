@@ -32,6 +32,22 @@ from fwcore.runtime import Runner                      # noqa: E402
 TASKS = os.path.join(ROOT, "eval", "tasks")
 
 
+def _write_evidence(out: str, task: str, model: str, workdir: str, score: dict, run) -> None:
+    """把一次评测写成可复查的 Markdown(含模型结论原文与评分依据)。"""
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    lines = [f"# 研究评测:{task}", "", f"- 模型: `{model}` · workdir: `{workdir}`"]
+    if run:
+        lines.append(f"- run: state={run.state} rounds={run.rounds} handback={run.handback}")
+    lines += [f"- 判定: **{'PASS' if score['passed'] else 'FAIL'}**", "", "## 检查项", ""]
+    lines += [f"- {k}: {'✓' if v else '✗'}" for k, v in score["checks"].items()]
+    lines += ["", "## 模型给出的结论(原文)", ""]
+    for c in score["conclusions"]:
+        lines += [f"### [{c['verdict']}] {c['title']}", "", f"适用范围: {c['scope']}", ""]
+    lines += ["## 期望(评测侧,不进入 agent 上下文)", "", score.get("expected_why", ""), ""]
+    with open(out, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+
 def _score(task: str, answers: dict, con, target_id: str) -> dict:
     """委派给 eval/scoring.py(单一评分实现;支持对照任务与结论↔证据因果检查)。"""
     import sys as _sys

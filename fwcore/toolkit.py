@@ -103,6 +103,30 @@ def _obs_emu(text: str) -> dict:
             "raw_tail": text[-160:]}
 
 
+@observer("ida_query")
+def _obs_ida(text: str) -> dict:
+    """IDA 输出结构化:优先 JSON(ida_call 的 --json),否则尝试抽取关键字段,再不行标 unparsed。"""
+    import json as _json
+    import re as _re
+
+    for chunk in (text.strip(), text[text.find("{"): text.rfind("}") + 1] if "{" in text else ""):
+        if not chunk:
+            continue
+        try:
+            data = _json.loads(chunk)
+            if isinstance(data, dict):
+                return {"status": "ok", "format": "json",
+                        "fields": sorted(data.keys())[:20],
+                        "preview": {k: str(v)[:120] for k, v in list(data.items())[:8]}}
+        except _json.JSONDecodeError:
+            continue
+    funcs = _re.findall(r"(?:sub|loc)_[0-9A-Fa-f]{6,}", text)
+    if funcs:
+        return {"status": "ok", "format": "text", "function_count": len(set(funcs)),
+                "functions": sorted(set(funcs))[:10]}
+    return {"status": "unparsed", "raw_tail": text[-160:]}
+
+
 def register_repo_tools(reg: Registry, root: str) -> None:
     """注册 main 里已有的研究工具(按仓库实际存在的脚本)。"""
     def exists(rel: str) -> bool:
@@ -146,6 +170,27 @@ def register_repo_tools(reg: Registry, root: str) -> None:
                                 float(a.get("timeout", 300)), tool="fuzz_cgi",
                                 meta={"capability": "fuzz.cgi", "provider": "repo:cgi_fuzz.sh"}),
             risk="high"))
+
+    if exists("tools/ida_call.sh"):
+        def _ida(ctx: ToolContext, a: dict) -> dict:
+            # 复用既有生命周期封装:先确保 supervisor 起来(幂等),再调用
+            start = os.path.join(root, "tools", "ida_start.sh")
+            if os.path.isfile(start):
+                shell_exec(ctx, {"command": f"bash {start}", "timeout": 120})
+            argv = a.get("args", "")
+            return _run(ctx, f"bash tools/ida_call.sh {argv}", float(a.get("timeout", 180)),
+                        tool="ida_query",
+                        meta={"capability": "debug.ida", "provider": "repo:ida_call.sh",
+                              "arch": a.get("arch")})
+
+        reg.register(ToolSpec(
+            "ida_query",
+            "调用 Windows IDA(经 WSL,复用 tools/ida_*.sh 生命周期)做反编译/函数画像;输出被结构化成字段",
+            {"type": "object", "properties": {
+                "args": {"type": "string", "description": "透传给 ida_call.sh 的参数串"},
+                "arch": {"type": "string"}, "timeout": {"type": "number"}},
+             "required": ["args"]},
+            _ida, risk="high"))
 
     if exists("tools/emu_run.sh"):
         reg.register(ToolSpec(
