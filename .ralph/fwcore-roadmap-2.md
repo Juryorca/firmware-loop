@@ -9,3 +9,11 @@
 
 下一项(按 ROADMAP):Gate 迁移第二步 —— 把 KB 条数/引用完整性/材料检查接入 `fwcore/gates_db.py`,
 并提供 `--legacy` 比对模式(与 `tools/derived_check.sh` 输出对照),然后做结构化工具观测。
+## 进度日志(每轮追加)
+
+### Iteration 1/5
+- 完成:仓库工具**结构化观测**(`fwcore/toolkit.py::OBSERVERS`)+ `tool_calls` 记录 provider/capability/arch/env
+- 证据:`tests/test_toolkit_structured.py` 4 passed in 0.53s
+- 提交:`abfad63`
+- ROADMAP 已勾选(Gate 迁移第二步 ✅ / 结构化观测 🟡 仓库工具已结构化)
+- 下一项:**评测加难 —— 无漏洞对照任务**(测假阳性)+ 评分要能核对"结论↔证据"因果
