@@ -101,3 +101,44 @@ def test_ida_tool_registered_and_uses_lifecycle(tmp_path):
     row = con.execute("SELECT provider, capability FROM tool_calls WHERE tool='ida_query'"
                       " ORDER BY created_at DESC LIMIT 1").fetchone()
     assert row["provider"] == "repo:ida_call.sh" and row["capability"] == "debug.ida"
+
+
+def test_ghidra_missing_capability_is_honest_error(tmp_path, monkeypatch):
+    """能力缺失 ⇒ 工具必须报错并说明不可用(不能伪装成功)。不依赖本机是否装 Ghidra。"""
+    import fwcore.providers as pv
+
+    class _Missing:
+        def best(self):
+            return (None, type("P", (), {"status": "missing", "detail": "未安装"})())
+
+    monkeypatch.setattr(pv, "default_capabilities", lambda root: {"debug.ghidra": _Missing()})
+    con, dom, root, reg, ctx = _setup(tmp_path)
+    _stub(root, "tools/ghidra_scripts/dummy.java", "// stub\n")
+    reg2 = Registry()
+    register_repo_tools(reg2, root)
+    assert "ghidra_query" in {s["name"] for s in reg2.describe()}
+    out = reg2.call(ctx, "ghidra_query", {"args": "x"})
+    assert out["status"] == "error" and "能力不可用" in out["error"]
+
+
+def test_ghidra_structured_when_runner_exists(tmp_path, monkeypatch):
+    """存在 tools/ghidra_run.sh 且能力可用时:输出结构化 + 记录 provider。"""
+    con, dom, root, reg, ctx = _setup(tmp_path)
+    _stub(root, "tools/ghidra_scripts/dummy.java", "// stub\n")
+    _stub(root, "tools/ghidra_run.sh", '#!/bin/sh\necho "{\\"functions\\": 3, \\"decompiled\\": true}"\n')
+    # 让能力探针假装可用(不依赖本机是否装 Ghidra)
+    import fwcore.providers as pv
+    import fwcore.toolkit as tk
+
+    class _Cap:
+        def best(self):
+            return (object(), type("P", (), {"status": "ready"})())
+
+    monkeypatch.setattr(pv, "default_capabilities", lambda root: {"debug.ghidra": _Cap()})
+    reg2 = Registry()
+    tk.register_repo_tools(reg2, root)
+    out = reg2.call(ctx, "ghidra_query", {"args": "x"})
+    assert out["observation"]["status"] == "ok" and out["observation"]["format"] == "json"
+    row = con.execute("SELECT provider FROM tool_calls WHERE tool='ghidra_query'"
+                      " ORDER BY created_at DESC LIMIT 1").fetchone()
+    assert row["provider"] == "repo:ghidra_run.sh"

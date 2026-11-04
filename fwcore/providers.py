@@ -303,6 +303,8 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
         "extract.squashfs-vendor": Capability("extract.squashfs-vendor", "厂商魔改 SquashFS",
                                              [system_tool_provider("sasquatch", ["-h"], version_arg=[])]),
         "trace.strace": Capability("trace.strace", "系统调用追踪", [system_tool_provider("strace", ["-V"])]),
+        "debug.ghidra": Capability("debug.ghidra", "Ghidra 无头分析(脚本见 tools/ghidra_scripts)",
+                                  [system_tool_provider("analyzeHeadless", ["-help"], version_arg=[])]),
         "debug.ida": Capability("debug.ida", "Windows IDA 无头(经 WSL,复用 tools/ida_*)",
                                 [windows_ida_provider(root)]),
         "mcp.chrome": Capability("mcp.chrome", "浏览器自动化(取件/提交)", [

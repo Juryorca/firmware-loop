@@ -103,6 +103,12 @@ def _obs_emu(text: str) -> dict:
             "raw_tail": text[-160:]}
 
 
+@observer("ghidra_query")
+def _obs_ghidra(text: str) -> dict:
+    """Ghidra 输出结构化(JSON 优先;否则抽取函数/地址;解析不出标 unparsed)。"""
+    return _obs_ida(text)
+
+
 @observer("ida_query")
 def _obs_ida(text: str) -> dict:
     """IDA 输出结构化:优先 JSON(ida_call 的 --json),否则尝试抽取关键字段,再不行标 unparsed。"""
@@ -170,6 +176,30 @@ def register_repo_tools(reg: Registry, root: str) -> None:
                                 float(a.get("timeout", 300)), tool="fuzz_cgi",
                                 meta={"capability": "fuzz.cgi", "provider": "repo:cgi_fuzz.sh"}),
             risk="high"))
+
+    if os.path.isdir(os.path.join(root, "tools", "ghidra_scripts")):   # 目录要用 isdir,
+        def _ghidra(ctx: ToolContext, a: dict) -> dict:
+            """Ghidra 无头批处理(经既有脚本)。能力不可用时**如实报错**,不伪装成功。"""
+            from .providers import default_capabilities
+
+            cap = default_capabilities(ctx.root)["debug.ghidra"] if "debug.ghidra" in default_capabilities(ctx.root) \
+                else None
+            if cap is not None:
+                best, probe = cap.best()
+                if probe is None or probe.status == "missing":
+                    return {"status": "error",
+                            "error": "能力不可用:debug.ghidra 没有可用 provider(不会静默成功)",
+                            "meta": {"capability": "debug.ghidra", "provider": None}}
+            return _run(ctx, f"bash tools/ghidra_run.sh {a.get('args', '')}", float(a.get("timeout", 300)),
+                        tool="ghidra_query",
+                        meta={"capability": "debug.ghidra", "provider": "repo:ghidra_run.sh"})
+
+        reg.register(ToolSpec(
+            "ghidra_query",
+            "调用 Ghidra 无头脚本做函数画像/反编译;输出结构化;能力缺失时如实报错",
+            {"type": "object", "properties": {
+                "args": {"type": "string"}, "timeout": {"type": "number"}}, "required": ["args"]},
+            _ghidra, risk="high"))
 
     if exists("tools/ida_call.sh"):
         def _ida(ctx: ToolContext, a: dict) -> dict:

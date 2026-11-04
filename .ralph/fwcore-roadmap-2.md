@@ -47,3 +47,9 @@
   实测:`pytest(8 文件) 52 passed in 9.62s` / `capabilities 9 项` / `gates 如实报阻塞` / `git clean` ⇒ **PASS**
 - 证据:`tests/test_recovery_idempotency.py` 2 passed in 0.41s;`tools/fwcore_verify.sh` 退出码 0
 - 仍未完成(不属于本轮 5 次迭代可闭环):Pi hook 接线(需用户授权改 live harness)、与 Pi 线对比、Ghidra/emu 结构化
+
+### Iteration 6/5(续跑,超出原 5 次上限的一次增量)
+- 完成:**Ghidra 结构化封装** `ghidra_query`(能力缺失时**如实报错**,不静默成功)+ 能力清单加 `debug.ghidra`
+- 修真实 bug:注册处用 `isfile` 判**目录** `tools/ghidra_scripts` ⇒ 永不注册(改为 `isdir`)
+- 证据:`tests/test_toolkit_structured.py` 8 passed in 1.03s(含"缺能力必须报错"与"有 runner 则结构化")
+- 仍未完成(需授权/外部条件):Pi hook 接线(改 live harness)、与 Pi 线对比
