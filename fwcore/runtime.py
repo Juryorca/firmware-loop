@@ -20,6 +20,10 @@ from typing import Any, Protocol
 
 from . import db as _db
 from .domain import Domain, new_id
+from .model_client import assistant_message
+from .policy import Policy
+from .research import Research
+from .toolkit import register_repo_tools
 from .tools import Registry, ToolContext, default_registry
 
 SYSTEM = """你是一个固件漏洞研究 agent。你在一个**已经建立权威状态**的框架里工作:
@@ -96,14 +100,18 @@ class OpenAIModel:
 
 class Runner:
     def __init__(self, con, root: str, model: Model, *, registry: Registry | None = None,
-                 max_steps: int = 40, timeout: float = 60.0):
+                 max_steps: int = 40, timeout: float = 60.0, policy: Policy | None = None,
+                 research: Research | None = None):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
         self.model = model
         self.registry = registry or default_registry()
+        register_repo_tools(self.registry, root)
         self.max_steps = max_steps
         self.timeout = timeout
+        self.policy = policy or Policy()
+        self.research = research or Research(root, self.domain)
 
     # ---------------- 运行与检查点 ----------------
     def start(self, target: str, goal: str | None = None) -> str:
@@ -126,11 +134,8 @@ class Runner:
         return {"derived": d, "recent_events": events}
 
     def _messages(self, target: str, goal: str | None, history: list[dict]) -> list[dict]:
-        ctx = self.context(target)
-        head = SYSTEM + "\n\n## 当前状态(程序算出的派生量)\n```json\n" + \
-            json.dumps(ctx["derived"], ensure_ascii=False, indent=2) + "\n```\n"
-        if goal:
-            head += f"\n## 本轮目标\n{goal}\n"
+        # 研究载体负责组装系统提示:规则从 AGENTS.md/LOOP.md/knowledge 读取(唯一来源)
+        head = self.research.system_prompt(target, goal)
         return [{"role": "system", "content": head}] + history
 
     def _checkpoint(self, rid: str, step: int, history: list[dict]) -> None:
@@ -145,42 +150,47 @@ class Runner:
         任何异常(含键盘中断/模型错误)⇒ run 置 paused + 检查点;**不改变假设结论**。
         """
         history = list(history or [])
-        step_start = self.con.execute("SELECT step FROM runs WHERE id=?", (rid,)).fetchone()["step"]
-        step = step_start
+        step = self.con.execute("SELECT step FROM runs WHERE id=?", (rid,)).fetchone()["step"]
+        budget = self.max_steps      # 每次调用自己的步数预算(resume 不再被历史步数卡住)
         final = ""
+        stopped_by_final = False
         state = "finished"
         try:
-            while step < self.max_steps:
+            while budget > 0:
+                budget -= 1
                 msgs = self._messages(target, goal, history)
                 reply = self.model.chat(msgs, self.registry.describe())
                 content = (reply.get("content") or "").strip()
                 calls = reply.get("tool_calls") or []
-                if content:
-                    history.append({"role": "assistant", "content": content})
+                if content or calls:
+                    history.append(assistant_message(content, calls, reply.get("reasoning_content") or ""))
                 if content.startswith("FINAL:"):
+                    # FINAL 只结束**本轮**;是否"可收尾"由领域层判(下面算 ready)
                     final = content
+                    stopped_by_final = True
                     step += 1
                     self._checkpoint(rid, step, history)
                     break
                 if not calls:
-                    # 没工具调用也没 FINAL ⇒ 视作本轮表达,继续(避免空转:计一步)
                     step += 1
                     self._checkpoint(rid, step, history)
-                    if step >= self.max_steps:
+                    if budget <= 0:
                         state = "paused"
                     continue
                 ctx = ToolContext(
                     domain=self.domain, root=self.root, run_id=rid, timeout=self.timeout,
                     artifacts_dir=os.path.join(self.root, "state", "artifacts", rid),
+                    policy=self.policy, research=self.research,
                 )
                 for call in calls:
-                    out = self.registry.call(ctx, call["name"], call.get("args") or {})
+                    cname, cargs = _normalize_call(call)
+                    out = self.registry.call(ctx, cname, cargs)
                     history.append({"role": "tool", "tool_call_id": call.get("id"),
-                                    "name": call["name"], "content": json.dumps(out, ensure_ascii=False)[:8000]})
+                                    "name": cname, "content": json.dumps(out, ensure_ascii=False)[:8000]})
                     with _db.Tx(self.con) as c:
                         c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                                   (_now(), "tool.called", out.get("tool_call_id"),
-                                   json.dumps({"tool": call["name"], "status": out.get("status")}, ensure_ascii=False)))
+                                   json.dumps({"tool": cname, "status": out.get("status")}, ensure_ascii=False)))
                 step += 1
                 self._checkpoint(rid, step, history)
         except BaseException as e:  # 中断 != 研究停止
@@ -191,11 +201,33 @@ class Runner:
                           (_now(), "run.paused", rid, json.dumps({"error": f"{type(e).__name__}: {e}"}, ensure_ascii=False)))
             self._checkpoint(rid, step, history)
             raise
+        if not stopped_by_final:
+            # 步数耗尽/循环退出但没有 FINAL ⇒ 这只是"暂停",不是研究完成
+            state = "paused"
+        blockers = self.domain.closure_blockers(target) + self.research.dual_output_blockers(target)
+        if self.research.mirror_due(target):
+            blockers.append(f"三镜刷新超期({self.research.rounds_since_mirror(target)} 轮未做,下限 {self.research.mirror_every})")
+        ready = not blockers
         with _db.Tx(self.con) as c:
             c.execute("UPDATE runs SET state=?, updated_at=? WHERE id=?", (state, _now(), rid))
             c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
-                      (_now(), "run.finished", rid, json.dumps({"state": state, "steps": step}, ensure_ascii=False)))
-        return {"run_id": rid, "state": state, "steps": step, "final": final, "history": history}
+                      (_now(), "run.finished", rid,
+                       json.dumps({"state": state, "steps": step, "ready": ready,
+                                   "blockers": blockers[:5]}, ensure_ascii=False)))
+        return {"run_id": rid, "state": state, "steps": step, "final": final,
+                "ready": ready, "blockers": blockers, "history": history}
+
+    def recover_stale(self, *, older_than_s: float = 0) -> list[str]:
+        """把"进程死了但状态还挂着 running"的 run 收敛为 paused(可恢复)。"""
+        rows = self.con.execute("SELECT id,updated_at FROM runs WHERE state='running'").fetchall()
+        fixed: list[str] = []
+        for r in rows:
+            with _db.Tx(self.con) as c:
+                c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
+                c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                          (_now(), "run.recovered_stale", r["id"], json.dumps({"last_update": r["updated_at"]})))
+            fixed.append(r["id"])
+        return fixed
 
     def resume(self, rid: str, goal: str | None = None) -> dict:
         row = self.con.execute(
@@ -212,6 +244,20 @@ class Runner:
             c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                       (_now(), "run.resumed", rid, json.dumps({"step": row["step"]}, ensure_ascii=False)))
         return self.run(rid, row["target_name"], goal or row["goal"], history=history)
+
+
+def _normalize_call(call: dict) -> tuple[str, dict]:
+    """兼容两种形状:内部 {name,args} 与 OpenAI {function:{name,arguments}}。"""
+    if "function" in call:
+        fn = call.get("function") or {}
+        args = fn.get("arguments")
+        if isinstance(args, str):
+            try:
+                args = json.loads(args or "{}")
+            except json.JSONDecodeError:
+                args = {"__invalid_json__": args}
+        return fn.get("name") or "", args or {}
+    return call.get("name") or "", call.get("args") or {}
 
 
 def _now() -> str:

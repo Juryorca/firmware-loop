@@ -1,0 +1,84 @@
+"""策略层:工具权限、参数校验、执行边界。
+
+原则
+- **默认拒绝高风险**:没有 confirm 回调时,高风险工具返回 `cancelled`,而不是悄悄放行。
+- 参数必须先过 JSON Schema 的**结构校验**(必填/类型/枚举),不合格直接 `error`,不进 handler。
+- 文件类参数必须落在工作区内(防 `../../etc/passwd`);超时受上限约束(防借工具卡死).
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+from .domain import DomainError
+
+
+@dataclass
+class Policy:
+    allow_high_risk: bool = False
+    confirm: object = None              # Callable[[str], bool] | None
+    max_timeout: float = 120.0
+    sandbox_roots: list[str] = field(default_factory=list)
+    require_path_within: bool = True
+
+    def decide(self, tool: str, risk: str, args: dict) -> tuple[bool, str]:
+        """返回 (allowed, reason)。"""
+        if risk == "high":
+            if self.confirm is None and not self.allow_high_risk:
+                return False, "高风险工具需要人类确认(未配置 confirm,默认拒绝)"
+            if self.confirm is not None:
+                try:
+                    if not self.confirm(f"{tool} {args}"):
+                        return False, "用户未确认"
+                except Exception as e:  # confirm 自己坏了也不能放行
+                    return False, f"confirm 异常: {e}"
+        return True, ""
+
+    def check_args(self, tool: str, schema: dict, args: dict) -> str | None:
+        """最小 JSON Schema 校验:type/required/enum/pattern。返回错误描述或 None。"""
+        if not isinstance(args, dict):
+            return "参数必须是对象"
+        req = schema.get("required") or []
+        missing = [k for k in req if k not in args]
+        if missing:
+            return f"缺必填参数: {missing}"
+        props = schema.get("properties") or {}
+        for k, spec in props.items():
+            if k not in args:
+                continue
+            v = args[k]
+            t = spec.get("type")
+            if t == "string" and not isinstance(v, str):
+                return f"参数 {k} 应为 string"
+            if t == "number" and not isinstance(v, (int, float)):
+                return f"参数 {k} 应为 number"
+            if t == "object" and not isinstance(v, dict):
+                return f"参数 {k} 应为 object"
+            if t == "array" and not isinstance(v, list):
+                return f"参数 {k} 应为 array"
+            if spec.get("enum") and v not in spec["enum"]:
+                return f"参数 {k} 必须是 {spec['enum']} 之一,收到 {v!r}"
+        extra = [k for k in args if k not in props] if props else []
+        if extra:
+            return f"未知参数: {extra}"
+        return None
+
+    def clamp_timeout(self, t: float | None) -> float:
+        if t is None:
+            return self.max_timeout
+        try:
+            t = float(t)
+        except (TypeError, ValueError):
+            return self.max_timeout
+        return max(0.1, min(t, self.max_timeout))
+
+    def resolve_path(self, root: str, p: str, roots: list[str] | None = None) -> str:
+        """把参数路径解析为绝对路径,并确认在允许的根内。"""
+        if not isinstance(p, str) or not p:
+            raise DomainError("路径参数非法")
+        full = os.path.realpath(p if os.path.isabs(p) else os.path.join(root, p))
+        allowed = [os.path.realpath(r) for r in (roots or self.sandbox_roots or [root])]
+        if self.require_path_within and not any(full == a or full.startswith(a + os.sep) for a in allowed):
+            raise DomainError(f"路径越界(不在允许的根内): {full}")
+        return full

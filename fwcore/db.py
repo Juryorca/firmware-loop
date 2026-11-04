@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS surfaces (
   disposition  TEXT NOT NULL DEFAULT 'unjudged'
      CHECK (disposition IN ('unjudged','vulnerable','no_finding','out_of_scope')),
   note         TEXT,
+  judged_by    TEXT,
   UNIQUE (target_id, key)
 );
 
@@ -163,6 +164,17 @@ CREATE TABLE IF NOT EXISTS documents (
   UNIQUE (path, sha256)
 );
 
+-- 三镜刷新:面/格收口时的一行记录(程序可核:距上次超过 N 轮 ⇒ 收尾阻塞)
+CREATE TABLE IF NOT EXISTS mirror_checks (
+  id         TEXT PRIMARY KEY,
+  target_id  TEXT NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+  mechanism  TEXT NOT NULL,
+  author     TEXT NOT NULL,
+  state      TEXT NOT NULL,
+  new_faces  TEXT,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_hyp_target_state ON hypotheses(target_id, state);
 CREATE INDEX IF NOT EXISTS idx_attempt_hyp ON attempts(hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_target ON evidence(target_id);
@@ -199,7 +211,11 @@ def _migrate(con: sqlite3.Connection) -> None:
         have = int(row["value"])
         if have > SCHEMA_VERSION:
             raise RuntimeError(f"数据库 schema 版本 {have} 高于代码支持 {SCHEMA_VERSION}")
-        # 未来:逐版本 ALTER(此处留位;版本 1 是首个版本)
+        if have < 2:
+            cols = {r[1] for r in con.execute("PRAGMA table_info(surfaces)")}
+            if "judged_by" not in cols:
+                con.execute("ALTER TABLE surfaces ADD COLUMN judged_by TEXT")
+            con.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
 
 
 class Tx:

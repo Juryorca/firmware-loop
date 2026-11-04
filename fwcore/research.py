@@ -1,0 +1,172 @@
+"""研究载体:把 main 里的研究循环(规则/池/三镜/双输出/既有工具)接进运行时。
+
+设计边界
+- **规则不复制**:`AGENTS.md` / `LOOP.md` / `knowledge/*.md` 是唯一来源,这里只**读取并裁剪**,
+  不把规则改写成代码里的第二份(否则必然漂)。
+- **程序只做可核的事**:池排序、三镜计数、双输出是否登记、收尾阻塞;不替模型决定研究策略。
+- **方法保持开放**:方法卡来自 `knowledge/` 的条目标题 + 工具描述,不是封闭技术表。
+"""
+
+from __future__ import annotations
+
+import os
+import re
+from dataclasses import dataclass, field
+
+from .domain import Domain, new_id, _event, _now
+from .db import Tx
+
+RULES_LIMIT = 12000  # 每个规则文件的字符预算(超出截断,保证上下文可控)
+
+
+def _read(path: str, limit: int = RULES_LIMIT) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            txt = f.read()
+    except OSError:
+        return ""
+    if len(txt) <= limit:
+        return txt
+    cut = txt[:limit]
+    nl = cut.rfind("\n")
+    return cut[: nl if nl > 0 else limit] + "\n…(截断)"
+
+
+def kb_titles(root: str) -> list[str]:
+    """知识库条目标题 = 方法/判据的**开放**清单(不是封闭技术表)。"""
+    out: list[str] = []
+    kdir = os.path.join(root, "knowledge")
+    if not os.path.isdir(kdir):
+        return out
+    for name in sorted(os.listdir(kdir)):
+        if not name.endswith(".md") or name == "INDEX.md":
+            continue
+        for m in re.finditer(r"(?m)^## (.+)$", _read(os.path.join(kdir, name), 10 ** 6)):
+            out.append(f"{name}: {m.group(1).strip()[:110]}")
+    return out
+
+
+@dataclass
+class Research:
+    """研究循环的载体:构建系统提示 + 管理池/三镜/双输出。"""
+
+    root: str
+    domain: Domain
+    rules_files: tuple[str, ...] = ("AGENTS.md", "LOOP.md",
+                                    "knowledge/misreports.md", "knowledge/vuln-patterns.md")
+    mirror_every: int = 3  # 下限每 3 轮一次三镜
+
+    # ---------- 池:唯一队列,程序排序 ----------
+    def pool(self, target: str, limit: int = 12) -> list[dict]:
+        t = self.domain.target(target)
+        rows = self.domain.con.execute(
+            """SELECT h.id, h.title, h.source, h.priority, h.state
+                 FROM hypotheses h WHERE h.target_id=? AND h.state IN ('open','investigating')
+                ORDER BY h.priority ASC, h.created_at ASC""", (t.id,)).fetchall()
+        out = [dict(r) for r in rows]
+        # 排序因子(可推翻):未认证面 > 认证后;报文级 > 配置级;复杂解析/状态机 > 简单
+        rank = {"pre-auth": 0, "lan": 1, "auth": 2, "post-auth": 2, None: 3}
+        surf = {r["key"]: dict(r) for r in self.domain.con.execute(
+            "SELECT key, reachability, input_control, complexity, disposition FROM surfaces WHERE target_id=?",
+            (t.id,)).fetchall()}
+        def score(h: dict) -> tuple:
+            text = (h["title"] or "") + " " + (h["source"] or "")
+            r = next((rank.get(s["reachability"], 3) for k, s in surf.items() if k in text), 3)
+            complex_bonus = 0 if re.search(r"解析|parser|状态机|协议|反序列化|XML|JSON|解压|签名", text, re.I) else 1
+            unknown = 0 if not re.search(r"未理解|unknown|没看懂", text, re.I) else -1
+            return (r, complex_bonus, unknown, h["priority"])
+        out.sort(key=score)
+        return out[:limit]
+
+    # ---------- 三镜刷新(面/格收口时 1 行) ----------
+    def record_mirror(self, target: str, mechanism: str, author: str, state: str,
+                      new_faces: str = "无(判据: 同机制未找到新面)") -> str:
+        t = self.domain.target(target)
+        for k, v in (("mechanism", mechanism), ("author", author), ("state", state)):
+            if not (v or "").strip():
+                raise ValueError(f"三镜缺项: {k}")
+        mid = new_id("M")
+        with Tx(self.domain.con) as c:
+            c.execute("INSERT INTO mirror_checks(id,target_id,mechanism,author,state,new_faces,created_at)"
+                      " VALUES(?,?,?,?,?,?,?)", (mid, t.id, mechanism, author, state, new_faces, _now()))
+            _event(c, "mirror.recorded", mid, {"new_faces": new_faces})
+        return mid
+
+    def rounds_since_mirror(self, target: str) -> int:
+        """以 run 的结束事件计轮;三镜之前的轮数。"""
+        t = self.domain.target(target)
+        last = self.domain.con.execute(
+            "SELECT created_at FROM mirror_checks WHERE target_id=? ORDER BY created_at DESC LIMIT 1", (t.id,)
+        ).fetchone()
+        q = "SELECT COUNT(*) n FROM events WHERE kind='run.finished'"
+        args: list = []
+        if last:
+            q += " AND ts > ?"
+            args.append(last["created_at"])
+        return self.domain.con.execute(q, args).fetchone()["n"]
+
+    def mirror_due(self, target: str) -> bool:
+        return self.rounds_since_mirror(target) >= self.mirror_every
+
+    # ---------- 双输出(判定 + 新观察) ----------
+    def observations(self, target: str) -> int:
+        t = self.domain.target(target)
+        return self.domain.con.execute(
+            "SELECT COUNT(*) n FROM observations WHERE target_id=?", (t.id,)).fetchone()["n"]
+
+    def dual_output_blockers(self, target: str) -> list[str]:
+        t = self.domain.target(target)
+        n_att = self.domain.con.execute(
+            "SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id WHERE h.target_id=?",
+            (t.id,)).fetchone()["n"]
+        b = []
+        if n_att and self.observations(target) == 0:
+            b.append(f"做过 {n_att} 次尝试但一条观察都没登记(双输出缺失)")
+        return b
+
+    # ---------- 系统提示 ----------
+    def system_prompt(self, target: str, goal: str | None = None) -> str:
+        d = self.domain.derived(target)
+        pool = self.pool(target)
+        cards = kb_titles(self.root)
+        parts = [
+            "你是固件漏洞研究 agent。程序负责机器事实的可靠性与不变量,你负责研究判断与行动。",
+            "",
+            "## 不变量(程序会拒绝,不是建议)",
+            "- 尝试结果六种:supported / refuted / inconclusive / environment_failure / no_signal / cancelled。",
+            "  后三种**不能**推出结论;refuted 必须挂证据;结论必须写 scope_note;",
+            "  vulnerable 需要 supported 尝试 + 证据;no_finding 需要 refuted 尝试;inconclusive 要写清还缺什么。",
+            "- 面判 vulnerable 需要 evidence_id;判 no_finding / out_of_scope 要写理由。",
+            "- 工具失败/超时/没打到目标 ≠ 漏洞不存在。",
+            "",
+            "## 现状(程序算出的派生量)",
+            "```json",
+            __import__("json").dumps(d, ensure_ascii=False, indent=1)[:3000],
+            "```",
+        ]
+        if goal:
+            parts += ["", f"## 本轮目标\n{goal}"]
+        if pool:
+            parts += ["", "## 假设池(唯一队列,程序按可达性/复杂度排序;你可以推翻排序)", ""]
+            for h in pool:
+                parts.append(f"- {h['id']} [{h['state']}] {h['title'][:120]}")
+        if self.mirror_due(target):
+            parts += ["", f"## 三镜刷新(due:{self.rounds_since_mirror(target)} 轮未做)",
+                      "面/格收口时用 state.record_mirror 记一行:机制=… / 作者=… / 状态=… / 新面=…"]
+        blocks = self.dual_output_blockers(target)
+        if blocks:
+            parts += ["", "## 双输出提醒", *[f"- {b}" for b in blocks],
+                      "任何观察(尤其是与预期不符的)用 state.add_observation 登记,并考虑升成新假设。"]
+        if cards:
+            parts += ["", "## 可选方法/判据(开放清单,来自 knowledge/,不是封闭技术表)", ""]
+            parts += [f"- {c}" for c in cards[:40]]
+        parts += ["", "## 工作方式",
+                  "- 优先解决最可能改变判断的关键未知;主动找能推翻当前解释的反例;",
+                  "- 不用抽样代表整体;结论写清适用范围;",
+                  "- 需要结束时输出 `FINAL: <小结>` —— 但这只结束本轮,是否可收尾由程序判定。"]
+        # 规则原文(唯一来源;截断到预算)
+        for rel in self.rules_files:
+            body = _read(os.path.join(self.root, rel))
+            if body:
+                parts += ["", f"## 规则原文({rel})", body]
+        return "\n".join(parts)

@@ -153,17 +153,33 @@ class Domain:
             _event(c, "surface.added", sid, {"key": key, "disposition": disp})
         return sid
 
-    def set_surface_disposition(self, target: str, key: str, disposition: str) -> None:
+    def set_surface_disposition(self, target: str, key: str, disposition: str, *,
+                                evidence_id: str | None = None, note: str | None = None) -> None:
+        """面处置不是随手改的状态:判 vulnerable 必须有证据,判 no_finding/out_of_scope 必须写理由。"""
         if disposition not in DISPOSITIONS:
             raise InvariantViolation(f"disposition 非法: {disposition}")
         t = self.target(target)
+        if disposition == "vulnerable":
+            if not evidence_id:
+                raise InvariantViolation("面判 vulnerable 必须给 evidence_id")
+            ev = self.con.execute("SELECT target_id FROM evidence WHERE id=?", (evidence_id,)).fetchone()
+            if not ev:
+                raise NotFound(f"证据不存在: {evidence_id}")
+            if ev["target_id"] != t.id:
+                raise InvariantViolation("证据不属于该目标")
+        elif disposition in ("no_finding", "out_of_scope"):
+            if not (note or "").strip() or len(note.strip()) < 8:
+                raise InvariantViolation(f"面判 {disposition} 必须写理由(≥8 字):管到哪些输入/为什么不做")
         with Tx(self.con) as c:
             cur = c.execute(
-                "UPDATE surfaces SET disposition=? WHERE target_id=? AND key=?", (disposition, t.id, key)
+                "UPDATE surfaces SET disposition=?, judged_by=?, note=COALESCE(?, note)"
+                " WHERE target_id=? AND key=?",
+                (disposition, evidence_id or (note or "")[:200] or None, note, t.id, key),
             )
             if cur.rowcount == 0:
                 raise NotFound(f"面不存在: {key}")
-            _event(c, "surface.disposition", key, {"disposition": disposition})
+            _event(c, "surface.disposition", key,
+                   {"disposition": disposition, "evidence": evidence_id})
 
     # ---------------- 假设 ----------------
     def add_hypothesis(self, target: str, title: str, *, body: str | None = None,
@@ -262,6 +278,20 @@ class Domain:
                      hypothesis_id: str | None = None, version: str | None = None) -> str:
         """证据必须绑定目标与版本;文件类证据自动算 sha256。"""
         t = self.target(target)
+        if attempt_id:
+            a = self.con.execute(
+                "SELECT h.target_id FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id WHERE a.id=?",
+                (attempt_id,)).fetchone()
+            if not a:
+                raise NotFound(f"尝试不存在: {attempt_id}")
+            if a["target_id"] != t.id:
+                raise InvariantViolation("attempt 不属于该目标(证据不能跨目标关联)")
+        if hypothesis_id:
+            h = self.con.execute("SELECT target_id FROM hypotheses WHERE id=?", (hypothesis_id,)).fetchone()
+            if not h:
+                raise NotFound(f"假设不存在: {hypothesis_id}")
+            if h["target_id"] != t.id:
+                raise InvariantViolation("hypothesis 不属于该目标")
         ver = version if version is not None else (t.version or "unknown")
         sha = None
         if path:
@@ -305,6 +335,15 @@ class Domain:
             )
         ev = self.con.execute("SELECT COUNT(*) n FROM evidence WHERE hypothesis_id=? OR attempt_id IN "
                               "(SELECT id FROM attempts WHERE hypothesis_id=?)", (hid, hid)).fetchone()["n"]
+        kinds = set(decisive)
+        if verdict == "vulnerable" and "supported" not in kinds:
+            raise InvariantViolation("判 vulnerable 需要至少一次 supported 尝试(当前只有 "
+                                     + ", ".join(sorted(kinds)) + ")")
+        if verdict == "no_finding" and "refuted" not in kinds:
+            raise InvariantViolation("判 no_finding 需要至少一次 refuted 尝试(有证据的否证);"
+                                     "当前只有 " + ", ".join(sorted(kinds)) + " —— 不能靠 inconclusive 收口")
+        if verdict == "inconclusive" and "inconclusive" not in kinds:
+            raise InvariantViolation("判 inconclusive 需要一次明确 inconclusive 的尝试")
         if verdict == "vulnerable" and ev == 0:
             raise InvariantViolation("判 vulnerable 必须挂证据")
         cid = new_id("C")
@@ -416,6 +455,12 @@ class Domain:
         ).fetchone()["n"]
         if n_un:
             b.append(f"{n_un} 个面未判定(disposition=unjudged)")
+        n_hyp = self.con.execute("SELECT COUNT(*) n FROM hypotheses WHERE target_id=?", (t.id,)).fetchone()["n"]
+        if n_hyp == 0:
+            b.append("没有任何假设(空研究状态不算完成)")
+        n_surf = self.con.execute("SELECT COUNT(*) n FROM surfaces WHERE target_id=?", (t.id,)).fetchone()["n"]
+        if n_surf == 0:
+            b.append("没有登记任何攻击面(A1 枚举缺失)")
         mat = self.material_check(target)
         if mat["missing"]:
             b.append("材料不完整: " + "; ".join(mat["missing"][:5]))

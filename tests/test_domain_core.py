@@ -71,7 +71,7 @@ def test_running_attempt_blocks_conclude_and_closure(dom):
 def test_closure_blockers_include_unjudged_surface(dom):
     dom.add_surface("t1", "12080 /x", disposition="unjudged")
     assert any("未判定" in b for b in dom.closure_blockers("t1"))
-    dom.set_surface_disposition("t1", "12080 /x", "no_finding")
+    dom.set_surface_disposition("t1", "12080 /x", "no_finding", note="仅 /x 一个入口,已逐条读过鉴权门")
     assert not any("未判定" in b for b in dom.closure_blockers("t1"))
 
 
@@ -119,3 +119,58 @@ def test_inconclusive_requires_next_probe_note(dom):
     with pytest.raises(InvariantViolation):
         dom.finish_attempt(aid, "inconclusive", "")
     dom.finish_attempt(aid, "inconclusive", "已排除路径 A;需在真机抓到 B 的调用栈")
+
+
+# ---------- 审计反例:判定一致性 / 证据归属 / 面处置 ----------
+
+def test_no_finding_cannot_be_supported_by_inconclusive(dom):
+    """inconclusive/supported 不能支撑 no_finding。"""
+    hid = dom.add_hypothesis("t1", "越权")
+    aid = dom.start_attempt(hid, "diff")
+    dom.finish_attempt(aid, "inconclusive", "只跑了外层路由")
+    with pytest.raises(InvariantViolation) as e:
+        dom.conclude(hid, "no_finding", "仅 /api/x")
+    assert "refuted" in str(e.value)
+
+
+def test_vulnerable_requires_supported_attempt(dom):
+    hid = dom.add_hypothesis("t1", "越权")
+    aid = dom.start_attempt(hid, "diff")
+    dom.add_evidence("t1", "http", capture="200", attempt_id=aid, hypothesis_id=hid)
+    dom.finish_attempt(aid, "inconclusive", "行为不同但未确认可利用")
+    with pytest.raises(InvariantViolation):
+        dom.conclude(hid, "vulnerable", "仅 /api/x")
+
+
+def test_evidence_cannot_cross_targets(dom):
+    hid = dom.add_hypothesis("t1", "h")
+    aid = dom.start_attempt(hid, "m")
+    dom.create_target("t2", version="9")
+    with pytest.raises(InvariantViolation):
+        dom.add_evidence("t2", "log", capture="x", attempt_id=aid)
+    with pytest.raises(InvariantViolation):
+        dom.add_evidence("t2", "log", capture="x", hypothesis_id=hid)
+
+
+def test_surface_vulnerable_requires_evidence(dom):
+    dom.add_surface("t1", "12080 /a")
+    with pytest.raises(InvariantViolation):
+        dom.set_surface_disposition("t1", "12080 /a", "vulnerable")
+    ev = dom.add_evidence("t1", "http", capture="200 + admin body")
+    dom.set_surface_disposition("t1", "12080 /a", "vulnerable", evidence_id=ev)
+    row = dom.con.execute("SELECT disposition,judged_by FROM surfaces WHERE key='12080 /a'").fetchone()
+    assert row["disposition"] == "vulnerable" and row["judged_by"] == ev
+
+
+def test_surface_no_finding_requires_reason(dom):
+    dom.add_surface("t1", "12080 /b")
+    with pytest.raises(InvariantViolation):
+        dom.set_surface_disposition("t1", "12080 /b", "no_finding", note="x")
+    dom.set_surface_disposition("t1", "12080 /b", "no_finding", note="该入口只有静态资源,无参数")
+
+
+def test_empty_research_state_blocks_closure(dom):
+    """0 假设 / 0 面 不能算干净(空状态 ≠ 完成)。"""
+    b = dom.closure_blockers("t1")
+    assert any("没有任何假设" in x for x in b)
+    assert any("攻击面" in x for x in b)

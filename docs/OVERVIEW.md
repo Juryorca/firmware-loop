@@ -25,12 +25,23 @@
 - `fwcore.runtime`:模型↔工具循环、上下文重建(不读 notes 猜状态)、检查点、`resume()`。中断 ⇒ paused,**不改变假设结论**。
 - `fwcore.migrate`:把历史 `notes.md` 原文**逐字节**入库,池条目搬成假设并标 `needs_review`(不推断历史完成)。
   实测:QNAP TS-464 的 notes → 28 条假设,原文 byte-identical。
+- `fwcore.model_client` / `policy`:OpenAI 兼容协议层(严格历史校验、provider 私有字段往返)+
+  工具策略(高风险默认拒绝、schema 校验、路径收敛、超时上限)。
+- `fwcore.research`:研究载体 —— 系统提示**从 `AGENTS.md`/`LOOP.md`/`knowledge/` 读取**生成;
+  假设池唯一(程序排序)、三镜刷新计数、双输出检查、方法卡来自 KB(开放清单)。
+- `fwcore.toolkit`:把 `tools/derived_check.sh`、`queue_state.sh`、`parse_signal.py`、`cgi_fuzz.sh`、`emu_run.sh`
+  适配成带描述/schema/风险级的工具。
+- `scripts/e2e_real_model.py` + `make e2e-real`:**真实模型**两阶段(暂停→恢复)机制 E2E。
 - `fwcore.cli`:独立入口 `fw-core`(**不依赖 Pi**):init/hyp/surface/attempt/evidence/observe/conclude/status/derive/view/run/resume。
-- 21 个测试(不变量 / 工具状态 / 中断恢复 / 迁移保真 / 并发锁)。
+- 47 个测试(不变量 / 工具策略 / 协议格式 / 硬崩溃恢复 / 迁移保真 / 并发锁 / 提示生成)。
+- 真实模型实测证据:`docs/evidence/real-model-run.md`(DeepSeek,6 次工具调用 + 状态落库 + 恢复)。
 
 ## 4. 明确没有做的(不要误读)
 
-- **没跑过真实模型评测**:`OpenAIModel` 有实现,但所有运行时测试用脚本化模型 ⇒ 只能证明循环与恢复正确。
+- **没做研究质量评测**:真实模型只跑了"人工给定的机械流程"(机制 E2E),不证明"更会找漏洞";
+  单元测试仍用脚本化模型 ⇒ 只证明机制。
+- 真实模型暴露过两个**只有真实端点才会出现**的协议问题(工具名点号非法、thinking 模式 `reasoning_content`
+  必须逐条回传),已修并加测试 —— 这也是"不能只靠模拟"的直接证据。
 - 工具集只有 4 类;没有 IDA/Ghidra/fuzz/仿真的工具化。
 - 闸门仍在 Markdown 上跑(未迁到权威状态)。
 - 没有 CI;迁移只覆盖假设池。

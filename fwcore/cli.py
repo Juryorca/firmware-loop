@@ -136,7 +136,7 @@ def _model(name: str):
     # scripted:默认脚本 = 登记一条假设后收束(便于本地冒烟,不产生外部调用)
     return ScriptedModel(script=[
         {"content": "先登记一个待验证的方向。", "tool_calls": [
-            {"name": "state.add_hypothesis",
+            {"name": "state_add_hypothesis",
              "args": {"target": os.environ.get("FW_TARGET", ""), "title": "(scripted) 冒烟假设"}}]},
         {"content": "FINAL: 冒烟完成", "tool_calls": []},
     ])

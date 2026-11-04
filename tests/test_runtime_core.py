@@ -12,6 +12,7 @@ from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.migrate import extract_pool_entries, import_notes, verify
 from fwcore.runtime import Runner, ScriptedModel
+from fwcore.policy import Policy
 from fwcore.tools import Registry, ToolContext, default_registry
 
 
@@ -28,13 +29,14 @@ def setup(tmp_path):
 def test_shell_exec_records_statuses(setup):
     con, dom, root = setup
     reg = default_registry()
-    ctx = ToolContext(domain=dom, root=root, artifacts_dir=os.path.join(root, "art"))
+    ctx = ToolContext(domain=dom, root=root, artifacts_dir=os.path.join(root, "art"),
+                      policy=Policy(allow_high_risk=True))
 
-    ok = reg.call(ctx, "shell.exec", {"command": "true"})
+    ok = reg.call(ctx, "shell_exec", {"command": "true"})
     assert ok["status"] == "ok" and ok["exit_code"] == 0
-    err = reg.call(ctx, "shell.exec", {"command": "false"})
+    err = reg.call(ctx, "shell_exec", {"command": "false"})
     assert err["status"] == "error" and err["exit_code"] == 1
-    tmo = reg.call(ctx, "shell.exec", {"command": "sleep 5", "timeout": 0.3})
+    tmo = reg.call(ctx, "shell_exec", {"command": "sleep 5", "timeout": 0.3})
     assert tmo["status"] == "timeout"
     # 三种状态都落库,且带 sha256/落盘路径
     rows = con.execute("SELECT status FROM tool_calls ORDER BY created_at").fetchall()
@@ -45,9 +47,41 @@ def test_shell_exec_records_statuses(setup):
 def test_high_risk_tool_requires_confirmation(setup):
     con, dom, root = setup
     ctx = ToolContext(domain=dom, root=root, artifacts_dir=os.path.join(root, "art"),
-                      confirm=lambda _s: False)
-    out = default_registry().call(ctx, "shell.exec", {"command": "echo hi"})
+                      policy=Policy(confirm=lambda _s: False))
+    out = default_registry().call(ctx, "shell_exec", {"command": "echo hi"})
     assert out["status"] == "cancelled"
+
+
+def test_high_risk_denied_by_default(setup):
+    """没有 confirm、也没有 allow_high_risk ⇒ 默认拒绝(不能悄悄放行)。"""
+    con, dom, root = setup
+    ctx = ToolContext(domain=dom, root=root, policy=Policy())
+    out = default_registry().call(ctx, "shell_exec", {"command": "echo hi"})
+    assert out["status"] == "cancelled" and "确认" in out["error"]
+
+
+def test_args_validated_before_handler(setup):
+    con, dom, root = setup
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
+    out = default_registry().call(ctx, "fs_read", {})            # 缺必填
+    assert out["status"] == "error" and "必填" in out["error"]
+    out2 = default_registry().call(ctx, "fs_read", {"path": "x", "bogus": 1})  # 未知参数
+    assert out2["status"] == "error" and "未知参数" in out2["error"]
+
+
+def test_path_escape_blocked(setup, tmp_path):
+    con, dom, root = setup
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
+    out = default_registry().call(ctx, "fs_read", {"path": "../../../../etc/passwd"})
+    assert out["status"] == "error" and "越界" in out["error"] or "不存在" in out["error"]
+
+
+def test_timeout_is_clamped(setup):
+    con, dom, root = setup
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True, max_timeout=1))
+    t0 = __import__("time").time()
+    out = default_registry().call(ctx, "shell_exec", {"command": "sleep 5", "timeout": 999})
+    assert out["status"] == "timeout" and __import__("time").time() - t0 < 4
 
 
 def test_unknown_tool(setup):
@@ -65,7 +99,7 @@ def _runner(setup, script, steps=10):
 
 def test_run_executes_tool_calls_and_finishes(setup):
     script = [
-        {"content": "登记假设", "tool_calls": [{"name": "state.add_hypothesis",
+        {"content": "登记假设", "tool_calls": [{"name": "state_add_hypothesis",
                                           "args": {"target": "t1", "title": "解析器越界"}}]},
         {"content": "FINAL: 完成", "tool_calls": []},
     ]
@@ -173,3 +207,17 @@ def test_pool_entry_extraction_prefers_unique_queue():
     text = "## 假设池(唯一队列)\n- **H-01** a\n\n## 假设池(旧)\n- **H-09** b\n"
     ent = extract_pool_entries(text)
     assert [e[0] for e in ent] == ["H-01"]
+
+
+def test_tool_names_match_openai_pattern(tmp_path):
+    """真实端点要求 ^[a-zA-Z0-9_-]+$;带点号会被 400 拒绝(真实踩过)。"""
+    import re
+    con = _db.connect(str(tmp_path / "n.sqlite3"))
+    dom = Domain(con, str(tmp_path))
+    dom.create_target("t1")
+    reg = default_registry()
+    for t in reg.describe():
+        assert re.match(r"^[A-Za-z0-9_-]{1,64}$", t["name"]), t["name"]
+    with pytest.raises(ValueError):
+        reg.register(__import__("fwcore.tools", fromlist=["ToolSpec"]).ToolSpec(
+            "bad.name", "d", {"type": "object", "properties": {}}, lambda c, a: {}))

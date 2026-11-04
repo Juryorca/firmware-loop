@@ -57,6 +57,23 @@ tests/         21 个测试(domain/tools/runtime/migrate/并发)
 **运行时恢复**:`runs` + `checkpoints`;模型/进程异常 ⇒ run 置 `paused` + 写检查点,**假设状态不变**;
 `resume()` 从最后检查点继续(`test_interruption_pauses_and_keeps_hypothesis_state` / `test_resume_continues_from_checkpoint`)。
 
+**研究载体**(`fwcore/research.py`,已实现)
+- 系统提示**从仓库规则生成**:`AGENTS.md` / `LOOP.md` / `knowledge/misreports.md` / `knowledge/vuln-patterns.md`
+  原文按预算读入(**规则唯一来源,不在代码里复制一份**);
+- **假设池唯一**:来自 DB,程序按"未认证 > 认证后 / 解析器与状态机 > 简单 / 未理解优先"排序(**可被模型推翻**);
+- **三镜刷新**:`mirror_checks` 表 + `rounds_since_mirror()`;超过 3 轮未做 ⇒ 进收尾阻塞;
+- **双输出**:做过尝试但一条观察都没登记 ⇒ 收尾阻塞(程序可核);
+- **方法保持开放**:方法卡 = `knowledge/` 条目标题 + 工具描述,不是封闭技术表。
+
+**既有研究工具接入**(`fwcore/toolkit.py`):把 `tools/derived_check.sh`、`queue_state.sh`、`parse_signal.py`、
+`cgi_fuzz.sh`、`emu_run.sh` 包成带描述/schema/风险级的工具(按仓库实际存在的脚本注册),高风险走 policy 确认。
+
+**真实模型端到端**(`scripts/e2e_real_model.py`,`make e2e-real`)
+用 DeepSeek(`deepseek-flash`)跑两阶段:第一阶段 8 步预算后暂停,`resume()` 从检查点继续;
+实测 6 次工具调用(fs_hash ×2 → observation → hypothesis → attempt start/finish)、状态正确落库、
+history 通过 OpenAI 协议校验、阶段二步数继续增长 ⇒ **机制闭环成立**。
+⚠️ 这**只证明工程闭环**,不证明研究质量(任务是人给定的机械流程)。
+
 **历史迁移**(实测):QNAP TS-464 的真实 `notes.md` → 28 条池条目 → 28 条假设(标 `migrated:needs_review`),
 原文 **byte-identical** 入库,重复导入幂等。**不**根据"定论/已排除"字样推断历史已完成。
 
@@ -69,6 +86,11 @@ tests/         21 个测试(domain/tools/runtime/migrate/并发)
 5. **附件包必须自含**(禁符号链接)且带可独立跑通的 README —— 符号链接在压缩/上传后必坏。
 6. **新旧实现逐字节一致只证明迁移兼容,不证明语义正确**(见 §4 C3)。
 7. 判据读 Markdown 靠正则是脆弱的(这正是 §2 权威状态的动机)。
+8. **工具名必须是 `^[A-Za-z0-9_-]+$`**(真实端点 400 验证):`fs.read` 这类点号名一律被拒 ⇒ 注册时校验。
+9. **thinking 模式要求每个 assistant 消息都回传 `reasoning_content`**(空串也要),且不能在本地方案化时丢掉。
+   —— 这两条**只有真实模型能暴露**,脚本化模型完全测不出来(审计结论)。
+10. **步数预算是每次调用一份**,不是绝对上限:否则 `resume()` 会因历史步数 ≥ 上限而原地不动。
+11. 高风险工具**默认拒绝**(没有 confirm 就 `cancelled`),参数先过 schema 校验与路径收敛,超时受上限约束。
 
 ## 4. ④ 纠正过的设计判断(保留历史背景)
 
@@ -99,16 +121,19 @@ tests/         21 个测试(domain/tools/runtime/migrate/并发)
 |---|---|---|
 | 把闸门(derived_check)完全建立在权威状态+真实证据上 | 未开始(当前仍在 md 上跑) | 需先把 `surfaces/hypotheses` 填全;再实现从 DB 计算的 gates |
 | Pi 侧的适配(把 Pi 当兼容入口) | 未实现(独立路径已有 ✓) | 需要一个 Pi extension 把事件转调 `fwcore` |
-| 研究能力评测(回放 H-06 / H-24 / H-15 / WS-Discovery) | 未实现 | 需要"评测侧答案隔离"的 harness;不能把答案写进 agent 可读规则 |
+| 研究能力评测(回放 H-06 / H-24 / H-15 / WS-Discovery) | 未实现(只有机制 E2E) | 需要"评测侧答案隔离"的 harness;不能把答案写进 agent 可读规则 |
+| Pi 入口换成转调 fwcore | 未实现 | 见 §6 第一行 |
 | 反证驱动的提示与策略 | 部分(仅 `inconclusive` 强制说明) | 需要评测来验证是否真的改变行为,而不是只改文本 |
 | 工具生态(MCP / 外部逆向工具接入) | 只实现内置 4 类工具 | `ToolSpec` 已支持描述式注册;需 MCP client 适配 |
 | 迁移的语义核对 | 只做原文保真 + 条目搬移 | 需人工/模型对 `needs_review` 项逐条确认 |
 
 ## 7. 已知限制(诚实清单)
 
-1. **未接真实模型做评测**:`OpenAIModel` 已实现但本轮未跑真实模型(无凭据/未授权外部调用);
-   所有运行时测试都用 `ScriptedModel` ⇒ 只能说"循环/恢复正确",不能说"研究质量提升"。
-2. **工具集很小**:4 类工具,不足以覆盖真实固件研究(IDA/Ghidra/fuzz/仿真都还没有工具化)。
+1. **真实模型只做了"机制 E2E",没有研究质量评测**:`scripts/e2e_real_model.py` 跑的是
+   人工给定的机械流程(读两个文件 → 登记 → 收尾),证明"模型能通过工具改状态、能恢复",
+   **不证明**它更会找漏洞。研究质量评测仍是 ③ 未实现项。
+2. **工具集仍然很薄**:内置 4 类 + 仓库 5 个脚本适配;IDA/Ghidra 仍是"外部脚本"而非结构化工具
+   (输出是文本尾巴,不是结构化观测),这是下一步要做的。
 3. **状态模型是初版**:只有 targets/surfaces/hypotheses/attempts/observations/evidence/conclusions;
    跨版本对照、工具链环境、建场状态等还没有一等公民。
 4. **没有 CI**,只有本地 `pytest`。

@@ -19,6 +19,9 @@ demo:            ## 建一个临时目标 + 假设 + 派生量(/tmp/fwdemo)
 run-demo:        ## 用脚本化模型跑一次完整循环
 	FW_TARGET=demo $(PY) -m fwcore --root /tmp/fwdemo run demo --steps 5
 
+e2e-real:        ## 真实模型端到端(多轮工具调用 + 暂停恢复);需要 ~/.pi/agent/models.json 里的 key
+	$(PY) scripts/e2e_real_model.py --steps 8
+
 migrate-real:    ## 把某目标的 notes 迁到临时库并复核(不改动 state/):make migrate-real T=<目标>
 	@test -n "$(T)" || (echo "用法: make migrate-real T=<目标目录名>" >&2; exit 2)
 	rm -rf /tmp/fwmig && mkdir -p /tmp/fwmig/state/$(T)
