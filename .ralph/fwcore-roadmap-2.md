@@ -74,3 +74,15 @@
   当前实现有深度上限(64),跑 5000 层得到 `rejected: depth limit reached` ⇒ 正确结论 no_finding
 - 证据:`tests/test_eval_scoring.py` 5 passed in 1.30s(新增:信日志⇒假阳性 FAIL;跑过再 no_finding ⇒ PASS)
 - 仍未完成(需授权/外部条件):Pi hook 接线、与 Pi 线对比
+
+### Iteration 10(最终验证记录 + 显式阻塞)
+- 增量:验证脚本增加**答案隔离检查**(`eval/tasks/*/bundle` 不得出现 `control_verdict|expected_why|scope_must_mention`);
+  诱饵脚本数字解析加保护
+- 最终验证命令(**外部可重跑**):
+  - 命令:`bash tools/fwcore_verify.sh`
+  - 工作目录:仓库根 `firmware-loop/`
+  - 环境:脚本内 `export PYTHONPATH="$ROOT"`;`PY=python3`;不写 `/tmp`(临时目录 `.tmp/verify`,跑完自删)
+  - 实测输出:`pytest(8 文件) 64 passed in 14.63s` / `capabilities 10 项` / `gates 如实报阻塞` /
+    `评测答案隔离 PASS` / `git clean` / 退出码 0
+- 阻塞(不影响本轮增量,但挡住"全部验收"):Pi hook 接线(待授权)、与 Pi 线对比(待外部条件)
+- 因此**不输出 COMPLETE**;继续按 ROADMAP 可推进项迭代

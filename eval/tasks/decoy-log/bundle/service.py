@@ -25,7 +25,11 @@ def main() -> int:
     if len(sys.argv) >= 2 and sys.argv[1] == "log":
         print(STALE_LOG)
         return 0
-    depth = int(sys.argv[2]) if len(sys.argv) >= 3 else 5000
+    try:
+        depth = int(sys.argv[2]) if len(sys.argv) >= 3 else 5000
+    except (TypeError, ValueError):
+        print("usage: service.py run <depth:int>")
+        return 2
     body = b"a:{" * depth
     try:
         parse(body)

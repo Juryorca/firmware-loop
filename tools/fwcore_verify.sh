@@ -46,7 +46,19 @@ else
   fi
 fi
 
-# ④ 工作区必须干净(不留临时产物)
+# ④ 评测答案隔离:每个任务都要有 answers/,且 bundle/ 里不得出现答案文本
+iso_fail=0
+for d in eval/tasks/*/; do
+  name=$(basename "$d")
+  [ -f "$d/answers/expected.json" ] || { echo "      $name: 缺 answers/expected.json"; iso_fail=1; continue; }
+  if grep -rqiE "control_verdict|expected_why|scope_must_mention" "$d/bundle" 2>/dev/null; then
+    echo "      $name: bundle/ 里出现了答案字段(答案泄漏)"; iso_fail=1
+  fi
+done
+# 权重:只看"答案字段"是否泄漏,不看内容相似
+if [ "$iso_fail" -eq 0 ]; then say "评测答案隔离" "PASS(bundle 不含答案字段)"; else say "评测答案隔离" "FAIL"; fail=1; fi
+
+# ⑤ 工作区必须干净(不留临时产物)
 if [ -d "$WORK" ]; then rm -rf "$WORK"; fi
 if git status --porcelain | grep -q .; then
   say "git status" "DIRTY(提交后再跑)"
