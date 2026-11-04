@@ -69,9 +69,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("conclude"); p.add_argument("hypothesis"); p.add_argument("verdict")
     p.add_argument("--scope", required=True)
 
+    p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
+    p.add_argument("action", choices=["list", "probe", "call"])
+    p.add_argument("--server")
+    p.add_argument("--tool")
+    p.add_argument("--args", default="{}")
     p = sub.add_parser("pi-event", help="从 stdin 读 Pi 研究事件(一行一个 JSON)并写入权威状态")
     p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
-    sub.add_parser("status"); p.add_argument("target") if False else None
     p = sub.add_parser("status"); p.add_argument("target")
     p = sub.add_parser("derive"); p.add_argument("target")
     p = sub.add_parser("migrate"); p.add_argument("target"); p.add_argument("--notes")
@@ -114,6 +118,27 @@ def main(argv: list[str] | None = None) -> int:
             print(dom.add_observation(args.target, args.text, attempt_id=args.attempt))
         elif args.cmd == "conclude":
             print(dom.conclude(args.hypothesis, args.verdict, args.scope))
+        elif args.cmd == "mcp":
+            from .mcp_client import MCPClient, load_servers, probe as mcp_probe
+            cfgs = [os.path.join(args.root, "state", "mcp.json"),
+                    os.path.expanduser("~/.pi/agent/mcp.json")]
+            servers = load_servers(cfgs)
+            if args.action == "list":
+                print(json.dumps({k: {"transport": v.transport, "enabled": v.enabled}
+                                  for k, v in servers.items()}, ensure_ascii=False, indent=2))
+            elif args.action == "probe":
+                names = [args.server] if args.server else list(servers)
+                print(json.dumps([mcp_probe(servers[n]) for n in names if n in servers],
+                                 ensure_ascii=False, indent=2))
+            else:
+                if not args.server or not args.tool:
+                    print("需要 --server 与 --tool", file=sys.stderr)
+                    return 2
+                with MCPClient(servers[args.server]) as c:
+                    c.initialize()
+                    c.list_tools()
+                    print(json.dumps(c.call_tool(args.tool, json.loads(args.args)),
+                                     ensure_ascii=False, indent=2))
         elif args.cmd == "pi-event":
             import sys as _sys
 
