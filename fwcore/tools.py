@@ -185,6 +185,11 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
                 cwd=workdir, stdout=fo, stderr=fe,
                 start_new_session=True,     # 独立进程组 ⇒ 超时可整组杀掉
             )
+            try:                        # 记录 pgid:外层看护可在循环失控时整组杀掉
+                with open(os.path.join(art, ".pgids"), "a", encoding="utf-8") as pf:
+                    pf.write(f"{os.getpgid(proc.pid)}\n")
+            except OSError:
+                pass
         except FileNotFoundError as e:
             with open(ep, "ab") as fe2:
                 fe2.write(f"命令不存在: {e}".encode())

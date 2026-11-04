@@ -1,0 +1,132 @@
+"""外层执行看护(watchdog):**独立于被保护的运行循环**。
+
+为什么必须有这一层(2026-11-04 62GB 事故的教训):
+被保护的循环如果自己写错(例如"空闲检测"漏了、模型永不 FINAL),它就没有机会执行自己的保护。
+因此还需要一个**外部**观察者:只看可观测事实(心跳、库体积、检查点数量、墙钟、进程是否还在),
+超阈值就强行把 run 置为 paused 并**杀掉该 run 的工具进程组**,不指望循环配合。
+
+设计要点
+- 只读事实 + 一处写(`runs.state='paused'`)+ 杀进程组;不碰任何研究事实(假设/证据/结论)。
+- 阈值全部来自 `Limits`(硬保护恒在);可单次(`watchdog_once`)或常驻(`start_daemon`)。
+- 进程组来源:`tool_calls` 里记录过的 pgid(见 tools.shell_exec),或 run 的 run_dir 下 `.pgids`。
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import logging
+import os
+import signal
+import sqlite3
+import threading
+import time
+from dataclasses import dataclass, field
+
+from . import db as _db
+from .limits import MB, Limits
+
+
+log = logging.getLogger("fwcore.watchdog")
+
+
+@dataclass
+class Watchdog:
+    con: sqlite3.Connection
+    root: str
+    limits: Limits = field(default_factory=Limits)
+    heartbeat_timeout_s: float = 900.0     # 心跳多久没更新算"卡死"
+    poll_s: float = 5.0
+
+    def _db_bytes(self) -> int:
+        with contextlib.suppress(sqlite3.Error):
+            p = self.con.execute("PRAGMA database_list").fetchone()[2]
+            return sum(os.path.getsize(p + s) for s in ("", "-wal", "-shm") if os.path.exists(p + s))
+        return 0
+
+    def _kill_pgids(self, run_id: str) -> list[int]:
+        """杀掉该 run 记录过的工具进程组(独立于循环)。"""
+        killed: list[int] = []
+        pgfile = os.path.join(self.root, "state", "artifacts", run_id, ".pgids")
+        pgids: list[int] = []
+        if os.path.isfile(pgfile):
+            try:
+                with open(pgfile, encoding="utf-8") as f:
+                    pgids = [int(x) for x in f.read().split() if x.strip().isdigit()]
+            except (OSError, ValueError):
+                pgids = []
+        for pg in pgids:
+            try:
+                os.killpg(pg, signal.SIGKILL)
+                killed.append(pg)
+            except (ProcessLookupError, PermissionError):
+                continue
+        return killed
+
+    def scan_once(self) -> list[dict]:
+        """检查一轮:返回触发的动作列表(空 = 一切正常)。"""
+        actions: list[dict] = []
+        now = time.time()
+
+        # ① 磁盘:库体积超过硬顶 ⇒ 所有 running 的 run 暂停
+        size = self._db_bytes()
+        if size > self.limits.max_db_bytes:
+            actions.append({"reason": "max_db_bytes", "db_bytes": size,
+                            "limit": self.limits.max_db_bytes})
+
+        rows = self.con.execute(
+            "SELECT r.id, r.heartbeat_at, r.updated_at, r.state, r.pid FROM runs r WHERE r.state='running'"
+        ).fetchall()
+        for r in rows:
+            hb = _epoch(r["heartbeat_at"] or r["updated_at"])
+            stale = (now - hb) > self.heartbeat_timeout_s if hb else True
+            n_ck = self.con.execute(
+                "SELECT COUNT(*) n FROM checkpoints WHERE run_id=?", (r["id"],)).fetchone()["n"]
+            too_many = n_ck > max(self.limits.checkpoints_keep * 2, 10)
+            if stale or too_many or size > self.limits.max_db_bytes:
+                killed = self._kill_pgids(r["id"])
+                with _db.Tx(self.con) as c:
+                    c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
+                    c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                              (_now(), "watchdog.paused", r["id"],
+                               json.dumps({"stale_s": round(now - hb, 1) if hb else None,
+                                           "checkpoints": n_ck, "killed_pgids": killed,
+                                           "db_bytes": size}, ensure_ascii=False)))
+                actions.append({"run": r["id"], "paused": True, "killed_pgids": killed,
+                                "stale_s": round(now - hb, 1) if hb else None, "checkpoints": n_ck})
+        return actions
+
+    def start_daemon(self, stop: threading.Event | None = None) -> threading.Thread:
+        stop = stop or threading.Event()
+
+        def _loop():
+            while not stop.is_set():
+                try:
+                    self.scan_once()
+                except Exception:                      # 看护自己不能死,但必须留痕
+                    log.exception("watchdog scan failed")
+                stop.wait(self.poll_s)
+
+        th = threading.Thread(target=_loop, name="fwcore-watchdog", daemon=True)
+        th.start()
+        return th
+
+
+def _epoch(ts: str | None) -> float:
+    import datetime as _d
+
+    if not ts:
+        return 0.0
+    try:
+        return _d.datetime.fromisoformat(ts).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _now() -> str:
+    import datetime as _d
+
+    return _d.datetime.now(_d.UTC).isoformat(timespec="seconds")
+
+
+__all__ = ["Watchdog", "MB"]
