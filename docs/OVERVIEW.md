@@ -33,8 +33,12 @@
   适配成带描述/schema/风险级的工具。
 - `scripts/e2e_real_model.py` + `make e2e-real`:**真实模型**两阶段(暂停→恢复)机制 E2E。
 - `fwcore.cli`:独立入口 `fw-core`(**不依赖 Pi**):init/hyp/surface/attempt/evidence/observe/conclude/status/derive/view/run/resume。
-- 47 个测试(不变量 / 工具策略 / 协议格式 / 硬崩溃恢复 / 迁移保真 / 并发锁 / 提示生成)。
-- 真实模型实测证据:`docs/evidence/real-model-run.md`(DeepSeek,6 次工具调用 + 状态落库 + 恢复)。
+- 94 个测试(不变量 / 工具策略 / 协议格式 / 硬崩溃恢复 / 迁移保真 / 并发锁 / 提示生成)。
+- 真实模型实测证据:`docs/evidence/real-model-run.md`(机制 E2E)、
+  `docs/evidence/eval-sig-after-parse.md` / `eval-partial-auth.md`(**答案隔离研究评测,两个任务均 PASS**)。
+- 能力/Provider 层(`fwcore/providers.py`):能力→provider→探针状态(区分 `arch_mismatch`/`deps_missing`/`partial`),
+  实测纠正了"aarch64 tracer 已装"(实为 x86-64)与"sasquatch 已装"(不在 PATH)两条旧记载。
+- 授权(`fwcore/policy.py::Authz`):研究范围内自主运行分析工具;外部动作(网络/登录态/公开提交)仍需人确认。
 
 ## 4. 明确没有做的(不要误读)
 

@@ -26,7 +26,8 @@ import sys
 from . import db as _db
 from .domain import Domain, DomainError
 from .migrate import import_notes, verify
-from .runtime import OpenAIModel, Runner, ScriptedModel
+from .models import build_adapter, credentials_from_pi_config
+from .runtime import Runner
 
 
 def _con(args):
@@ -68,13 +69,19 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("conclude"); p.add_argument("hypothesis"); p.add_argument("verdict")
     p.add_argument("--scope", required=True)
 
+    p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
+    sub.add_parser("status"); p.add_argument("target") if False else None
     p = sub.add_parser("status"); p.add_argument("target")
     p = sub.add_parser("derive"); p.add_argument("target")
     p = sub.add_parser("migrate"); p.add_argument("target"); p.add_argument("--notes")
     p = sub.add_parser("view"); p.add_argument("target")
     p = sub.add_parser("run"); p.add_argument("target"); p.add_argument("--goal")
-    p.add_argument("--model", default="scripted"); p.add_argument("--steps", type=int, default=40)
+    p.add_argument("--model", default="scripted"); p.add_argument("--steps", type=int, default=0,
+                   help="0 = 不限(默认;由模型自己决定何时收)")
     p = sub.add_parser("resume"); p.add_argument("run_id"); p.add_argument("--steps", type=int, default=40)
+    p = sub.add_parser("advance"); p.add_argument("target"); p.add_argument("--goal")
+    p.add_argument("--model", default="scripted"); p.add_argument("--rounds", type=int, default=4)
+    p.add_argument("--steps", type=int, default=40)
 
     args = ap.parse_args(argv)
     con = _con(args)
@@ -106,6 +113,9 @@ def main(argv: list[str] | None = None) -> int:
             print(dom.add_observation(args.target, args.text, attempt_id=args.attempt))
         elif args.cmd == "conclude":
             print(dom.conclude(args.hypothesis, args.verdict, args.scope))
+        elif args.cmd == "capabilities":
+            from .providers import inventory
+            print(json.dumps(inventory(args.root), ensure_ascii=False, indent=2))
         elif args.cmd == "status":
             print(json.dumps(dom.status(args.target), ensure_ascii=False, indent=2))
         elif args.cmd == "derive":
@@ -115,10 +125,12 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(verify(con, args.root, args.target, args.notes), ensure_ascii=False, indent=2))
         elif args.cmd == "view":
             print(render_view(con, args.root, args.target))
-        elif args.cmd in ("run", "resume"):
+        elif args.cmd in ("run", "resume", "advance"):
             model = _model(args.model)
-            runner = Runner(con, args.root, model, max_steps=args.steps)
-            if args.cmd == "run":
+            runner = Runner(con, args.root, model, max_steps=(args.steps or None))
+            if args.cmd == "advance":
+                res = runner.advance(args.target, args.goal, max_rounds=args.rounds)
+            elif args.cmd == "run":
                 rid = runner.start(args.target, args.goal)
                 res = runner.run(rid, args.target, goal=args.goal)
             else:
@@ -131,10 +143,14 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _model(name: str):
-    if name == "openai":
-        return OpenAIModel(model=os.environ.get("FW_MODEL", "gpt-4o-mini"))
+    if name in ("openai", "deepseek", "openai-compat"):
+        try:
+            key, base, model = credentials_from_pi_config()
+        except Exception:
+            key, base, model = os.environ.get("FW_API_KEY", ""), os.environ.get("FW_BASE_URL", ""), "deepseek-chat"
+        return build_adapter("openai", api_key=key, base_url=base, model=model)
     # scripted:默认脚本 = 登记一条假设后收束(便于本地冒烟,不产生外部调用)
-    return ScriptedModel(script=[
+    return build_adapter("scripted", script=[
         {"content": "先登记一个待验证的方向。", "tool_calls": [
             {"name": "state_add_hypothesis",
              "args": {"target": os.environ.get("FW_TARGET", ""), "title": "(scripted) 冒烟假设"}}]},

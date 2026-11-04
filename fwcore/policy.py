@@ -15,15 +15,63 @@ from .domain import DomainError
 
 
 @dataclass
+class Authz:
+    """可撤销、带范围与时限的研究授权。
+
+    设计意图:**在研究工作区内的分析操作默认允许**(否则每步都要人确认 ⇒ 谈不上自主研究);
+    外部网络 / 真实登录态 / 公开提交这类越界动作仍然必须人类确认。
+    """
+
+    roots: list[str] = field(default_factory=list)
+    allow_shell: bool = True
+    allow_high_risk: bool = True
+    expires_at: float | None = None
+    revoked: bool = False
+    reason: str = ""
+
+    def active(self, now: float | None = None) -> bool:
+        import time as _t
+
+        if self.revoked:
+            return False
+        if self.expires_at is not None and (_t.time() > self.expires_at):
+            return False
+        return True
+
+    def covers(self, path: str) -> bool:
+        p = os.path.realpath(path)
+        return any(p == os.path.realpath(r) or p.startswith(os.path.realpath(r) + os.sep) for r in self.roots)
+
+
+@dataclass
 class Policy:
     allow_high_risk: bool = False
+    authorization: Authz | None = None
     confirm: object = None              # Callable[[str], bool] | None
     max_timeout: float = 120.0
     sandbox_roots: list[str] = field(default_factory=list)
     require_path_within: bool = True
 
-    def decide(self, tool: str, risk: str, args: dict) -> tuple[bool, str]:
-        """返回 (allowed, reason)。"""
+    def decide(self, tool: str, risk: str, args: dict, *, external: bool = False) -> tuple[bool, str]:
+        """返回 (allowed, reason)。
+
+        优先级:授权失效 ⇒ 拒;外部动作 ⇒ 必须 confirm;高风险 ⇒ 授权内允许,否则拒。
+        """
+        az = self.authorization
+        if az is not None and not az.active():
+            return False, f"研究授权已失效/被撤销({az.reason or 'expired'})"
+        if external:
+            if self.confirm is None:
+                return False, "外部动作(网络/登录态/公开提交)需要人类确认"
+            try:
+                if not self.confirm(f"{tool} {args}"):
+                    return False, "用户未确认外部动作"
+            except Exception as e:
+                return False, f"confirm 异常: {e}"
+            return True, ""
+        if az is not None and az.allow_high_risk:
+            if risk == "high" and az.allow_shell:
+                return True, ""              # 授权范围内自主运行分析工具
         if risk == "high":
             if self.confirm is None and not self.allow_high_risk:
                 return False, "高风险工具需要人类确认(未配置 confirm,默认拒绝)"

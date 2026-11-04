@@ -22,6 +22,13 @@ run-demo:        ## 用脚本化模型跑一次完整循环
 e2e-real:        ## 真实模型端到端(多轮工具调用 + 暂停恢复);需要 ~/.pi/agent/models.json 里的 key
 	$(PY) scripts/e2e_real_model.py --steps 8
 
+caps:            ## 能力/Provider 探针清单
+	$(PY) -m fwcore capabilities
+
+eval:            ## 答案隔离研究评测:make eval T=sig-after-parse|partial-auth
+	@test -n "$(T)" || (echo "用法: make eval T=<任务名>" >&2; exit 2)
+	$(PY) eval/run.py --task $(T) --rounds 2
+
 migrate-real:    ## 把某目标的 notes 迁到临时库并复核(不改动 state/):make migrate-real T=<目标>
 	@test -n "$(T)" || (echo "用法: make migrate-real T=<目标目录名>" >&2; exit 2)
 	rm -rf /tmp/fwmig && mkdir -p /tmp/fwmig/state/$(T)

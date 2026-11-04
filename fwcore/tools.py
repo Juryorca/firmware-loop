@@ -31,7 +31,8 @@ class ToolSpec:
     description: str
     input_schema: dict
     handler: Callable[["ToolContext", dict], dict]
-    risk: str = "low"  # low | high(high 需要人类确认,见 Runner)
+    risk: str = "low"  # low | high
+    external: bool = False   # 外网/登录态/公开提交:永远需要人类确认(high 需要人类确认,见 Runner)
 
 
 @dataclass
@@ -67,12 +68,15 @@ class Registry:
             for s in sorted(self.specs.values(), key=lambda x: x.name)
         ]
 
-    def call(self, ctx: ToolContext, name: str, args: dict) -> dict:
+    def call(self, ctx: ToolContext, name: str, args: dict, *, call_key: str | None = None,
+             run_id: str | None = None) -> dict:
+        """执行工具。`call_key`(模型给的调用 id)存在时**幂等**:
+        同一 run 内重复调用同一 id 不会重复副作用,直接返回上次结果。"""
         spec = self.specs.get(name)
         if not spec:
             return {"status": "error", "error": f"未知工具: {name}"}
         pol = ctx.policy or Policy(confirm=ctx.confirm)
-        allowed, reason = pol.decide(name, spec.risk, args)
+        allowed, reason = pol.decide(name, spec.risk, args, external=spec.external)
         if not allowed:
             _record(ctx, name, args, "cancelled", note=reason)
             return {"status": "cancelled", "error": reason}
@@ -80,13 +84,26 @@ class Registry:
         if bad:
             _record(ctx, name, args, "error", note=bad)
             return {"status": "error", "error": bad}
+        prev = None
+        if call_key:
+            prev = ctx.domain.con.execute(
+                "SELECT * FROM tool_calls WHERE run_id=? AND call_key=?", (ctx.run_id, call_key)
+            ).fetchone()
+        if prev and prev["status"] not in ("pending", "running"):
+            return {"status": prev["status"], "replayed": True, "tool_call_id": prev["id"],
+                    "exit_code": prev["exit_code"], "note": prev["note"],
+                    "stdout_path": prev["stdout_path"], "stderr_path": prev["stderr_path"]}
         cid = new_id("TC")
         t0 = time.time()
-        with _db.Tx(ctx.domain.con) as c:
-            c.execute(
-                "INSERT INTO tool_calls(id,run_id,tool,args,status,created_at) VALUES(?,?,?,?,'running',?)",
-                (cid, ctx.run_id, name, json.dumps(args, ensure_ascii=False), _now()),
-            )
+        try:
+            with _db.Tx(ctx.domain.con) as c:
+                c.execute(
+                    "INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,created_at)"
+                    " VALUES(?,?,?,?,?,'running',?)",
+                    (cid, call_key, ctx.run_id, name, json.dumps(args, ensure_ascii=False), _now()),
+                )
+        except Exception as e:      # 唯一索引冲突 = 另一个执行者已在跑同一次调用
+            return {"status": "cancelled", "error": f"重复调用被拒(幂等保护): {e}"}
         try:
             out = spec.handler(ctx, args) or {}
             status = out.get("status", "ok")
@@ -221,7 +238,8 @@ def state_start_attempt(ctx: ToolContext, args: dict) -> dict:
 
 
 def state_finish_attempt(ctx: ToolContext, args: dict) -> dict:
-    ctx.domain.finish_attempt(args["attempt_id"], args["result"], args.get("note", ""))
+    ctx.domain.finish_attempt(args["attempt_id"], args["result"], args.get("note", ""),
+                              obs_outcome=args.get("obs_outcome"), obs_reason=args.get("obs_reason", ""))
     return {"status": "ok", "attempt_id": args["attempt_id"], "result": args["result"]}
 
 
@@ -231,9 +249,31 @@ def state_record_mirror(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "mirror_id": mid}
 
 
+def state_request_user_input(ctx: ToolContext, args: dict) -> dict:
+    rid = args.get("run_id") or ctx.run_id
+    if not rid:
+        return {"status": "error", "error": "缺少 run_id"}
+    ctx.domain.request_user_input(rid, args["reason"])
+    return {"status": "ok", "needs_user_input": args["reason"]}
+
+
+def state_note_observation(ctx: ToolContext, args: dict) -> dict:
+    ctx.domain.note_observation_outcome(args["attempt_id"], args["outcome"], args.get("reason", ""))
+    return {"status": "ok", "attempt_id": args["attempt_id"], "outcome": args["outcome"]}
+
+
 def state_conclude(ctx: ToolContext, args: dict) -> dict:
     cid = ctx.domain.conclude(args["hypothesis_id"], args["verdict"], args["scope_note"])
     return {"status": "ok", "conclusion_id": cid}
+
+
+def _caps(ctx: ToolContext, args: dict) -> dict:
+    from .providers import inventory
+    inv = inventory(ctx.root)
+    only = args.get("only")
+    if only:
+        inv = [e for e in inv if only in e["capability"]]
+    return {"status": "ok", "capabilities": inv}
 
 
 def _sha256(path: str) -> str:
@@ -294,8 +334,15 @@ def default_registry() -> Registry:
         "(后三种不会关闭假设)",
         {"type": "object", "properties": {
             "attempt_id": {"type": "string"}, "result": {"type": "string"},
-            "note": {"type": "string"}}, "required": ["attempt_id", "result"]},
+            "note": {"type": "string"},
+            "obs_outcome": {"type": "string", "enum": ["new", "none"]},
+            "obs_reason": {"type": "string"}}, "required": ["attempt_id", "result"]},
         state_finish_attempt))
+    r.register(ToolSpec(
+        "capabilities_list",
+        "列出本机可用的研究能力与提供者(含状态:ready/partial/deps_missing/arch_mismatch/not_started)",
+        {"type": "object", "properties": {"only": {"type": "string"}}},
+        lambda ctx, a: _caps(ctx, a)))
     r.register(ToolSpec(
         "state_record_mirror",
         "记一行三镜刷新(面/格收口时):机制 / 若我是作者最可能漏检哪 / 换状态·主体·版本 / 新面",
@@ -304,6 +351,19 @@ def default_registry() -> Registry:
             "state": {"type": "string"}, "new_faces": {"type": "string"}},
          "required": ["target", "mechanism", "author", "state"]},
         state_record_mirror))
+    r.register(ToolSpec(
+        "state_request_user_input",
+        "交回控制权:声明确实需要工作区外的东西(账号/样本/真机外的具体外部事物)",
+        {"type": "object", "properties": {
+            "run_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["reason"]},
+        state_request_user_input))
+    r.register(ToolSpec(
+        "state_note_observation",
+        "双输出的观察一侧:new=已登记观察 / none=无新观察(必须给理由:为什么在预期内)",
+        {"type": "object", "properties": {
+            "attempt_id": {"type": "string"}, "outcome": {"type": "string", "enum": ["new", "none"]},
+            "reason": {"type": "string"}}, "required": ["attempt_id", "outcome"]},
+        state_note_observation))
     r.register(ToolSpec(
         "state_conclude", "给假设下结论(必须写适用范围 scope_note)",
         {"type": "object", "properties": {

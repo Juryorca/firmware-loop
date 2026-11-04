@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS hypotheses (
   verdict     TEXT
      CHECK (verdict IS NULL OR verdict IN ('vulnerable','no_finding','inconclusive')),
   scope_note  TEXT,
+  surface_key TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL
 );
@@ -72,6 +73,10 @@ CREATE TABLE IF NOT EXISTS attempts (
   result      TEXT NOT NULL DEFAULT 'running'
      CHECK (result IN ('running','supported','refuted','inconclusive','environment_failure','no_signal','cancelled')),
   note        TEXT,
+  -- 双输出的"观察"一侧:pending(未交代) / new(有新观察) / none(无新观察,需理由)
+  obs_outcome TEXT NOT NULL DEFAULT 'pending'
+     CHECK (obs_outcome IN ('pending','new','none')),
+  obs_reason  TEXT,
   started_at  TEXT NOT NULL,
   finished_at TEXT
 );
@@ -111,6 +116,8 @@ CREATE TABLE IF NOT EXISTS conclusions (
 -- 工具调用:真实执行状态(不把"发起"当"完成")
 CREATE TABLE IF NOT EXISTS tool_calls (
   id         TEXT PRIMARY KEY,
+  -- 模型给出的调用 id:同一 run 内重复执行会被唯一索引挡住(恢复时幂等,不重复副作用)
+  call_key   TEXT,
   run_id     TEXT,
   tool       TEXT NOT NULL,
   args       TEXT,
@@ -121,6 +128,10 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   stdout_path TEXT,
   stderr_path TEXT,
   note       TEXT,
+  provider   TEXT,
+  capability TEXT,
+  arch       TEXT,
+  env_json   TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -131,7 +142,12 @@ CREATE TABLE IF NOT EXISTS runs (
   state      TEXT NOT NULL DEFAULT 'running'
      CHECK (state IN ('running','paused','finished','failed')),
   step       INTEGER NOT NULL DEFAULT 0,
+  rounds     INTEGER NOT NULL DEFAULT 0,
   goal       TEXT,
+  pid        INTEGER,
+  host       TEXT,
+  heartbeat_at TEXT,
+  handback_reason TEXT,
   started_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -179,6 +195,9 @@ CREATE INDEX IF NOT EXISTS idx_hyp_target_state ON hypotheses(target_id, state);
 CREATE INDEX IF NOT EXISTS idx_attempt_hyp ON attempts(hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_target ON evidence(target_id);
 CREATE INDEX IF NOT EXISTS idx_events_ref ON events(ref);
+CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_key ON tool_calls(run_id, call_key)
+  WHERE call_key IS NOT NULL;
 """
 
 
@@ -201,6 +220,12 @@ def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
     return con
 
 
+def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
+    cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+    if col not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+
 def _migrate(con: sqlite3.Connection) -> None:
     con.executescript(SCHEMA)
     cur = con.execute("SELECT value FROM meta WHERE key='schema_version'")
@@ -211,6 +236,23 @@ def _migrate(con: sqlite3.Connection) -> None:
         have = int(row["value"])
         if have > SCHEMA_VERSION:
             raise RuntimeError(f"数据库 schema 版本 {have} 高于代码支持 {SCHEMA_VERSION}")
+        if have < 3:
+            _add_col(con, "attempts", "obs_outcome", "TEXT NOT NULL DEFAULT 'pending'")
+            _add_col(con, "attempts", "obs_reason", "TEXT")
+            _add_col(con, "tool_calls", "call_key", "TEXT")
+            _add_col(con, "tool_calls", "provider", "TEXT")
+            _add_col(con, "tool_calls", "capability", "TEXT")
+            _add_col(con, "tool_calls", "arch", "TEXT")
+            _add_col(con, "tool_calls", "env_json", "TEXT")
+            _add_col(con, "runs", "rounds", "INTEGER NOT NULL DEFAULT 0")
+            _add_col(con, "runs", "pid", "INTEGER")
+            _add_col(con, "runs", "host", "TEXT")
+            _add_col(con, "runs", "heartbeat_at", "TEXT")
+            _add_col(con, "runs", "handback_reason", "TEXT")
+            _add_col(con, "hypotheses", "surface_key", "TEXT")
+            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_key ON tool_calls(run_id, call_key)"
+                        " WHERE call_key IS NOT NULL")
+            con.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
         if have < 2:
             cols = {r[1] for r in con.execute("PRAGMA table_info(surfaces)")}
             if "judged_by" not in cols:

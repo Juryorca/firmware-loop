@@ -57,6 +57,32 @@ tests/         21 个测试(domain/tools/runtime/migrate/并发)
 **运行时恢复**:`runs` + `checkpoints`;模型/进程异常 ⇒ run 置 `paused` + 写检查点,**假设状态不变**;
 `resume()` 从最后检查点继续(`test_interruption_pauses_and_keeps_hypothesis_state` / `test_resume_continues_from_checkpoint`)。
 
+**能力/Provider 层**(`fwcore/providers.py`,已实现)
+- 能力 → 多 provider → **真实探针**;状态区分 `ready / partial / deps_missing / not_started /
+  arch_mismatch / missing`。**不重装环境**,只做发现/解析/选择/记录。
+- 实测纠正了两条历史记载:`~/.local/bin/afl-aarch64/afl-qemu-trace` 实际是 **x86-64** ⇒
+  本机 **aarch64 fuzz 不可用**(报 `arch_mismatch`);`sasquatch` 不在 PATH;`unblob` 缺多个提取器 ⇒ `partial`。
+- 改版 QEMU 与上游 QEMU 是**两个不同的 provider**(`ready` vs `partial:NETLINK 被拒`),不静默互换。
+
+**授权与安全**(`fwcore/policy.py::Authz`,已实现)
+- 研究授权 = 可撤销 + 带范围 + 可设时限;授权范围内**分析工具自主运行**(不逐次确认);
+  `external=True` 的工具(外网/登录态/公开提交)永远需要人类确认;越权路径/过期/撤销 ⇒ 拒绝。
+
+**自动继续与执行语义**(已实现)
+- **不设步数预算**:由模型自己输出 `FINAL` 或交回控制权;只保留执行层保护 ——
+  重复无进展检测(同一调用连续 N 次 ⇒ `run.stalled`)、可选墙钟安全上限。
+- 交回控制权只有三种原因:`closed`(收尾前置全清)/ `needs_user_input` / 用户停。
+  模型说 `FINAL` 但还有未收口项 ⇒ `advance()` 带阻塞清单**自动开下一轮**。
+- 工具调用**幂等**:同一 `call_key` 重复执行返回缓存(`replayed=True`),恢复时不重复副作用。
+
+**研究评测(答案隔离)**(`eval/`,已实现)
+- `eval/tasks/<任务>/bundle`(给模型看)+ `answers/expected.json`(**只在评测侧**);
+- 判据:是否找到缺陷、是否**不过度概括**、是否有证据、是否有决定性尝试、是否交代观察;
+- 实测(DeepSeek,无步数上限):
+  `sig-after-parse` **PASS**(2 轮,12 条证据;模型自己提出"先解析后验签"并做了负对照)、
+  `partial-auth` **PASS**(1 轮,`handback=closed`);
+- 评分器曾出现**假阴性**(把证据引用里的"全部"当成过度概括)⇒ 已改为"收窄缺失 + 显式整体断言"双条件。
+
 **研究载体**(`fwcore/research.py`,已实现)
 - 系统提示**从仓库规则生成**:`AGENTS.md` / `LOOP.md` / `knowledge/misreports.md` / `knowledge/vuln-patterns.md`
   原文按预算读入(**规则唯一来源,不在代码里复制一份**);
@@ -90,7 +116,13 @@ history 通过 OpenAI 协议校验、阶段二步数继续增长 ⇒ **机制闭
 9. **thinking 模式要求每个 assistant 消息都回传 `reasoning_content`**(空串也要),且不能在本地方案化时丢掉。
    —— 这两条**只有真实模型能暴露**,脚本化模型完全测不出来(审计结论)。
 10. **步数预算是每次调用一份**,不是绝对上限:否则 `resume()` 会因历史步数 ≥ 上限而原地不动。
-11. 高风险工具**默认拒绝**(没有 confirm 就 `cancelled`),参数先过 schema 校验与路径收敛,超时受上限约束。
+11. 高风险工具**默认拒绝**(没有 confirm 就 `cancelled`),参数先过 schema 校验与路径收敛,超时受上限约束;
+   但**授权范围内**应允许自主运行分析工具,否则谈不上自主研究(两者靠 `Authz` 区分,不是靠逐次确认)。
+12. **不要凭"命令存在"推断"能力可用"**:aarch64 tracer 文件实际是 x86-64;unblob 本体在但缺提取器。
+   能力必须走探针(capabilities),状态要能表达 `arch_mismatch` / `deps_missing` / `partial`。
+13. **不要给研究设"步数预算"**:预算猜小了只是浪费 token 且逼出半成品;让模型自己收(FINAL),
+   执行层只做停滞检测与墙钟安全上限。
+14. **评分器也会假阴性**:用关键词判"过度概括"会把证据引用误判 ⇒ 评分要双条件、并能离线重评(`--rescore`)。
 
 ## 4. ④ 纠正过的设计判断(保留历史背景)
 
@@ -121,7 +153,7 @@ history 通过 OpenAI 协议校验、阶段二步数继续增长 ⇒ **机制闭
 |---|---|---|
 | 把闸门(derived_check)完全建立在权威状态+真实证据上 | 未开始(当前仍在 md 上跑) | 需先把 `surfaces/hypotheses` 填全;再实现从 DB 计算的 gates |
 | Pi 侧的适配(把 Pi 当兼容入口) | 未实现(独立路径已有 ✓) | 需要一个 Pi extension 把事件转调 `fwcore` |
-| 研究能力评测(回放 H-06 / H-24 / H-15 / WS-Discovery) | 未实现(只有机制 E2E) | 需要"评测侧答案隔离"的 harness;不能把答案写进 agent 可读规则 |
+| 更多研究评测任务(仿 H-06/H-24/H-15/WS-Discovery 的困难场景) | 已有 2 个(答案隔离) | 需要更多任务与人工复核结论质量,而不只是机制判据 |
 | Pi 入口换成转调 fwcore | 未实现 | 见 §6 第一行 |
 | 反证驱动的提示与策略 | 部分(仅 `inconclusive` 强制说明) | 需要评测来验证是否真的改变行为,而不是只改文本 |
 | 工具生态(MCP / 外部逆向工具接入) | 只实现内置 4 类工具 | `ToolSpec` 已支持描述式注册;需 MCP client 适配 |

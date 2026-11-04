@@ -183,15 +183,21 @@ class Domain:
 
     # ---------------- 假设 ----------------
     def add_hypothesis(self, target: str, title: str, *, body: str | None = None,
-                       source: str | None = None, priority: int = 100) -> str:
+                       source: str | None = None, priority: int = 100,
+                       surface_key: str | None = None) -> str:
         t = self.target(target)
         hid = new_id("H")
         now = _now()
         with Tx(self.con) as c:
+            if surface_key:
+                ok = c.execute("SELECT 1 FROM surfaces WHERE target_id=? AND key=?",
+                               (t.id, surface_key)).fetchone()
+                if not ok:
+                    raise InvariantViolation(f"关联的攻击面不存在: {surface_key}")
             c.execute(
-                "INSERT INTO hypotheses(id,target_id,title,body,source,priority,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,'open',?,?)",
-                (hid, t.id, title, body, source, priority, now, now),
+                "INSERT INTO hypotheses(id,target_id,title,body,source,priority,state,surface_key,"
+                "created_at,updated_at) VALUES(?,?,?,?,?,?,'open',?,?,?)",
+                (hid, t.id, title, body, source, priority, surface_key, now, now),
             )
             _event(c, "hypothesis.added", hid, {"title": title, "source": source})
         return hid
@@ -216,7 +222,46 @@ class Domain:
             _event(c, "attempt.started", aid, {"hypothesis": hid, "method": method})
         return aid
 
-    def finish_attempt(self, aid: str, result: str, note: str = "", evidence: list[str] | None = None) -> None:
+    def _validate_evidence_ids(self, ids: list[str], *, target_id: str,
+                               attempt_id: str | None = None, hypothesis_id: str | None = None) -> list[str]:
+        """证据 id 必须存在、属于该目标,且(若给了 attempt/hypothesis)确实挂在其名下。"""
+        out = []
+        for eid in ids or []:
+            row = self.con.execute(
+                "SELECT target_id, attempt_id, hypothesis_id FROM evidence WHERE id=?", (eid,)
+            ).fetchone()
+            if not row:
+                raise NotFound(f"证据不存在: {eid}")
+            if row["target_id"] != target_id:
+                raise InvariantViolation(f"证据 {eid} 不属于该目标")
+            if attempt_id and row["attempt_id"] not in (attempt_id, None):
+                raise InvariantViolation(f"证据 {eid} 不属于该尝试")
+            if hypothesis_id and row["hypothesis_id"] not in (hypothesis_id, None):
+                raise InvariantViolation(f"证据 {eid} 不属于该假设")
+            out.append(eid)
+        return out
+
+    def note_observation_outcome(self, aid: str, outcome: str, reason: str = "") -> None:
+        """双输出的观察一侧:new(已登记观察)/ none(无新观察,需理由)。"""
+        if outcome not in ("new", "none"):
+            raise InvariantViolation("obs_outcome 只能是 new 或 none")
+        row = self.con.execute(
+            "SELECT a.id, a.hypothesis_id, h.target_id FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
+            " WHERE a.id=?", (aid,)).fetchone()
+        if not row:
+            raise NotFound(f"尝试不存在: {aid}")
+        if outcome == "none" and len((reason or "").strip()) < 8:
+            raise InvariantViolation("声明「无新观察」必须写理由(为什么这次结果在预期内)")
+        if outcome == "new":
+            n = self.con.execute("SELECT COUNT(*) n FROM observations WHERE attempt_id=?", (aid,)).fetchone()["n"]
+            if n == 0:
+                raise InvariantViolation("声明「有新观察」但没登记任何 observation")
+        with Tx(self.con) as c:
+            c.execute("UPDATE attempts SET obs_outcome=?, obs_reason=? WHERE id=?", (outcome, reason or None, aid))
+            _event(c, "attempt.observation_outcome", aid, {"outcome": outcome})
+
+    def finish_attempt(self, aid: str, result: str, note: str = "", evidence: list[str] | None = None,
+                       obs_outcome: str | None = None, obs_reason: str = "") -> None:
         """结束一次尝试。
 
         不变量:
@@ -231,7 +276,13 @@ class Domain:
             raise NotFound(f"尝试不存在: {aid}")
         if row["result"] != "running":
             raise InvariantViolation(f"尝试已结束({row['result']}),不能重复结束")
-        ev_ids = evidence or []
+        tgt = self.con.execute(
+            "SELECT h.target_id FROM hypotheses h JOIN attempts a ON a.hypothesis_id=h.id WHERE a.id=?",
+            (aid,)).fetchone()
+        ev_ids = self._validate_evidence_ids(evidence or [], target_id=tgt["target_id"],
+                                            attempt_id=aid, hypothesis_id=row["hypothesis_id"])
+        if obs_outcome:
+            self.note_observation_outcome(aid, obs_outcome, obs_reason)
         with Tx(self.con) as c:
             if result == "inconclusive" and not (note or "").strip():
                 raise InvariantViolation(
@@ -364,6 +415,15 @@ class Domain:
                       (reason, _now(), hid))
             _event(c, "hypothesis.dropped", hid, {"reason": reason[:200]})
 
+    def request_user_input(self, run_id: str, reason: str) -> None:
+        """模型主动交回控制权(合法停止之一:需要工作区外的具体东西)。"""
+        if len((reason or "").strip()) < 8:
+            raise InvariantViolation("请求用户输入必须写清:要什么 / 卡在哪一步")
+        with Tx(self.con) as c:
+            c.execute("UPDATE runs SET handback_reason=?, updated_at=? WHERE id=?",
+                      ("needs_user_input: " + reason, _now(), run_id))
+            _event(c, "run.request_user_input", run_id, {"reason": reason[:300]})
+
     # ---------------- 派生量(程序算,不靠文字) ----------------
     def derived(self, target: str) -> dict:
         t = self.target(target)
@@ -461,6 +521,12 @@ class Domain:
         n_surf = self.con.execute("SELECT COUNT(*) n FROM surfaces WHERE target_id=?", (t.id,)).fetchone()["n"]
         if n_surf == 0:
             b.append("没有登记任何攻击面(A1 枚举缺失)")
+        n_pending = self.con.execute(
+            "SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
+            " WHERE h.target_id=? AND a.result IN ('supported','refuted','inconclusive')"
+            "   AND a.obs_outcome='pending'", (t.id,)).fetchone()["n"]
+        if n_pending:
+            b.append(f"{n_pending} 次决定性尝试没交代观察(new/none + 理由)——双输出缺失")
         mat = self.material_check(target)
         if mat["missing"]:
             b.append("材料不完整: " + "; ".join(mat["missing"][:5]))

@@ -60,7 +60,7 @@ class Research:
     def pool(self, target: str, limit: int = 12) -> list[dict]:
         t = self.domain.target(target)
         rows = self.domain.con.execute(
-            """SELECT h.id, h.title, h.source, h.priority, h.state
+            """SELECT h.id, h.title, h.source, h.priority, h.state, h.surface_key
                  FROM hypotheses h WHERE h.target_id=? AND h.state IN ('open','investigating')
                 ORDER BY h.priority ASC, h.created_at ASC""", (t.id,)).fetchall()
         out = [dict(r) for r in rows]
@@ -71,7 +71,10 @@ class Research:
             (t.id,)).fetchall()}
         def score(h: dict) -> tuple:
             text = (h["title"] or "") + " " + (h["source"] or "")
-            r = next((rank.get(s["reachability"], 3) for k, s in surf.items() if k in text), 3)
+            key = h.get("surface_key")
+            r = rank.get(surf[key]["reachability"], 3) if key in surf else 3
+            if key is None:  # 未归属既有面的新方向:不惩罚,但排在已归属之后
+                r = 3
             complex_bonus = 0 if re.search(r"解析|parser|状态机|协议|反序列化|XML|JSON|解压|签名", text, re.I) else 1
             unknown = 0 if not re.search(r"未理解|unknown|没看懂", text, re.I) else -1
             return (r, complex_bonus, unknown, h["priority"])
@@ -93,13 +96,17 @@ class Research:
         return mid
 
     def rounds_since_mirror(self, target: str) -> int:
-        """以 run 的结束事件计轮;三镜之前的轮数。"""
+        """**该目标**自上次三镜以来结束的研究轮次数。
+
+        轮 = `round.ended` 事件(一轮 = 一条假设被推到判定性结果);
+        run 的暂停/恢复/结束**不计**轮次 —— 它们只是执行事件。
+        """
         t = self.domain.target(target)
         last = self.domain.con.execute(
             "SELECT created_at FROM mirror_checks WHERE target_id=? ORDER BY created_at DESC LIMIT 1", (t.id,)
         ).fetchone()
-        q = "SELECT COUNT(*) n FROM events WHERE kind='run.finished'"
-        args: list = []
+        q = "SELECT COUNT(*) n FROM events WHERE kind='round.ended' AND ref=?"
+        args: list = [t.id]
         if last:
             q += " AND ts > ?"
             args.append(last["created_at"])

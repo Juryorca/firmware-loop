@@ -100,7 +100,10 @@
   **`afl-qemu-trace`**(2,718,448 B;**只编了 x86_64**) + **`libqasan.so`**(81,984 B)。
   ⚠️ **跨架构未验证**:当时的冒烟(`afl-showmap -Q -- /bin/cat`,109 tuples)用的是 **x86_64** 二进制 ⇒ **aarch64 guest 不可用**
   (`Invalid ELF image for this architecture`)⇒ 本工作区绝大多数目标(ARM)的 fuzz 格**默认不可用**;先验:`afl-qemu-trace -h | head -2`。
-  ✅ **已补(2026-09-29 实测)**:aarch64 版 trace 已构建并装到 **`~/.local/bin/afl-aarch64/afl-qemu-trace`**(4,661,184 B;
+  ❌ **更正(2026-11-04 探针实测)**:`~/.local/bin/afl-aarch64/afl-qemu-trace` **实际是 x86-64** ✗
+  (`file` 判定 x86-64;`fw-core capabilities` 报 `arch_mismatch`)⇒ **本机当前没有可用的 aarch64 tracer**,
+  ARM 目标 fuzz 不可用,需按下面的配方**重建**后才能用 ✓(原记载的"已补 aarch64"不成立)
+  ~~✅ 已补(2026-09-29 实测):aarch64 版 trace 已构建并装到 `~/.local/bin/afl-aarch64/afl-qemu-trace`(4,661,184 B;
   `/usr/local/bin` 那份 x86_64 未动,两者并存)。冒烟:AFL_PATH 指向它 ⇒ `Using QEMU binary: <该路径>` + aarch64 `busybox cat` **168 tuples**、
   aarch64 `7z l` **2696 tuples**;不设 AFL_PATH(用 x86_64 那份)**0 tuples** ⇒ A/B 成立。
   ⚠️ **偏差**:aarch64 构建**未产出 `libqasan.so`**(脚本报 `Cross compiler aarch64-pc-linux-gnu-gcc could not be found`)
@@ -342,6 +345,12 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **无头浏览器 MCP**:`chrome-devtools`(用户级 `~/.pi/agent/mcp.json`;`pi mcp list` ⇒ `connected, 32 tools`)。
   参数:`--headless --isolated --executablePath /usr/bin/chromium --proxyServer <本机代理:7892> --viewport 1280x720`。
 - 边界:真 Chromium ⇒ 只碰公开页,不代填密码;流量走宿主代理(代理变了改 `mcp.json`);改配置后 `/reload`。
+
+- **能力探针(取代记忆)**:`python3 -m fwcore capabilities`(或 `fw-core capabilities`)列出
+  能力 → provider → 状态(`ready/partial/deps_missing/not_started/arch_mismatch/missing`);
+  **架构不符与依赖缺失都会如实报** —— 不要用"命令存在"推断"能力可用" ✓
+- **实测更正(2026-11-04)**:`sasquatch` 不在 PATH(需重建);`unblob` 本体在但缺
+  `ubireader_extract_files` / `unar` / `simg2img` / `fsck.erofs` / `partclone.restore` ⇒ 对应格式为**部分能力** ✓
 
 ### 提交(仅当用户要求时;2026-10-30)
 - 两条浏览器 MCP:①`chrome-devtools`(headless,自起 Chromium — 抓取)②`chrome-live`(`--autoConnect`,连**用户日常 Chrome**,带其登录态)。
