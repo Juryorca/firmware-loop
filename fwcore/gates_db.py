@@ -31,6 +31,7 @@ class GateReport:
     material_missing: list = field(default_factory=list)
     blockers: list = field(default_factory=list)
     findings: list = field(default_factory=list)
+    evidence_version_mismatch: list = field(default_factory=list)
 
     def ok(self) -> bool:
         return not self.blockers
@@ -51,6 +52,7 @@ class GateReport:
             "material_missing": self.material_missing,
             "blockers": self.blockers,
             "findings": self.findings,
+            "evidence_version_mismatch": self.evidence_version_mismatch,
         }
 
 
@@ -91,6 +93,19 @@ def evaluate(con, root: str, target: str) -> GateReport:
     rep.blockers = dom.closure_blockers(target)
     if rep.mirror_due:
         rep.blockers.append(f"三镜刷新超期({rep.rounds_since_mirror} 轮,下限 3)")
+
+    # ④b 证据强度:版本必须与目标版本一致;findings 必须挂自己名下的证据
+    rep.evidence_version_mismatch = [
+        {"id": r["id"], "version": r["version"]} for r in con.execute(
+            "SELECT id, version FROM evidence WHERE target_id=? AND version IS NOT ? AND version IS NOT NULL",
+            (t.id, rep.version))]
+    if rep.evidence_version_mismatch:
+        rep.blockers.append(f"{len(rep.evidence_version_mismatch)} 条证据的版本与目标版本({rep.version})不一致")
+    unlinked = [r["id"] for r in con.execute(
+        "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'"
+        "   AND (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id)=0", (t.id,))]
+    if unlinked:
+        rep.blockers.append(f"{len(unlinked)} 条 vulnerable 结论没有挂自己的证据: {unlinked[:3]}")
 
     # ⑤ findings = 判为 vulnerable 且带证据的假设
     for r in con.execute(

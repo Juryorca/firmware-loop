@@ -61,3 +61,10 @@
 - 完成判据#2 记录:`bash tools/fwcore_verify.sh`(cwd=仓库根;脚本自设 PYTHONPATH;临时目录 `.tmp/verify` 自删)
   实测输出:`pytest(8 文件) 61 passed in 15.20s` / `capabilities 10 项` / `gates 如实报阻塞` / `git clean` / rc=0
 - 仍未完成(需授权/外部条件):Pi hook 接线、与 Pi 线对比
+
+### Iteration 8(Gate 证据强度)
+- 完成:Gate 增加两条**程序可核**的收尾阻塞 ——
+  ① 证据版本必须与目标版本一致(否则列 `evidence_version_mismatch`)；
+  ② `vulnerable` 结论必须挂**自己名下**的证据(否则列 unlinked)
+- 证据:`tests/test_gates_db.py` 8 passed in 1.24s(新增两条:旧版证据→阻塞；证据失联→阻塞)
+- 仍未完成(需授权/外部条件):Pi hook 接线、与 Pi 线对比

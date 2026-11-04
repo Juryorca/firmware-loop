@@ -87,3 +87,28 @@ def test_legacy_compare_reports_unavailable_honestly(tmp_path):
     con, dom, root = _mk(tmp_path)
     out = legacy_compare(con, root, "t1")
     assert out["available"] is False and "error" not in out
+
+
+def test_evidence_version_mismatch_is_a_blocker(tmp_path):
+    from fwcore.gates_db import evaluate
+
+    con, dom, root = _mk(tmp_path)
+    hid = dom.add_hypothesis("t1", "h")
+    aid = dom.start_attempt(hid, "m")
+    dom.add_evidence("t1", "log", capture="旧版证据", attempt_id=aid, hypothesis_id=hid, version="0.9")
+    rep = evaluate(con, root, "t1")
+    assert rep.evidence_version_mismatch and any("版本" in b for b in rep.blockers)
+
+
+def test_vulnerable_without_linked_evidence_is_blocker(tmp_path):
+    from fwcore.gates_db import evaluate
+
+    con, dom, root = _mk(tmp_path)
+    hid = dom.add_hypothesis("t1", "越权")
+    aid = dom.start_attempt(hid, "diff")
+    dom.add_evidence("t1", "http", capture="200", attempt_id=aid, hypothesis_id=hid)
+    dom.finish_attempt(aid, "supported", "ok", obs_outcome="none", obs_reason="与预期一致,无新观察")
+    dom.conclude(hid, "vulnerable", "仅 /api/x")
+    con.execute("UPDATE evidence SET hypothesis_id=NULL")     # 模拟历史/外部写入导致的失联
+    rep = evaluate(con, root, "t1")
+    assert any("没有挂自己的证据" in b for b in rep.blockers)
