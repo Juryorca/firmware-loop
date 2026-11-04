@@ -10,3 +10,11 @@ unblob.log
 knowledge/.kb.lock
 knowledge/.snapshots/**
 .pi/guard-off-*
+
+# 框架运行时产物
+state/*.sqlite3
+state/*.sqlite3-*
+/tmp/
+__pycache__/
+*.pyc
+.pytest_cache/
