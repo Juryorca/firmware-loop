@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 
 from .tools import Registry, ToolContext, ToolSpec, shell_exec
 
@@ -30,10 +32,14 @@ def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 3000,
     text = ""
     for key in ("stdout_path", "stderr_path"):
         p = out.get(key)
-        if p and os.path.isfile(p):
+        if not (p and os.path.isfile(p)):
+            continue
+        try:
             with open(p, "rb") as f:
                 f.seek(max(0, os.path.getsize(p) - keep))
                 text += f.read().decode("utf-8", errors="replace")
+        except OSError:
+            continue
     out["output_tail"] = text[-keep:]
     if tool:
         fn = OBSERVERS.get(tool)
@@ -51,9 +57,8 @@ def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 3000,
 
 @observer("research_derived")
 def _obs_derived(text: str) -> dict:
-    import re as _re
 
-    m = _re.search(r"=== derived_check: (PASS|FAIL x(\d+)) ===", text)
+    m = re.search(r"=== derived_check: (PASS|FAIL x(\d+)) ===", text)
     fails = [ln for ln in text.splitlines() if ln.startswith("FAIL")]
     oks = [ln for ln in text.splitlines() if ln.startswith("OK")]
     return {"status": "ok" if m and m.group(1) == "PASS" else "fail" if m else "unparsed",
@@ -64,9 +69,8 @@ def _obs_derived(text: str) -> dict:
 
 @observer("research_queue")
 def _obs_queue(text: str) -> dict:
-    import re as _re
 
-    kv = dict(_re.findall(r"(OPEN|BAD|ROUND|STOP|POOL|NEXT)=([^ ]*)", text))
+    kv = dict(re.findall(r"(OPEN|BAD|ROUND|STOP|POOL|NEXT)=([^ ]*)", text))
     try:
         pool, faces = (kv.get("POOL") or "0/0").split("/", 1)
         return {"status": "ok", "open": int(kv.get("OPEN", 0)), "bad": int(kv.get("BAD", 0)),
@@ -85,10 +89,9 @@ def _obs_signal(text: str) -> dict:
 
 @observer("fuzz_cgi")
 def _obs_fuzz(text: str) -> dict:
-    import re as _re
 
-    tuples = _re.findall(r"tuples[:=]\s*(\d+)", text)
-    crash = bool(_re.search(r"SIGSEGV|SIGILL|SIGBUS|uncaught signal|crash", text, _re.I))
+    tuples = re.findall(r"tuples[:=]\s*(\d+)", text)
+    crash = bool(re.search(r"SIGSEGV|SIGILL|SIGBUS|uncaught signal|crash", text, re.I))
     if not tuples and not crash:
         return {"status": "unparsed", "raw": text[-160:]}
     return {"status": "ok", "tuples": int(tuples[-1]) if tuples else None, "crash": crash}
@@ -96,9 +99,8 @@ def _obs_fuzz(text: str) -> dict:
 
 @observer("emu_run")
 def _obs_emu(text: str) -> dict:
-    import re as _re
 
-    rc = _re.findall(r"(?:rc|exit)[=: ]\s*(\d+)", text)
+    rc = re.findall(r"(?:rc|exit)[=: ]\s*(\d+)", text)
     return {"status": "ok", "exit_code": int(rc[-1]) if rc else None,
             "raw_tail": text[-160:]}
 
@@ -112,21 +114,19 @@ def _obs_ghidra(text: str) -> dict:
 @observer("ida_query")
 def _obs_ida(text: str) -> dict:
     """IDA 输出结构化:优先 JSON(ida_call 的 --json),否则尝试抽取关键字段,再不行标 unparsed。"""
-    import json as _json
-    import re as _re
 
     for chunk in (text.strip(), text[text.find("{"): text.rfind("}") + 1] if "{" in text else ""):
         if not chunk:
             continue
         try:
-            data = _json.loads(chunk)
+            data = json.loads(chunk)
             if isinstance(data, dict):
                 return {"status": "ok", "format": "json",
                         "fields": sorted(data.keys())[:20],
                         "preview": {k: str(v)[:120] for k, v in list(data.items())[:8]}}
-        except _json.JSONDecodeError:
+        except json.JSONDecodeError:
             continue
-    funcs = _re.findall(r"(?:sub|loc)_[0-9A-Fa-f]{6,}", text)
+    funcs = re.findall(r"(?:sub|loc)_[0-9A-Fa-f]{6,}", text)
     if funcs:
         return {"status": "ok", "format": "text", "function_count": len(set(funcs)),
                 "functions": sorted(set(funcs))[:10]}
@@ -182,8 +182,7 @@ def register_repo_tools(reg: Registry, root: str) -> None:
             """Ghidra 无头批处理(经既有脚本)。能力不可用时**如实报错**,不伪装成功。"""
             from .providers import default_capabilities
 
-            cap = default_capabilities(ctx.root)["debug.ghidra"] if "debug.ghidra" in default_capabilities(ctx.root) \
-                else None
+            cap = default_capabilities(ctx.root).get("debug.ghidra")
             if cap is not None:
                 best, probe = cap.best()
                 if probe is None or probe.status == "missing":
