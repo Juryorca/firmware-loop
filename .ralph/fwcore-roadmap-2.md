@@ -68,3 +68,9 @@
   ② `vulnerable` 结论必须挂**自己名下**的证据(否则列 unlinked)
 - 证据:`tests/test_gates_db.py` 8 passed in 1.24s(新增两条:旧版证据→阻塞；证据失联→阻塞)
 - 仍未完成(需授权/外部条件):Pi hook 接线、与 Pi 线对比
+
+### Iteration 9(竞争解释:过期日志)
+- 完成:第二个诱饵任务 `eval/tasks/decoy-log/` —— bundle 里有一条**过期日志**声称旧版 SIGSEGV,
+  当前实现有深度上限(64),跑 5000 层得到 `rejected: depth limit reached` ⇒ 正确结论 no_finding
+- 证据:`tests/test_eval_scoring.py` 5 passed in 1.30s(新增:信日志⇒假阳性 FAIL;跑过再 no_finding ⇒ PASS)
+- 仍未完成(需授权/外部条件):Pi hook 接线、与 Pi 线对比

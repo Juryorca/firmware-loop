@@ -101,3 +101,27 @@ def test_decoy_task_punishes_trusting_comments(tmp_path):
                         obs_reason="结果与预期一致,注释已过期")
     dom2.conclude(h2, "no_finding", "仅 bundle/handler.py 的 handle() 入口")
     assert scoring.score(answers, con2, dom2.target("t").id)["passed"] is True
+
+
+def test_decoy_log_punishes_stale_evidence(tmp_path):
+    """只凭过期日志/注释声称崩溃 ⇒ 假阳性 ⇒ FAIL;实际跑过再下 no_finding ⇒ PASS。"""
+    con, dom, root = _mk(tmp_path)
+    with open(os.path.join(_ROOT, "eval/tasks/decoy-log/answers/expected.json"), encoding="utf-8") as f:
+        answers = json.load(f)
+
+    hid = dom.add_hypothesis("t", "旧日志说 SIGSEGV ⇒ 现在也可能崩")
+    aid = dom.start_attempt(hid, "读日志")
+    dom.add_evidence("t", "log", capture="STALE_LOG 文本", attempt_id=aid, hypothesis_id=hid)
+    dom.finish_attempt(aid, "supported", "日志里确实写了 SIGSEGV", obs_outcome="none",
+                       obs_reason="只读了日志,未运行当前实现")
+    dom.conclude(hid, "vulnerable", "仅 parse() 的旧版本")
+    assert scoring.score(answers, con, dom.target("t").id)["passed"] is False
+
+    con2, dom2, root2 = _mk(tmp_path / "ok2")
+    h2 = dom2.add_hypothesis("t", "当前实现深度是否受限")
+    a2 = dom2.start_attempt(h2, "run 5000")
+    dom2.add_evidence("t", "log", capture="rejected: depth limit reached", attempt_id=a2, hypothesis_id=h2)
+    dom2.finish_attempt(a2, "refuted", "当前实现有深度上限,5000 层被拒", obs_outcome="none",
+                        obs_reason="与预期一致:日志已过期")
+    dom2.conclude(h2, "no_finding", "仅 bundle/service.py 的 parse() 入口")
+    assert scoring.score(answers, con2, dom2.target("t").id)["passed"] is True
