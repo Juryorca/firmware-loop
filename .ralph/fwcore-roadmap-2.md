@@ -17,3 +17,9 @@
 - 提交:`abfad63`
 - ROADMAP 已勾选(Gate 迁移第二步 ✅ / 结构化观测 🟡 仓库工具已结构化)
 - 下一项:**评测加难 —— 无漏洞对照任务**(测假阳性)+ 评分要能核对"结论↔证据"因果
+
+### Iteration 2/5
+- 完成:评测加难第一步 —— 对照组任务 `eval/tasks/safe-control/`(安全实现:先验签+全量 MAC+深度上限)
+  + 评分器 `eval/scoring.py`(对照组抓假阳性;`vulnerable` 结论必须挂**自己名下**证据 = 因果检查)
+- 证据:`tests/test_eval_scoring.py` 3 passed in 0.48s
+- 下一项:诱饵/竞争解释任务;随后 Pi hook 接线(Pi 事件 → fw-core pi-event)

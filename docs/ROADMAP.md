@@ -25,7 +25,7 @@
 | 恢复/幂等 | ⚠️ 部分 | 已:死 pid 立即回收、活进程绝不回收、跨主机保守、`call_key` 幂等;待:工具已副作用+未落检查点的显式用例 |
 | 权限 vs 沙箱 | ⚠️ 部分 | `Authz` 已实现(范围/时限/可撤销、external 需确认);待:文档明确"cwd 检查 ≠ 沙箱",并给出隔离建议 |
 | Provider 可信度分级 | ✅ | `Probe.evidence`(discovered/configured/reachable/verified);`tests/test_providers.py` |
-| 研究评测 | ⚠️ 部分 | 2 个答案隔离任务 PASS;待:无漏洞对照任务、更强结论↔证据关联评分、与 Pi 线对比 |
+| 研究评测 | 🟡 对照组 + 因果评分已加 | `eval/scoring.py`:对照组(安全实现)抓**假阳性**、`vulnerable` 结论必须有**挂在自己名下**的证据;新增 `eval/tasks/safe-control/`(先验签+全量 MAC+深度上限的安全实现);`tests/test_eval_scoring.py` 3 条 0.48s ✓;待:诱饵/竞争解释任务、与 Pi 线对比 |
 
 ## 第三阶段:主线(按依赖)
 

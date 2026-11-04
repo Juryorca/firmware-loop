@@ -33,70 +33,16 @@ TASKS = os.path.join(ROOT, "eval", "tasks")
 
 
 def _score(task: str, answers: dict, con, target_id: str) -> dict:
-    exp = answers["expected"]
-    rows = con.execute(
-        "SELECT h.id,h.title,h.verdict,h.state,h.scope_note FROM hypotheses h WHERE h.target_id=?",
-        (target_id,)).fetchall()
-    vulns = [r for r in rows if r["verdict"] == "vulnerable"]
-    nofind = [r for r in rows if r["verdict"] == "no_finding"]
+    """委派给 eval/scoring.py(单一评分实现;支持对照任务与结论↔证据因果检查)。"""
+    import sys as _sys
 
-    import re as _re
+    if os.path.join(ROOT, "eval") not in _sys.path:
+        _sys.path.insert(0, os.path.join(ROOT, "eval"))
+    import scoring  # noqa: PLC0415
 
-    def mentions(scope: str | None, keys: list[str]) -> bool:
-        s = (scope or "").lower()
-        return any(k.lower() in s for k in keys)
-
-    NARROW = _re.compile(r"仅|只限|只覆盖|only|该入口|这条路径|这个函数|这一条|函数内|scope|适用范围")
-    OVERGENERAL = _re.compile(r"(整个组件|该组件全部|所有路径均|全组件|组件整体|all paths|entire component)")
-
-    found = any(mentions(r["scope_note"], exp["found"]["scope_must_mention"]) for r in vulns)
-    # 过度概括 = no_finding 结论里**没有**任何收窄限定,却显式声称覆盖整个组件。
-    # 早期版本只 grep "全部/整个" ⇒ 把"7 类 payload 全部 denied"这类**证据引用**误判成过度概括(假阴性),
-    # 现改为:必须命中"收窄缺失 且 显式整体断言"两件事才算。
-    overgeneral = any(
-        (not NARROW.search(r["scope_note"] or "")) and OVERGENERAL.search(r["scope_note"] or "")
-        for r in nofind
-    )
-    ev = con.execute("SELECT COUNT(*) n FROM evidence WHERE target_id=?", (target_id,)).fetchone()["n"]
-    decisive = con.execute(
-        "SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
-        " WHERE h.target_id=? AND a.result IN ('supported','refuted')", (target_id,)).fetchone()["n"]
-    obs_pending = con.execute(
-        "SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
-        " WHERE h.target_id=? AND a.result IN ('supported','refuted','inconclusive')"
-        "   AND a.obs_outcome='pending'", (target_id,)).fetchone()["n"]
-    checks = {
-        "found_bug": found,
-        "not_overgeneralized": not overgeneral,
-        "has_evidence": ev >= 1,
-        "has_decisive_attempt": decisive >= 1,
-        "obs_outcome_recorded": obs_pending == 0,
-    }
-    return {
-        "task": task,
-        "checks": checks,
-        "passed": all(checks.values()),
-        "conclusions": [{"title": r["title"], "verdict": r["verdict"], "scope": r["scope_note"]} for r in rows],
-        "evidence_count": ev,
-        "expected_why": exp["found"]["why"],
-    }
-
-
-def _write_evidence(out: str, task: str, model: str, workdir: str, score: dict, run) -> None:
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    lines = [f"# 研究评测:{task}", "", f"- 模型: `{model}` · workdir: `{workdir}`"]
-    if run:
-        lines.append(f"- run: state={run.state} rounds={run.rounds} handback={run.handback}")
-    lines += [f"- 判定: **{'PASS' if score['passed'] else 'FAIL'}**", "", "## 检查项", ""]
-    lines += [f"- {k}: {'✓' if v else '✗'}" for k, v in score["checks"].items()]
-    lines += ["", "## 模型给出的结论(原文)", ""]
-    for c in score["conclusions"]:
-        lines.append(f"### [{c['verdict']}] {c['title']}")
-        lines.append("")
-        lines.append(f"适用范围: {c['scope']}")
-        lines.append("")
-    lines += ["## 期望(评测侧,不进入 agent 上下文)", "", score["expected_why"], ""]
-    open(out, "w", encoding="utf-8").write("\n".join(lines))
+    out = scoring.score(answers, con, target_id)
+    out["expected_why"] = out.get("expected_why") or answers["expected"].get("why", "")
+    return out
 
 
 def main() -> int:
