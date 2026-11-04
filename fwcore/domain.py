@@ -122,15 +122,23 @@ class Domain:
             "target": t.name,
             "version": t.version,
             "hypotheses": n_hyp,
-            "open": self._count("hypotheses", t.id, "state IN ('open','investigating')"),
-            "attempts_running": self._count("attempts a JOIN hypotheses h ON h.id=a.hypothesis_id",
-                                            t.id, "a.result='running'"),
-            "surfaces_unjudged": self._count("surfaces", t.id, "disposition='unjudged'"),
+            "open": self._count("hypotheses_open", t.id),
+            "attempts_running": self._count("attempts_running", t.id),
+            "surfaces_unjudged": self._count("surfaces_unjudged", t.id),
         }
 
-    def _count(self, table: str, target_id: str, where: str) -> int:
-        col = "target_id"
-        sql = f"SELECT COUNT(*) n FROM {table} WHERE {col}=? AND {where}"
+    _COUNT_SQL = {
+        "hypotheses_open": "SELECT COUNT(*) n FROM hypotheses WHERE target_id=? AND state IN ('open','investigating')",
+        "surfaces_unjudged": "SELECT COUNT(*) n FROM surfaces WHERE target_id=? AND disposition='unjudged'",
+        "attempts_running": ("SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
+                             " WHERE h.target_id=? AND a.result='running'"),
+    }
+
+    def _count(self, key: str, target_id: str) -> int:
+        """计数只走**白名单 SQL**(不做字符串插值,避免注入与被误用)。"""
+        sql = self._COUNT_SQL.get(key)
+        if sql is None:
+            raise DomainError(f"未登记的计数项: {key}")
         return self.con.execute(sql, (target_id,)).fetchone()["n"]
 
     # ---------------- 攻击面 ----------------
@@ -168,7 +176,8 @@ class Domain:
             if ev["target_id"] != t.id:
                 raise InvariantViolation("证据不属于该目标")
         elif disposition in ("no_finding", "out_of_scope"):
-            if not (note or "").strip() or len(note.strip()) < 8:
+            reason_txt = (note or "").strip()
+            if len(reason_txt) < 8:
                 raise InvariantViolation(f"面判 {disposition} 必须写理由(≥8 字):管到哪些输入/为什么不做")
         with Tx(self.con) as c:
             cur = c.execute(
@@ -350,9 +359,12 @@ class Domain:
             if not os.path.isfile(full):
                 raise NotFound(f"证据文件不存在: {path}")
             h = hashlib.sha256()
-            with open(full, "rb") as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    h.update(chunk)
+            try:
+                with open(full, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+            except OSError as e:
+                raise DomainError(f"读证据文件失败: {e}") from e
             sha = h.hexdigest()
         if capture is None and sha is None:
             raise InvariantViolation("证据需要 path 或 capture 至少其一")
@@ -415,6 +427,20 @@ class Domain:
                       (reason, _now(), hid))
             _event(c, "hypothesis.dropped", hid, {"reason": reason[:200]})
 
+    def confirm_close(self, target: str, note: str = "") -> None:
+        """用户显式确认收尾。`closed` 只在这一步之后成立(见 runtime._handback)。"""
+        t = self.target(target)
+        blockers = self.closure_blockers(target)
+        if blockers:
+            raise InvariantViolation("还有收尾阻塞,不能确认收尾: " + "; ".join(blockers[:4]))
+        with Tx(self.con) as c:
+            c.execute("UPDATE targets SET status='closed_confirmed' WHERE id=?", (t.id,))
+            _event(c, "target.close_confirmed", t.id, {"note": note[:200]})
+
+    def is_close_confirmed(self, target: str) -> bool:
+        row = self.con.execute("SELECT status FROM targets WHERE name=?", (target,)).fetchone()
+        return bool(row and row["status"] == "closed_confirmed")
+
     def request_user_input(self, run_id: str, reason: str) -> None:
         """模型主动交回控制权(合法停止之一:需要工作区外的具体东西)。"""
         if len((reason or "").strip()) < 8:
@@ -471,28 +497,45 @@ class Domain:
         advisories = []
         if not os.path.isdir(rdir):
             return {"advisories": [], "missing": ["report/ 不存在"], "ok": False}
-        for name in sorted(os.listdir(rdir)):
+        try:
+            entries = sorted(os.listdir(rdir))
+        except OSError as e:
+            return {"advisories": [], "missing": [f"report/ 不可读: {e}"], "ok": False}
+        for name in entries:
             if not name.endswith(".md") or name in ("INDEX.md", "attack-surface.md", "CLOSURE.md"):
                 continue
             advisories.append(name)
-            body = open(os.path.join(rdir, name), encoding="utf-8").read()
+            try:
+                with open(os.path.join(rdir, name), encoding="utf-8", errors="replace") as _f:
+                    body = _f.read()
+            except OSError as e:
+                missing.append(f"{name}: 读取失败({e})")
+                continue
             gone = [s for s in need if f"## {s}" not in body]
             if gone:
                 missing.append(f"{name}: 缺 {', '.join(gone)}")
         # 附件包:符号链接 = 不自含;缺 README = 别人跑不起来
         att = os.path.join(rdir, "attachments")
         if os.path.isdir(att):
-            for d in sorted(os.listdir(att)):
+            try:
+                pkgs = sorted(os.listdir(att))
+            except OSError as e:
+                pkgs = []
+                missing.append(f"attachments/ 不可读: {e}")
+            for d in pkgs:
                 pkg = os.path.join(att, d)
                 if not os.path.isdir(pkg):
                     continue
-                for r, dirs, files in os.walk(pkg):
-                    for n in dirs + files:
-                        p = os.path.join(r, n)
-                        if os.path.islink(p):
-                            missing.append(f"{d}: 含符号链接({os.path.relpath(p, pkg)})")
-                if not any(x.lower().startswith("readme") for x in os.listdir(pkg)):
-                    missing.append(f"{d}: 缺 README")
+                try:
+                    for r, dirs, files in os.walk(pkg):
+                        for n in dirs + files:
+                            p2 = os.path.join(r, n)
+                            if os.path.islink(p2):
+                                missing.append(f"{d}: 含符号链接({os.path.relpath(p2, pkg)})")
+                    if not any(x.lower().startswith("readme") for x in os.listdir(pkg)):
+                        missing.append(f"{d}: 缺 README")
+                except OSError as e:
+                    missing.append(f"{d}: 扫描失败({e})")
         return {"advisories": advisories, "missing": missing, "ok": not missing}
 
     def closure_blockers(self, target: str) -> list[str]:

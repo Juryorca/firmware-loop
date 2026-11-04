@@ -191,6 +191,10 @@ CREATE TABLE IF NOT EXISTS mirror_checks (
   created_at TEXT NOT NULL
 );
 
+"""
+
+
+INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_hyp_target_state ON hypotheses(target_id, state);
 CREATE INDEX IF NOT EXISTS idx_attempt_hyp ON attempts(hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_target ON evidence(target_id);
@@ -215,7 +219,11 @@ def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")
-    con.execute("PRAGMA busy_timeout=%d" % int(timeout * 1000))
+    try:
+        ms = int(float(timeout) * 1000)
+    except (TypeError, ValueError):
+        ms = 5000
+    con.execute("PRAGMA busy_timeout=%d" % max(0, ms))
     _migrate(con)
     return con
 
@@ -226,38 +234,59 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
 
+def _step2(con: sqlite3.Connection) -> None:
+    _add_col(con, "surfaces", "judged_by", "TEXT")
+
+
+def _step3(con: sqlite3.Connection) -> None:
+    _add_col(con, "attempts", "obs_outcome", "TEXT NOT NULL DEFAULT 'pending'")
+    _add_col(con, "attempts", "obs_reason", "TEXT")
+    _add_col(con, "tool_calls", "call_key", "TEXT")
+    _add_col(con, "tool_calls", "provider", "TEXT")
+    _add_col(con, "tool_calls", "capability", "TEXT")
+    _add_col(con, "tool_calls", "arch", "TEXT")
+    _add_col(con, "tool_calls", "env_json", "TEXT")
+    _add_col(con, "runs", "rounds", "INTEGER NOT NULL DEFAULT 0")
+    _add_col(con, "runs", "pid", "INTEGER")
+    _add_col(con, "runs", "host", "TEXT")
+    _add_col(con, "runs", "heartbeat_at", "TEXT")
+    _add_col(con, "runs", "handback_reason", "TEXT")
+    _add_col(con, "hypotheses", "surface_key", "TEXT")
+
+
+STEPS = {2: _step2, 3: _step3}
+
+
 def _migrate(con: sqlite3.Connection) -> None:
+    """版本化迁移。
+
+    顺序很关键(2026-11-04 修复):
+    - 先建表(不含索引);
+    - 逐版本执行 ALTER(每步一个事务;失败回滚**且不改 schema_version**);
+    - **最后**才建索引 —— 否则旧库还没有 `call_key` 就去建唯一索引,升级直接失败。
+    """
     con.executescript(SCHEMA)
-    cur = con.execute("SELECT value FROM meta WHERE key='schema_version'")
-    row = cur.fetchone()
+    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    try:
+        have = int(row["value"]) if row else 0
+    except (TypeError, ValueError):
+        raise RuntimeError(f"meta.schema_version 不是整数: {row['value']!r}") from None
+    if have > SCHEMA_VERSION:
+        raise RuntimeError(f"数据库 schema 版本 {have} 高于代码支持 {SCHEMA_VERSION}")
     if row is None:
-        con.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
-    else:
-        have = int(row["value"])
-        if have > SCHEMA_VERSION:
-            raise RuntimeError(f"数据库 schema 版本 {have} 高于代码支持 {SCHEMA_VERSION}")
-        if have < 3:
-            _add_col(con, "attempts", "obs_outcome", "TEXT NOT NULL DEFAULT 'pending'")
-            _add_col(con, "attempts", "obs_reason", "TEXT")
-            _add_col(con, "tool_calls", "call_key", "TEXT")
-            _add_col(con, "tool_calls", "provider", "TEXT")
-            _add_col(con, "tool_calls", "capability", "TEXT")
-            _add_col(con, "tool_calls", "arch", "TEXT")
-            _add_col(con, "tool_calls", "env_json", "TEXT")
-            _add_col(con, "runs", "rounds", "INTEGER NOT NULL DEFAULT 0")
-            _add_col(con, "runs", "pid", "INTEGER")
-            _add_col(con, "runs", "host", "TEXT")
-            _add_col(con, "runs", "heartbeat_at", "TEXT")
-            _add_col(con, "runs", "handback_reason", "TEXT")
-            _add_col(con, "hypotheses", "surface_key", "TEXT")
-            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_key ON tool_calls(run_id, call_key)"
-                        " WHERE call_key IS NOT NULL")
-            con.execute("UPDATE meta SET value='3' WHERE key='schema_version'")
-        if have < 2:
-            cols = {r[1] for r in con.execute("PRAGMA table_info(surfaces)")}
-            if "judged_by" not in cols:
-                con.execute("ALTER TABLE surfaces ADD COLUMN judged_by TEXT")
-            con.execute("UPDATE meta SET value='2' WHERE key='schema_version'")
+        con.execute("INSERT INTO meta(key,value) VALUES('schema_version','0')")
+    for v in range(have + 1, SCHEMA_VERSION + 1):
+        step = STEPS.get(v)
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            if step:
+                step(con)
+            con.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(v),))
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+    con.executescript(INDEXES)
 
 
 class Tx:

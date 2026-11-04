@@ -18,7 +18,10 @@ import sqlite3
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:  # 只用于类型,避免循环导入
+    from .research import Research
 
 from . import db as _db
 from .domain import Domain, new_id
@@ -44,7 +47,7 @@ class ToolContext:
     artifacts_dir: str = ""
     confirm: Callable[[str], bool] | None = None
     policy: Policy = None  # type: ignore[assignment]
-    research: object = None  # fwcore.research.Research(可选,工具用它记三镜)
+    research: "Research | None" = None    # 工具用它记三镜(见 fwcore/research.py)
 
 
 @dataclass
@@ -104,6 +107,7 @@ class Registry:
                 )
         except Exception as e:      # 唯一索引冲突 = 另一个执行者已在跑同一次调用
             return {"status": "cancelled", "error": f"重复调用被拒(幂等保护): {e}"}
+        out: dict[str, Any] = {}
         try:
             out = spec.handler(ctx, args) or {}
             status = out.get("status", "ok")
@@ -122,6 +126,20 @@ class Registry:
         out["tool_call_id"] = cid
         out["duration_ms"] = dur
         return out
+
+
+def _kill_group(proc: "subprocess.Popen") -> None:
+    """杀整个进程组(含子进程),并等待回收。"""
+    import signal
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _record(ctx: ToolContext, tool: str, args: dict, status: str, note: str = "") -> None:
@@ -162,17 +180,25 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
     started = _now()
     with open(op, "wb") as fo, open(ep, "wb") as fe:
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 shlex.split(cmd) if isinstance(cmd, str) else cmd,
-                cwd=workdir, stdout=fo, stderr=fe, timeout=timeout,
+                cwd=workdir, stdout=fo, stderr=fe,
+                start_new_session=True,     # 独立进程组 ⇒ 超时可整组杀掉
             )
-            code, status = proc.returncode, "ok" if proc.returncode == 0 else "error"
-        except subprocess.TimeoutExpired:
-            code, status = None, "timeout"
         except FileNotFoundError as e:
-            code, status = None, "error"
             with open(ep, "ab") as fe2:
                 fe2.write(f"命令不存在: {e}".encode())
+            return {"status": "error", "exit_code": None, "stdout_path": op, "stderr_path": ep,
+                    "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep)}
+        try:
+            proc.wait(timeout=timeout)
+            code, status = proc.returncode, "ok" if proc.returncode == 0 else "error"
+        except subprocess.TimeoutExpired:
+            _kill_group(proc)               # 杀掉整组,避免遗留子进程继续写盘
+            code, status = None, "timeout"
+        except BaseException:               # 中断(KeyboardInterrupt 等)也要收拾干净
+            _kill_group(proc)
+            raise
     return {
         "status": status, "exit_code": code, "started_at": started,
         "stdout_path": op, "stderr_path": ep,
@@ -244,6 +270,8 @@ def state_finish_attempt(ctx: ToolContext, args: dict) -> dict:
 
 
 def state_record_mirror(ctx: ToolContext, args: dict) -> dict:
+    if ctx.research is None:
+        return {"status": "error", "error": "本次运行没有研究载体(research=None),不能记三镜"}
     mid = ctx.research.record_mirror(args["target"], args["mechanism"], args["author"],
                                      args["state"], args.get("new_faces", "无(判据: 同机制未找到新面)"))
     return {"status": "ok", "mirror_id": mid}

@@ -23,15 +23,19 @@ sys.path.insert(0, ROOT)
 
 from fwcore import db as _db                      # noqa: E402
 from fwcore.domain import Domain                  # noqa: E402
-from fwcore.model_client import OpenAICompatModel, to_api_messages  # noqa: E402
-from fwcore.policy import Policy                  # noqa: E402
+from fwcore.model_client import to_api_messages  # noqa: E402
+from fwcore.models import build_adapter  # noqa: E402
+from fwcore.policy import Authz, Policy            # noqa: E402
 from fwcore.runtime import Runner                 # noqa: E402
 
 
 def load_credentials() -> tuple[str, str, str]:
     path = os.path.expanduser("~/.pi/agent/models.json")
-    with open(path, encoding="utf-8") as f:
-        d = json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"读不到模型配置 {path}: {e}")
     prov = d.get("providers", {}).get("deepseek", {})
     key = prov.get("apiKey") or os.environ.get("FW_API_KEY", "")
     base = prov.get("baseUrl") or "https://api.deepseek.com"
@@ -54,27 +58,36 @@ GOAL = (
 def main() -> int:
     os.environ.setdefault("FW_REASONING_CONTENT", "1")   # DeepSeek thinking 模式必需
     ap = argparse.ArgumentParser()
-    ap.add_argument("--steps", type=int, default=6, help="第一阶段步数上限(之后暂停)")
+    ap.add_argument("--steps", type=int, default=0, help="0 = 不限(默认;由模型自己收)")
     ap.add_argument("--out", default="docs/evidence/real-model-run.md")
     args = ap.parse_args()
 
     key, base, model = load_credentials()
-    root = tempfile.mkdtemp(prefix="fw-e2e-")
-    os.makedirs(os.path.join(root, "state"), exist_ok=True)
-    with open(os.path.join(root, "a.txt"), "w", encoding="utf-8") as f:
-        f.write("hello-a\n")
-    with open(os.path.join(root, "b.txt"), "w", encoding="utf-8") as f:
-        f.write("hello-b\n")
+    try:
+        scratch = os.path.join(ROOT, "state", "_scratch")
+        os.makedirs(scratch, exist_ok=True)
+        root = tempfile.mkdtemp(prefix="fw-e2e-", dir=scratch)
+        os.makedirs(os.path.join(root, "state"), exist_ok=True)
+    except OSError as e:
+        raise SystemExit(f"准备临时工作区失败: {e}")
+    try:
+        for name, body in (("a.txt", "hello-a\n"), ("b.txt", "hello-b\n")):
+            with open(os.path.join(root, name), "w", encoding="utf-8") as f:
+                f.write(body)
+    except OSError as e:
+        raise SystemExit(f"准备测试文件失败: {e}")
 
     con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
     dom = Domain(con, root)
     dom.create_target("e2e", version="1.0")
     dom.add_surface("e2e", "a.txt/b.txt", reachability="pre-auth", input_control="文件内容")
 
-    runner = Runner(
-        con, root, OpenAICompatModel(model=model, base_url=base, api_key=key),
-        max_steps=args.steps, policy=Policy(allow_high_risk=False),
-    )
+    # 与 CLI 走同一条模型适配路径(models.build_adapter),不再有第二套协议实现
+    os.environ.setdefault("FW_REASONING_CONTENT", "1")
+    adapter = build_adapter("openai", api_key=key, base_url=base, model=model)
+    policy = Policy(authorization=Authz(roots=[root], allow_shell=True, allow_high_risk=True,
+                                        reason="E2E 临时工作区"))
+    runner = Runner(con, root, adapter, max_steps=(args.steps or None), policy=policy)
     rid = runner.start("e2e", goal=GOAL)
     phase1 = runner.run(rid, "e2e", goal=GOAL)
     print(f"[phase1] state={phase1['state']} steps={phase1['steps']} ready={phase1['ready']}")
@@ -95,7 +108,10 @@ def main() -> int:
         api_ok = False
         print("history 不合法:", e)
 
-    os.makedirs(os.path.dirname(os.path.join(ROOT, args.out)), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(os.path.join(ROOT, args.out)), exist_ok=True)
+    except OSError as e:
+        raise SystemExit(f"创建输出目录失败: {e}")
     lines = [
         "# 真实模型端到端记录(自动生成)",
         "",
@@ -127,8 +143,11 @@ def main() -> int:
         "",
     ]
     out = os.path.join(ROOT, args.out)
-    with open(out, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    try:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except OSError as e:
+        print(f"[warn] 写记录失败: {e}", file=sys.stderr)
 
     ok = bool(calls) and len(hyps) >= 1 and api_ok and phase2["steps"] > phase1["steps"]
     print(f"[assert] tool_calls={len(calls)} hypotheses={len(hyps)} attempts={len(atts)} "

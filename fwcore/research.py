@@ -38,10 +38,18 @@ def kb_titles(root: str) -> list[str]:
     kdir = os.path.join(root, "knowledge")
     if not os.path.isdir(kdir):
         return out
-    for name in sorted(os.listdir(kdir)):
+    try:
+        names = sorted(os.listdir(kdir))
+    except OSError as e:
+        return [f"(knowledge/ 不可读: {e})"]
+    for name in names:
         if not name.endswith(".md") or name == "INDEX.md":
             continue
-        for m in re.finditer(r"(?m)^## (.+)$", _read(os.path.join(kdir, name), 10 ** 6)):
+        try:
+            body = _read(os.path.join(kdir, name), 10 ** 6)
+        except OSError:
+            continue
+        for m in re.finditer(r"(?m)^## (.+)$", body):
             out.append(f"{name}: {m.group(1).strip()[:110]}")
     return out
 
@@ -122,14 +130,13 @@ class Research:
             "SELECT COUNT(*) n FROM observations WHERE target_id=?", (t.id,)).fetchone()["n"]
 
     def dual_output_blockers(self, target: str) -> list[str]:
-        t = self.domain.target(target)
-        n_att = self.domain.con.execute(
-            "SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id WHERE h.target_id=?",
-            (t.id,)).fetchone()["n"]
-        b = []
-        if n_att and self.observations(target) == 0:
-            b.append(f"做过 {n_att} 次尝试但一条观察都没登记(双输出缺失)")
-        return b
+        """已废弃的目标级规则(保留函数以兼容调用方,永远返回空)。
+
+        为什么删:领域层已按 **Attempt** 要求 `obs_outcome=new|none(+理由)`。
+        再叠加"目标级没有任何 observation 就算缺失"会造成冲突:当所有 Attempt 都
+        合法声明了 `none` 时,旧规则仍会阻止收尾,并逼模型伪造 observation。
+        """
+        return []
 
     # ---------- 系统提示 ----------
     def system_prompt(self, target: str, goal: str | None = None) -> str:

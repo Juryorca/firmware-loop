@@ -199,7 +199,10 @@ def test_mirror_due_and_blocker(tmp_path):
     dom.add_hypothesis("t1", "h")
     r = Runner(con, str(tmp_path), ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
                policy=Policy(allow_high_risk=True))
+    hid = dom.add_hypothesis("t1", "轮推进")
     for _ in range(3):
+        aid = dom.start_attempt(hid, "m")
+        dom.finish_attempt(aid, "inconclusive", "已排除外层", obs_outcome="none", obs_reason="预期内")
         rid = r.start("t1")
         r.run(rid, "t1")
     assert Research(str(tmp_path), dom).mirror_due("t1") is True
@@ -207,15 +210,17 @@ def test_mirror_due_and_blocker(tmp_path):
     assert mid and Research(str(tmp_path), dom).rounds_since_mirror("t1") == 0
 
 
-def test_dual_output_blocker_when_attempt_without_observation(tmp_path):
+def test_dual_output_is_enforced_per_attempt_only(tmp_path):
+    """旧的"目标级没有任何 observation"规则已删:全部 Attempt 合法声明 none 也应放行。"""
     from fwcore.research import Research
     con, dom = _mk(str(tmp_path))
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "diff")
-    dom.finish_attempt(aid, "inconclusive", "只跑了外层")
-    assert Research(str(tmp_path), dom).dual_output_blockers("t1")
-    dom.add_observation("t1", "外层路由先拒绝,内部未触达")
-    assert not Research(str(tmp_path), dom).dual_output_blockers("t1")
+    dom.finish_attempt(aid, "inconclusive", "只跑了外层")            # 未交代 ⇒ 领域层阻塞
+    assert any("双输出" in b for b in dom.closure_blockers("t1"))
+    assert Research(str(tmp_path), dom).dual_output_blockers("t1") == []   # 旧规则不再干扰
+    dom.note_observation_outcome(aid, "none", "外层路由先拒绝,结果在预期内")
+    assert not any("双输出" in b for b in dom.closure_blockers("t1"))
 
 
 def test_repo_tools_are_discoverable(tmp_path):

@@ -37,6 +37,8 @@ class Probe:
     arch: str | None = None
     path: str | None = None
     env: dict = field(default_factory=dict)
+    # 证据强度:discovered(文件在) < configured(配置在) < reachable(能握手/能起) < verified(真跑通一次)
+    evidence: str = "discovered"
 
     def ok(self) -> bool:
         return self.status == READY
@@ -97,23 +99,56 @@ def _file_arch(path: str) -> str | None:
 
 # ---------------- 具体 provider(本机实测环境) ----------------
 
-def afl_tracer_provider(dirpath: str, arch: str, kind: str = "built") -> Provider:
+def afl_tracer_provider(dirpath: str, arch: str, kind: str = "built",
+                        sample_roots: list[str] | None = None) -> Provider:
+    """AFL++ qemu tracer 的探针。
+
+    ⚠️ 反例(2026-11-04 实测):tracer 是**宿主二进制**,`file` 说它是 x86-64 完全正常;
+    决定它能否跑 ARM64 的是 **CPU_TARGET(guest 架构)**,不是 ELF 架构。
+    因此探针必须**真跑一个 guest 样本**并看是否报 "Invalid ELF image"。
+    """
     tracer = os.path.join(dirpath, "afl-qemu-trace")
     has_qasan = os.path.isfile(os.path.join(dirpath, "libqasan.so"))
+
+    def _find_sample() -> tuple[str, str] | None:
+        """在给定根里找一个 arm/aarch64 ELF(用 file 判的是**样本**架构,这是对的)。"""
+        for root in sample_roots or []:
+            for base, _dirs, files in os.walk(root):
+                for f in files[:200]:
+                    p = os.path.join(base, f)
+                    if not os.path.isfile(p) or os.path.islink(p):
+                        continue
+                    a = _file_arch(p)
+                    if a == "aarch64":
+                        return p, os.path.dirname(root) if os.path.basename(root) != "rootfs_merged" else root
+        return None
 
     def probe() -> Probe:
         if not os.path.isfile(tracer):
             return Probe(MISSING, f"缺 {tracer}")
-        real_arch = _file_arch(tracer)
-        if real_arch and real_arch != arch:
-            return Probe(ARCH_MISMATCH, f"tracer 实际架构 {real_arch},目标是 {arch}", arch=real_arch, path=tracer)
-        rc, out = _run([tracer, "-h"], 5)
-        detail = "tracer 可用" + ("" if has_qasan else ";无 libqasan ⇒ 该架构无 ASan")
-        return Probe(PARTIAL if not has_qasan else READY, detail, arch=real_arch or arch, path=tracer,
-                     env={"AFL_PATH": dirpath})
+        sample = _find_sample()
+        if not sample:
+            return Probe(PARTIAL, "tracer 在,但没有 aarch64 样本可验(未证明 guest 支持)", path=tracer,
+                         env={"AFL_PATH": dirpath})
+        binpath, ldprefix = sample
+        env = dict(os.environ, QEMU_LD_PREFIX=ldprefix)
+        try:
+            r = subprocess.run([tracer, binpath, "--help"], capture_output=True, text=True, timeout=20, env=env)
+            out = (r.stdout + r.stderr).lower()
+        except Exception as e:
+            return Probe(PARTIAL, f"跑样本失败: {type(e).__name__}", path=tracer, env={"AFL_PATH": dirpath})
+        if "invalid elf image" in out:
+            return Probe(ARCH_MISMATCH, f"{os.path.basename(dirpath)} 的 tracer 不支持 {arch} guest",
+                         arch=arch, path=tracer, env={"AFL_PATH": dirpath})
+        detail = f"实测可跑 {arch} guest 样本({os.path.basename(binpath)})"
+        if not has_qasan:
+            detail += ";该目录无 libqasan ⇒ 无 ASan"
+        return Probe(PARTIAL if not has_qasan else READY, detail, arch=arch, path=tracer,
+                     env={"AFL_PATH": dirpath, "QEMU_LD_PREFIX": ldprefix})
 
     return Provider(id=f"afl-tracer-{arch}-{os.path.basename(dirpath)}", kind=kind,
-                    resolve=lambda: {"env": {"AFL_PATH": dirpath}, "argv_prefix": [tracer], "arch": arch},
+                    resolve=lambda: {"env": {"AFL_PATH": dirpath, "QEMU_LD_PREFIX": (sample[1] if (sample := _find_sample()) else "")},
+                                     "argv_prefix": [tracer], "arch": arch},
                     probe=probe)
 
 
@@ -127,7 +162,7 @@ def qemu_provider(binary: str, *, netlink: bool) -> Provider:
         return Probe(READY if netlink else PARTIAL,
                      "支持 NETLINK_NETFILTER(SOCK_DIAG/XFRM/GENERIC 类 daemon)" if netlink
                      else "上游白名单:NETLINK_NETFILTER 被拒(NFQUEUE 类 daemon 跑不了)",
-                     version=ver, path=path)
+                     version=ver, path=path, evidence="reachable")
     return Provider(id=f"{os.path.basename(binary)}", kind="built" if netlink else "system",
                     resolve=lambda: {"argv_prefix": [shutil.which(binary) or binary], "netlink": netlink},
                     probe=probe)
@@ -143,7 +178,7 @@ def venv_python_provider(venv_python: str, module: str, *, kind: str = "venv") -
             return Probe(DEPS_MISSING, f"{module} 未安装: {out.splitlines()[-1] if out else ''}", path=venv_python)
         lines = [x for x in out.strip().splitlines() if x.strip() and not x.startswith(("import ", "Warning", "  "))]
         last = (lines or [""])[-1]
-        return Probe(READY, f"{module} {last}", version=last[:60], path=venv_python)
+        return Probe(READY, f"{module} {last}", version=last[:60], path=venv_python, evidence="verified")
     return Provider(id=f"{os.path.basename(os.path.dirname(os.path.dirname(venv_python)))}-{module}",
                     kind=kind, resolve=lambda: {"interpreter": venv_python, "module": module}, probe=probe)
 
@@ -202,8 +237,9 @@ def windows_ida_provider(root: str) -> Provider:
         ports = glob.glob(os.path.join(stage, ".port-*"))
         started = bool(ports)
         return Probe(READY if started else NOT_STARTED,
-                     "IDA supervisor 已启动" if started else "IDA 未启动(用 tools/ida_start.sh,不要另造)",
-                     path=idat)
+                     "IDA supervisor 已启动(端口文件存在)" if started
+                     else "IDA 未启动(用 tools/ida_start.sh,不要另造)",
+                     path=idat, evidence="reachable" if started else "configured")
 
     def resolve() -> dict:
         return {"argv_prefix": ["bash", os.path.join(root, "tools/ida_call.sh")], "lifecycle":
@@ -231,9 +267,18 @@ def mcp_provider(name: str, config_paths: list[str]) -> Provider:
             return Probe(MISSING, f"配置里没有 {name}")
         if srv.get("enabled") is False:
             return Probe(NOT_STARTED, "配置存在但 enabled=false")
-        return Probe(READY, "已配置(" + ("url" if srv.get("url") else "stdio") + ")",
-                     path=(srv.get("url") or srv.get("command")))
+        return Probe(READY, "已配置(" + ("url" if srv.get("url") else "stdio") +
+                     ");独立运行时尚未实现 MCP 客户端 ⇒ 只到 configured",
+                     path=(srv.get("url") or srv.get("command")), evidence="configured")
     return Provider(id=f"mcp-{name}", kind="mcp", resolve=lambda: {"config": _load()}, probe=probe)
+
+
+def _guest_roots(root: str) -> list[str]:
+    """找可用于验证 guest 支持的 rootfs(只读扫描 state/*/rootfs*)。"""
+    import glob as _g
+
+    return sorted({os.path.dirname(p) for p in _g.glob(os.path.join(root, "state", "*", "rootfs*", "bin"))
+                   } | {p for p in _g.glob(os.path.join(root, "state", "*", "rootfs*"))})
 
 
 def default_capabilities(root: str, home: str | None = None) -> dict[str, Capability]:
@@ -242,8 +287,10 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
     unblob_py = os.path.join(home, "venvs", "unblob", "bin", "python")
     caps: dict[str, Capability] = {
         "fuzz.aarch64": Capability("fuzz.aarch64", "对 aarch64 guest 做覆盖率/变异 fuzz", [
-            afl_tracer_provider(os.path.join(home, ".local/bin/afl-aarch64"), "aarch64"),
-            afl_tracer_provider("/usr/local/bin", "x86_64", kind="built"),
+            afl_tracer_provider(os.path.join(home, ".local/bin/afl-aarch64"), "aarch64",
+                                sample_roots=_guest_roots(root)),
+            afl_tracer_provider("/usr/local/bin", "aarch64", kind="built",
+                                sample_roots=_guest_roots(root)),
         ], target_arch="aarch64"),
         "emu.aarch64": Capability("emu.aarch64", "用户态仿真 aarch64(含 netlink 白名单解除)", [
             qemu_provider("qemu-aarch64-patched", netlink=True),
@@ -276,7 +323,8 @@ def inventory(root: str) -> list[dict]:
         for p in cap.providers:
             pr = p.probe()
             entries.append({"provider": p.id, "kind": p.kind, "status": pr.status, "detail": pr.detail,
-                            "version": pr.version, "arch": pr.arch, "path": pr.path})
+                            "version": pr.version, "arch": pr.arch, "path": pr.path,
+                            "evidence": pr.evidence})
         best, best_probe = cap.best(want_arch=cap.target_arch)
         out.append({"capability": name, "description": cap.description,
                     "best": best.id if best else None,

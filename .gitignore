@@ -18,3 +18,7 @@ state/*.sqlite3-*
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# 测试/评测临时目录(工作区内,跑完即删)
+.tmp/
+state/_scratch/

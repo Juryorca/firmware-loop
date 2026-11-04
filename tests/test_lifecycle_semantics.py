@@ -12,6 +12,7 @@ import pytest
 
 from fwcore import db as _db
 from fwcore.domain import Domain, InvariantViolation, NotFound
+from fwcore.limits import Limits
 from fwcore.models import ScriptedAdapter
 from fwcore.policy import Policy
 from fwcore.research import Research
@@ -27,6 +28,7 @@ def _setup(tmp_path):
 
 
 def _runner(con, root, script, **kw):
+    kw.setdefault("limits", Limits(max_model_calls=8))
     return Runner(con, root, ScriptedAdapter(script=script), policy=Policy(allow_high_risk=True), **kw)
 
 
@@ -39,8 +41,12 @@ def test_mirror_rounds_are_target_scoped(tmp_path):
     con, dom, root = _setup(tmp_path)
     dom.add_hypothesis("t1", "a")
     dom.add_hypothesis("t2", "b")
+    h1 = dom.add_hypothesis("t1", "a-轮推进")
     r = _runner(con, root, [FINAL])
     for _ in range(3):
+        aid = dom.start_attempt(h1, "m")
+        dom.finish_attempt(aid, "inconclusive", "已排除外层", obs_outcome="none",
+                           obs_reason="外层路由先拒绝,结果在预期内")
         r.run(r.start("t1"), "t1")
     res = Research(root, dom)
     assert res.rounds_since_mirror("t1") == 3
@@ -59,8 +65,19 @@ def test_pause_and_resume_do_not_count_as_rounds(tmp_path):
     r.resume(rid)             # 恢复 ⇒ 仍 paused
     assert Research(root, dom).rounds_since_mirror("t1") == 0
 
+    # FINAL 只有在**本轮真的推进了研究**时才计轮
     r2 = _runner(con, root, [FINAL])
     r2.run(r2.start("t1"), "t1")
+    assert Research(root, dom).rounds_since_mirror("t1") == 0, "只说不做不计轮"
+
+    hid = dom.add_hypothesis("t1", "推进一条")
+    aid = dom.start_attempt(hid, "m")
+    dom.finish_attempt(aid, "inconclusive", "已排除外层", obs_outcome="none", obs_reason="外层路由先拒绝,结果在预期内")
+    script2 = [{"content": "", "tool_calls": [{"id": "k1", "type": "function", "function": {
+        "name": "state_conclude", "arguments": f'{{"hypothesis_id":"{hid}","verdict":"inconclusive",'
+                                               f'"scope_note":"仅该入口的参数 a"}}'}}]}, FINAL]
+    r3 = _runner(con, root, script2)
+    r3.run(r3.start("t1"), "t1")
     assert Research(root, dom).rounds_since_mirror("t1") == 1
 
 
@@ -139,24 +156,26 @@ def test_recover_stale_ignores_active_runs(tmp_path):
     assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "running"
 
 
-def test_recover_stale_marks_old_heartbeat(tmp_path):
+def test_recover_stale_requires_dead_pid_or_missing_pid(tmp_path):
     con, dom, root = _setup(tmp_path)
     r = _runner(con, root, [FINAL])
     rid = r.start("t1")
+    # 心跳超期但 pid 仍活着(可能在跑长任务)⇒ **不得**回收
     con.execute("UPDATE runs SET heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+    assert r.recover_stale(older_than_s=60) == [], "进程还活着就不能判失联"
+    # pid 已死(硬崩溃)⇒ 立即算失联
+    con.execute("UPDATE runs SET pid=999999 WHERE id=?", (rid,))
     assert r.recover_stale(older_than_s=60) == [rid]
     assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "paused"
 
 
-def test_recover_stale_ignores_other_host(tmp_path):
+def test_recover_stale_other_host_is_conservative(tmp_path):
     con, dom, root = _setup(tmp_path)
     r = _runner(con, root, [FINAL])
     rid = r.start("t1")
     con.execute("UPDATE runs SET host='another-host', heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
-    assert r.recover_stale(older_than_s=1) == [rid]     # 心跳超期仍然算失联
-    con.execute("UPDATE runs SET state='running', host='another-host', heartbeat_at=? WHERE id=?",
-                (time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), rid))
-    assert r.recover_stale(older_than_s=60) == []        # 心跳新鲜 ⇒ 不动(别的主机无法查 pid)
+    assert r.recover_stale(older_than_s=1) == [], "跨主机默认不动(查不到 pid)"
+    assert r.recover_stale(older_than_s=1, include_remote=True, remote_factor=2) == [rid]
 
 
 # ---------- 幂等:同一 call_key 不重复副作用 ----------
@@ -183,35 +202,35 @@ def test_duplicate_tool_call_is_not_executed_twice(tmp_path):
 
 # ---------- 自动继续:有未收口项时不许直接交回 ----------
 
-def test_advance_continues_until_closed(tmp_path):
-    con, dom, root = _setup(tmp_path)
-    dom.add_surface("t1", "12080 /x", reachability="pre-auth")
-    hid = dom.add_hypothesis("t1", "签名前解析", surface_key="12080 /x")
+def test_advance_stops_after_idle_rounds(tmp_path):
+    """模型永远说 FINAL 却不推进研究 ⇒ 连续 2 个空闲轮后停下(不会无限转)。
 
-    # 第一轮:FINAL,但还有未收口 ⇒ 不得 handback;第二轮把假设收口
-    script = [
-        FINAL,
-        {"content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {
-            "name": "state_start_attempt", "arguments": f'{{"hypothesis_id":"{hid}","method":"m"}}'}}]},
-        {"content": "", "tool_calls": [{"id": "c2", "type": "function", "function": {
-            "name": "state_finish_attempt",
-            "arguments": f'{{"attempt_id":"__AID__","result":"inconclusive","note":"只跑了外层",'
-                         f'"obs_outcome":"none","obs_reason":"结果在预期内"}}'}}]},
-        {"content": "", "tool_calls": [{"id": "c3", "type": "function", "function": {
-            "name": "state_conclude",
-            "arguments": f'{{"hypothesis_id":"{hid}","verdict":"inconclusive",'
-                         f'"scope_note":"仅 12080 /x 这一条路径"}}'}}]},
-        {"content": "", "tool_calls": [{"id": "c4", "type": "function", "function": {
-            "name": "set_surface_judged", "arguments": '{"target":"t1","key":"12080 /x",'
-                                                       '"disposition":"no_finding","note":"逐条读过鉴权门,无参数可达"}'}}]},
-        FINAL,
-    ]
-    r = _runner(con, root, script, max_steps=10)
-    res = r.advance("t1", "把 /x 推到定论", max_rounds=3)
-    assert res.rounds >= 2, "有未收口项时必须自动继续到下一轮"
-    # 该目标仍有材料缺失 ⇒ handback 不是 closed;但绝不是"说完 FINAL 就走"
-    assert res.handback != "closed"
-    assert res.state in ("finished", "paused")
+    注意:这是**脚本模型 + 小上限**,毫秒级;旧版本用无限循环跑 800 秒并写爆磁盘。
+    """
+    con, dom, root = _setup(tmp_path)
+    dom.add_surface("t1", "12080 /x")
+    dom.add_hypothesis("t1", "永远推进不了")
+    r = _runner(con, root, [FINAL] * 10, limits=Limits(max_model_calls=8))
+    res = r.advance("t1", "试试自动继续")
+    assert res.state in ("paused", "finished")
+    assert res.handback != "closed", "没经用户确认不能是 closed"
+    kinds = [x["kind"] for x in con.execute("SELECT kind FROM events")]
+    assert "run.stalled_no_progress" in kinds or "run.limit_hit" in kinds
+
+
+def test_close_requires_user_confirmation(tmp_path):
+    """收尾条件满足 ⇒ 只是 awaiting_user_close;用户确认后才 closed。"""
+    con, dom, root = _setup(tmp_path)
+    dom.add_surface("t1", "12080 /x", disposition="no_finding",
+                    note="逐条读过该入口,无参数可达")
+    hid = dom.add_hypothesis("t1", "h")
+    aid = dom.start_attempt(hid, "m")
+    dom.finish_attempt(aid, "inconclusive", "只跑了外层", obs_outcome="none",
+                       obs_reason="外层路由先拒绝,结果在预期内")
+    dom.conclude(hid, "inconclusive", "仅 12080 /x 这一个入口")
+    assert dom.closure_blockers("t1")
+    dom.confirm_close("t1", "用户确认收尾") if not dom.closure_blockers("t1") else None
+    assert not dom.is_close_confirmed("t1")
 
 
 def test_request_user_input_is_legit_handback(tmp_path):

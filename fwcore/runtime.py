@@ -12,15 +12,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from . import db as _db
 from .domain import Domain, new_id
+from .limits import Limits
 from .models import Adapter, Reply, ScriptedAdapter, assistant_message  # noqa: F401 (对外兼容)
 from .policy import Policy
 from .research import Research
@@ -69,7 +70,7 @@ class Runner:
     def __init__(self, con, root: str, model: Adapter, *, registry: Registry | None = None,
                  max_steps: int | None = None, timeout: float = 60.0, policy: Policy | None = None,
                  research: Research | None = None, max_seconds: float | None = None,
-                 stall_repeats: int = 3):
+                 stall_repeats: int = 3, limits: Limits | None = None):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -81,6 +82,9 @@ class Runner:
         self.max_steps = max_steps
         self.max_seconds = max_seconds
         self.stall_repeats = stall_repeats
+        # 每轮最多模型调用次数:执行层保护(上下文/成本),触发时**暂停**而不是收口研究
+        self.limits = limits or Limits()
+        self._pending_pause: tuple[str, dict] | None = None
         self.timeout = timeout
         self.policy = policy or Policy()
         self.research = research or Research(root, self.domain)
@@ -110,10 +114,48 @@ class Runner:
         return {"derived": d, "recent_events": events}
 
     def _checkpoint(self, rid: str, step: int, history: list[dict]) -> None:
+        """存检查点。
+
+        防爆(2026-11-04 62GB 事故):
+        - **裁剪**:只保留最近 20 条工具输出原文,更早的截断成摘要 —— 恢复仍可用,体积可控;
+        - **保留上限**:只留最近 `limits.checkpoints_keep` 条;
+        - **库体积硬顶**:超过 `limits.max_db_bytes` 继续删最老的检查点,仍超 ⇒ 暂停 run(不写结论)。
+        """
+        payload = json.dumps(_shrink_history(history), ensure_ascii=False)
         with _db.Tx(self.con) as c:
             c.execute("INSERT INTO checkpoints(id,run_id,step,messages,created_at) VALUES(?,?,?,?,?)",
-                      (new_id("CK"), rid, step, json.dumps(history, ensure_ascii=False), _now()))
+                      (new_id("CK"), rid, step, payload, _now()))
             c.execute("UPDATE runs SET step=?, updated_at=? WHERE id=?", (step, _now(), rid))
+            try:
+                keep = max(1, int(self.limits.checkpoints_keep))
+            except (TypeError, ValueError):
+                keep = 120
+            c.execute(
+                "DELETE FROM checkpoints WHERE run_id=? AND id NOT IN "
+                "(SELECT id FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT ?)",
+                (rid, rid, keep))
+        self._enforce_db_cap(rid)
+
+    def _enforce_db_cap(self, rid: str) -> None:
+        """库体积硬顶:超了就删最老的检查点;仍超 ⇒ 暂停(保留可恢复性,不改变研究事实)。"""
+        size = _db_bytes(self.con)
+        if size <= self.limits.max_db_bytes:
+            return
+        with _db.Tx(self.con) as c:
+            c.execute("DELETE FROM checkpoints WHERE id IN "
+                      "(SELECT id FROM checkpoints ORDER BY created_at ASC LIMIT 200)")
+        # WAL 截断必须在事务之外;并发写者持有锁时跳过即可
+        with contextlib.suppress(_db.sqlite3.OperationalError):
+            self.con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        size = _db_bytes(self.con)
+        if size > self.limits.max_db_bytes:
+            self._pending_pause = ("max_db_bytes", {"db_bytes": size, "limit": self.limits.max_db_bytes})
+
+    def _limit_hit(self, rid: str, reason: str, detail: dict | None = None) -> None:
+        """记录"执行边界触发"。**只暂停**,不写任何研究结论。"""
+        with _db.Tx(self.con) as c:
+            c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), rid))
+            _event(c, "run.limit_hit", rid, {"reason": reason, **(detail or {})})
 
     # ---------------- 一轮 = 一个模型-工具交互序列 ----------------
     def turn(self, rid: str, target: str, goal: str | None, history: list[dict],
@@ -128,14 +170,26 @@ class Runner:
         try:
             seen: dict[str, int] = {}
             t0 = time.time()
+            since = _now()
+            model_calls = 0
             while budget is None or budget > 0:
                 if budget is not None:
                     budget -= 1
-                if self.max_seconds and (time.time() - t0) > self.max_seconds:
+                if self.limits.time_exhausted(time.time() - t0):
                     state = "paused"
-                    _event(self.con, "run.safety_pause", rid, {"reason": "max_seconds"})
+                    self._limit_hit(rid, "max_seconds", {"elapsed_s": round(time.time() - t0, 1)})
                     break
                 msgs = [{"role": "system", "content": self.research.system_prompt(target, goal)}] + history
+                model_calls += 1
+                if self.limits.calls_exhausted(model_calls):
+                    state = "paused"
+                    self._limit_hit(rid, "max_model_calls", {"calls": model_calls,
+                                                             "limit": self.limits.max_model_calls})
+                    break
+                if self.limits.time_exhausted(time.time() - t0):
+                    state = "paused"
+                    self._limit_hit(rid, "max_seconds", {"elapsed_s": round(time.time() - t0, 1)})
+                    break
                 reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
                 history.append(reply.assistant_message() if (reply.content or reply.tool_calls)
                                else {"role": "assistant", "content": ""})
@@ -143,15 +197,23 @@ class Runner:
                     final = reply.content.strip()
                     stopped_by_final = True
                     step += 1
-                    rounds += 1
+                    # 研究轮次不能只靠模型说 FINAL 认定:
+                    # 必须本轮真的推进了一条假设(决定性尝试结束 / 假设收口 / 假设被放弃)
+                    advanced = self._round_advanced(target, since)
+                    if advanced:
+                        rounds += 1
+                        _event(self.con, "round.ended", self.domain.target(target).id,
+                               {"run_id": rid, "rounds": rounds})
+                        with _db.Tx(self.con) as c:
+                            c.execute("UPDATE runs SET rounds=? WHERE id=?", (rounds, rid))
+                    else:
+                        _event(self.con, "round.marker", rid,
+                               {"note": "FINAL 但本轮没有推进任何假设 ⇒ 不计轮"})
                     self._checkpoint(rid, step, history)
-                    _event(self.con, "round.ended", self.domain.target(target).id,
-                           {"run_id": rid, "rounds": rounds})
-                    with _db.Tx(self.con) as c:
-                        c.execute("UPDATE runs SET rounds=? WHERE id=?", (rounds, rid))
                     break
                 if reply.tool_calls:
-                    ctx = ToolContext(domain=self.domain, root=self.root, run_id=rid, timeout=self.timeout,
+                    tool_timeout = min(self.timeout, self.limits.max_tool_seconds)
+                    ctx = ToolContext(domain=self.domain, root=self.root, run_id=rid, timeout=tool_timeout,
                                       artifacts_dir=os.path.join(self.root, "state", "artifacts", rid),
                                       policy=self.policy, research=self.research)
                     stalled = False
@@ -177,7 +239,14 @@ class Runner:
                         break
                 step += 1
                 self._checkpoint(rid, step, history)
+                if self._pending_pause:
+                    reason, detail = self._pending_pause
+                    self._pending_pause = None
+                    self._limit_hit(rid, reason, detail)
+                    state = "paused"
+                    break
                 self._heartbeat(rid)
+
         except BaseException as e:
             with _db.Tx(self.con) as c:
                 c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), rid))
@@ -206,33 +275,75 @@ class Runner:
                                             "handback": handback, "blockers": blockers[:5]})
         return RunResult(rid, state, step, rounds, final, ready, blockers, handback, history)
 
+    def _round_advanced(self, target: str, since: str) -> bool:
+        """本轮是否真的推进了研究:决定性尝试结束 / 假设收口 / 假设被放弃。"""
+        t = self.domain.target(target)
+        n1 = self.con.execute(
+            "SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
+            " WHERE h.target_id=? AND a.result IN ('supported','refuted','inconclusive')"
+            "   AND a.finished_at IS NOT NULL AND a.finished_at >= ?", (t.id, since)).fetchone()["n"]
+        n2 = self.con.execute(
+            "SELECT COUNT(*) n FROM hypotheses WHERE target_id=? AND state IN ('concluded','dropped')"
+            "   AND updated_at >= ?", (t.id, since)).fetchone()["n"]
+        return (n1 + n2) > 0
+
     def _handback(self, rid: str, state: str, blockers: list[str]) -> str | None:
-        row = self.con.execute("SELECT handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+        """交回控制权的原因。注意区分:
+        - `awaiting_user_close`:程序确认"收尾条件已满足",**等用户确认**(不擅自宣布收尾)
+        - `closed`:用户已显式确认收尾(main 的确认原则)
+        """
+        row = self.con.execute(
+            "SELECT r.handback_reason, t.name AS target FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
+            (rid,)).fetchone()
         if row and row["handback_reason"]:
-            return row["handback_reason"]          # 模型主动交回(needs_user_input)
+            return row["handback_reason"]          # needs_user_input 等
         if not blockers:
-            return "closed"                        # 唯一"真正可结束"的原因
-        return None                                # 还有活 ⇒ 不该交回,交给 advance() 继续
+            if self.domain.is_close_confirmed(row["target"]):
+                return "closed"
+            return "awaiting_user_close"
+        return None
 
     # ---------------- 自动继续 ----------------
     def run(self, rid: str, target: str, goal: str | None = None, history: list[dict] | None = None,
             budget: int | None = None) -> RunResult:
         return self.turn(rid, target, goal, list(history or []), budget)
 
-    def advance(self, target: str, goal: str | None = None, *, max_rounds: int = 4,
+    def advance(self, target: str, goal: str | None = None, *, max_rounds: int | None = None,
                 run_id: str | None = None, history: list[dict] | None = None) -> RunResult:
         """持续推进,直到:收尾前置全清 / 需要用户输入 / 用完轮次预算。"""
         rid = run_id or self.start(target, goal)
         hist = list(history or [])
         res = self.turn(rid, target, goal, hist)
-        for _ in range(max_rounds - 1):
-            if res.handback in ("closed", "needs_user_input"):
+        guard = 0
+        idle = 0
+        t_start = time.time()
+        while max_rounds is None or guard < max_rounds - 1:
+            guard += 1
+            # 硬保护:与模型行为无关 —— 总时长上限 / 轮次硬上限(只暂停,不写结论)
+            if self.limits.time_exhausted(time.time() - t_start):
+                self._limit_hit(rid, "max_seconds", {"elapsed_s": round(time.time() - t_start, 1)})
+                res.state = "paused"
+                return res
+            if guard > 200:
+                self._limit_hit(rid, "max_rounds_guard", {"rounds": guard})
+                res.state = "paused"
+                return res
+            if res.handback in ("closed", "awaiting_user_close", "needs_user_input", "user_stop"):
                 return res
             if res.state == "paused":
                 return res                       # 预算是"检查点",不是研究结论
             # 模型说 FINAL 但还有未收口项 ⇒ 带阻塞清单开下一轮(自动继续)
-            res = self.turn(rid, target, "继续推进未收口项:\n" + "\n".join(f"- {b}" for b in res.blockers),
-                            res.history)
+            rounds_before = res.rounds
+            res2 = self.turn(rid, target,
+                             "继续推进未收口项:\n" + "\n".join(f"- {b}" for b in res2_blockers(res)),
+                             res.history)
+            # 空闲轮:既没推进研究(轮次没涨)也没产生新的执行动作 ⇒ 连续 2 次就停(不是结论)
+            idle = idle + 1 if res2.rounds == rounds_before else 0
+            res = res2
+            if idle >= 2:
+                self._limit_hit(rid, "stalled_no_progress", {"idle_rounds": idle})
+                res.state = "paused"
+                return res
         return res
 
     def resume(self, rid: str, goal: str | None = None, budget: int | None = None) -> RunResult:
@@ -244,14 +355,20 @@ class Runner:
         ck = self.con.execute(
             "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1", (rid,)
         ).fetchone()
-        history = json.loads(ck["messages"]) if ck else []
+        try:
+            history = json.loads(ck["messages"]) if ck else []
+        except (json.JSONDecodeError, TypeError) as e:      # 检查点损坏 ⇒ 从空历史继续(记录事件)
+            history = []
+            with _db.Tx(self.con) as c:
+                _event(c, "run.checkpoint_corrupt", rid, {"error": str(e)[:200]})
         with _db.Tx(self.con) as c:
             c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
             _event(c, "run.resumed", rid, {"step": row["step"]})
         return self.turn(rid, row["target_name"], goal or row["goal"], history, budget)
 
     # ---------------- 失联判定(不误伤活跃运行) ----------------
-    def recover_stale(self, *, older_than_s: float = STALE_DEFAULT_S) -> list[str]:
+    def recover_stale(self, *, older_than_s: float = STALE_DEFAULT_S,
+                      include_remote: bool = False, remote_factor: float = 6.0) -> list[str]:
         """只收敛**确实失联**的 run:
         - 心跳超过阈值(默认 300s)未更新;或
         - 同主机且记录的 pid 已不存在。
@@ -265,8 +382,18 @@ class Runner:
             hb = r["heartbeat_at"]
             age = now - _epoch(hb) if hb else float("inf")
             same_host = (r["host"] or "") == _host()
-            alive = _pid_alive(r["pid"]) if same_host else True   # 别的机器上无法判断 ⇒ 保守:不处理
-            stale = age > older_than_s or (same_host and not alive)
+            alive: bool | None = None
+            if same_host:
+                if r["pid"]:
+                    alive = _pid_alive(r["pid"])
+                    # 进程活着 ⇒ **绝不**判失联(可能在跑 fuzz/等模型);进程死了 ⇒ 立即算失联
+                    stale = not alive
+                else:
+                    alive = None
+                    stale = age > older_than_s     # 没有 pid 记录(旧库)⇒ 只能靠心跳
+            else:
+                # 跨主机无法查 pid ⇒ 默认不动;显式开启时才用更长的阈值兜底
+                stale = include_remote and age > older_than_s * remote_factor
             if not stale:
                 continue
             with _db.Tx(self.con) as c:
@@ -308,6 +435,39 @@ def _event(con, kind: str, ref: str | None, payload: dict | None) -> None:
                 (_now(), kind, ref, json.dumps(payload or {}, ensure_ascii=False)))
 
 
+def res2_blockers(res) -> list[str]:
+    """取本轮阻塞清单(供下一轮的提示文本用)。"""
+    return list(getattr(res, "blockers", []) or [])
+
+
+def _shrink_history(history: list[dict], keep_full: int = 20) -> list[dict]:
+    """把历史里较老的 tool 输出截断(保留结构),避免检查点持有全量原文。"""
+    tool_idx = [i for i, m in enumerate(history) if m.get("role") == "tool"]
+    cutoff = set(tool_idx[:-keep_full]) if len(tool_idx) > keep_full else set()
+    out = []
+    for i, m in enumerate(history):
+        if i in cutoff:
+            c = m.get("content")
+            if isinstance(c, str) and len(c) > 200:
+                out.append({**m, "content": c[:200] + f"…(截断,原 {len(c)} 字节)"})
+                continue
+        out.append(m)
+    return out
+
+
+def _db_bytes(con) -> int:
+    try:
+        p = con.execute("PRAGMA database_list").fetchone()[2]
+        total = 0
+        for suffix in ("", "-wal", "-shm"):
+            fp = p + suffix
+            if os.path.exists(fp):
+                total += os.path.getsize(fp)
+        return total
+    except Exception:
+        return 0
+
+
 def _host() -> str:
     return socket.gethostname()
 
@@ -316,7 +476,11 @@ def _pid_alive(pid: int | None) -> bool:
     if not pid:
         return False
     try:
-        os.kill(int(pid), 0)
+        pid_i = int(pid)
+    except (TypeError, ValueError):
+        return False
+    try:
+        os.kill(pid_i, 0)
         return True
     except ProcessLookupError:
         return False
@@ -336,4 +500,4 @@ def _epoch(ts: str) -> float:
 def _now() -> str:
     import datetime as _d
 
-    return _d.datetime.now(_d.timezone.utc).isoformat(timespec="seconds")
+    return _d.datetime.now(_d.UTC).isoformat(timespec="seconds")

@@ -7,8 +7,16 @@ export PYTHONPATH := $(CURDIR)
 help:
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | column -t -s "$$(printf '\t')"
 
-test:            ## 跑框架测试(不依赖本机 state/)
-	$(PY) -m pytest tests/ -q
+test:            ## 跑框架测试(临时目录在工作区内;有硬超时;跑完清理)
+	rm -rf .tmp && mkdir -p .tmp/pytest
+	@timeout 600 $(PY) -m pytest tests/ -q || { rc=$$?; rm -rf .tmp/pytest; exit $$rc; }
+	rm -rf .tmp/pytest
+
+test-one:        ## 只跑指定用例:make test-one T=tests/test_x.py::test_y
+	@test -n "$(T)" || (echo "用法: make test-one T=<用例>" >&2; exit 2)
+	rm -rf .tmp && mkdir -p .tmp/pytest
+	@timeout 180 $(PY) -m pytest $(T) -q
+	rm -rf .tmp/pytest
 
 demo:            ## 建一个临时目标 + 假设 + 派生量(/tmp/fwdemo)
 	rm -rf /tmp/fwdemo && mkdir -p /tmp/fwdemo

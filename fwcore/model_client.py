@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
@@ -28,6 +29,7 @@ class Transport(Protocol):
 class ModelHTTPError(RuntimeError):
     def __init__(self, code: int, body: str):
         super().__init__(f"HTTP {code}: {body[:800]}")
+        self.payload: dict | None = None      # 由 chat() 填入,便于排查"我们发了什么"
 
     @property
     def status(self) -> int:

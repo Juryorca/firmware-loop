@@ -123,7 +123,9 @@ def main() -> int:
         print(f"[evidence] {out0}(重评,未调用模型)")
         return 0 if score0["passed"] else 1
 
-    work = tempfile.mkdtemp(prefix=f"fweval-{args.task}-")
+    scratch = os.path.join(ROOT, "state", "_scratch")
+    os.makedirs(scratch, exist_ok=True)
+    work = tempfile.mkdtemp(prefix=f"fweval-{args.task}-", dir=scratch)
     shutil.copytree(os.path.join(tdir, "bundle"), os.path.join(work, "bundle"))
     os.makedirs(os.path.join(work, "state"), exist_ok=True)
 
