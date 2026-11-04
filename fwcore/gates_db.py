@@ -119,3 +119,86 @@ def notes_vs_state(con, root: str, target: str) -> dict:
     out["state_hypotheses"] = con.execute(
         "SELECT COUNT(*) n FROM hypotheses WHERE target_id=?", (t.id,)).fetchone()["n"]
     return out
+
+
+# ---------------- 迁移第二步:KB 条数 / 引用完整性 / legacy 对照 ----------------
+
+def kb_counts(root: str) -> list[dict]:
+    """knowledge/INDEX.md 声明的条数 vs 文件实际条数(只看文件事实)。"""
+    import re
+
+    idx = os.path.join(root, "knowledge", "INDEX.md")
+    if not os.path.isfile(idx):
+        return [{"file": "INDEX.md", "status": "missing"}]
+    try:
+        with open(idx, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError as e:
+        return [{"file": "INDEX.md", "status": "unreadable", "detail": str(e)}]
+    out = []
+    for name, declared in re.findall(r"^\|\s*`([A-Za-z0-9_.-]+\.md)`\s*\|.*?\|\s*(\d+)\s*\|", text, re.M):
+        path = os.path.join(root, "knowledge", name)
+        if not os.path.isfile(path):
+            out.append({"file": name, "declared": int(declared), "status": "missing"})
+            continue
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                body = f.read()
+        except OSError as e:
+            out.append({"file": name, "declared": int(declared), "status": "unreadable", "detail": str(e)})
+            continue
+        actual = (len(re.findall(r"^- 20\d\d", body, re.M)) if name == "intel-log.md"
+                  else len(re.findall(r"(?m)^## ", body)))
+        try:
+            want = int(declared)
+        except (TypeError, ValueError):
+            out.append({"file": name, "declared": declared, "status": "bad_declaration"})
+            continue
+        out.append({"file": name, "declared": want, "actual": actual,
+                    "status": "ok" if actual == want else "mismatch"})
+    return out
+
+
+def dangling_attachment_refs(con, root: str, target: str) -> list[str]:
+    """报告里引用 attachments/... 但文件不存在(引用完整性;只看文件事实)。"""
+    import re
+
+    t = Domain(con, root).target(target)
+    rdir = os.path.join(root, "state", t.name, "report")
+    bad: list[str] = []
+    if not os.path.isdir(rdir):
+        return bad
+    try:
+        names = [n for n in os.listdir(rdir) if n.endswith(".md")]
+    except OSError as e:
+        return [f"report/ 不可读: {e}"]
+    for n in names:
+        try:
+            with open(os.path.join(rdir, n), encoding="utf-8", errors="replace") as f:
+                body = f.read()
+        except OSError:
+            continue
+        for ref in re.findall(r"\(attachments/[^)\s]+\)|attachments/[^\s)\"'>]+", body):
+            rel = ref.strip("()")
+            if not os.path.exists(os.path.join(rdir, rel)):
+                bad.append(f"{n}: {rel}")
+    return bad
+
+
+def legacy_compare(con, root: str, target: str) -> dict:
+    """与旧 Markdown 判据(tools/derived_check.sh)对照,仅迁移期核对用。"""
+    import subprocess
+
+    script = os.path.join(root, "tools", "derived_check.sh")
+    out: dict = {"script": script, "available": os.path.isfile(script)}
+    if not out["available"]:
+        return out
+    try:
+        r = subprocess.run(["bash", script, target], capture_output=True, text=True, timeout=180, cwd=root)
+        lines = [ln for ln in r.stdout.splitlines() if ln.startswith(("OK", "FAIL", "==="))]
+        out.update({"returncode": r.returncode,
+                    "fail_lines": [ln for ln in lines if ln.startswith("FAIL")],
+                    "summary": lines[-1] if lines else ""})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out.update({"error": f"{type(e).__name__}: {e}"})
+    return out

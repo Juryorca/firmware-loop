@@ -75,6 +75,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tool")
     p.add_argument("--args", default="{}")
     p = sub.add_parser("pi-event", help="从 stdin 读 Pi 研究事件(一行一个 JSON)并写入权威状态")
+    p = sub.add_parser("gates", help="权威状态版 Gate(覆盖度/收尾/KB/引用;可选 --legacy 对照)")
+    p.add_argument("target")
+    p.add_argument("--legacy", action="store_true")
     p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
     p = sub.add_parser("status"); p.add_argument("target")
     p = sub.add_parser("derive"); p.add_argument("target")
@@ -146,6 +149,16 @@ def main(argv: list[str] | None = None) -> int:
             res = handle_stream(con, args.root, _sys.stdin.read())
             print(json.dumps(res, ensure_ascii=False, indent=2))
             return 0 if all(r.get("status") in ("ok", "duplicate") for r in res) else 1
+        elif args.cmd == "gates":
+            from .gates_db import dangling_attachment_refs, evaluate, kb_counts, legacy_compare
+            rep = evaluate(con, args.root, args.target).as_dict()
+            rep["kb"] = kb_counts(args.root)
+            rep["dangling_refs"] = dangling_attachment_refs(con, args.root, args.target)
+            if args.legacy:
+                rep["legacy"] = legacy_compare(con, args.root, args.target)
+            print(json.dumps(rep, ensure_ascii=False, indent=2))
+            ok = rep["ok"] and all(x["status"] == "ok" for x in rep["kb"]) and not rep["dangling_refs"]
+            return 0 if ok else 1
         elif args.cmd == "capabilities":
             from .providers import inventory
             print(json.dumps(inventory(args.root), ensure_ascii=False, indent=2))

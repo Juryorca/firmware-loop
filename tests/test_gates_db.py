@@ -54,3 +54,36 @@ def test_mirror_due_is_target_scoped(tmp_path):
                 "(strftime('%Y-%m-%dT%H:%M:%S+00:00','now'),'round.ended','other','{}')")
     rep = evaluate(con, root, "t1")
     assert rep.rounds_since_mirror == 3 and rep.mirror_due is True
+
+
+def test_kb_counts_detects_mismatch(tmp_path):
+    from fwcore.gates_db import kb_counts
+
+    k = tmp_path / "knowledge"
+    k.mkdir()
+    (k / "INDEX.md").write_text("| `a.md` | x | 3 |\n", encoding="utf-8")
+    (k / "a.md").write_text("## one\n## two\n", encoding="utf-8")
+    rows = kb_counts(str(tmp_path))
+    assert rows[0]["status"] == "mismatch" and rows[0]["declared"] == 3 and rows[0]["actual"] == 2
+
+
+def test_dangling_attachment_refs(tmp_path):
+    from fwcore.gates_db import dangling_attachment_refs
+
+    con, dom, root = _mk(tmp_path)
+    rdir = tmp_path / "state" / "t1" / "report"
+    rdir.mkdir(parents=True)
+    (rdir / "a.md").write_text("![x](attachments/pkg/a.bin)\n", encoding="utf-8")
+    (rdir / "attachments" / "pkg").mkdir(parents=True)
+    (rdir / "attachments" / "pkg" / "a.bin").write_bytes(b"x")
+    assert dangling_attachment_refs(con, root, "t1") == []
+    (rdir / "b.md").write_text("详见 attachments/缺/p.bin\n", encoding="utf-8")
+    assert any("缺/p.bin" in b for b in dangling_attachment_refs(con, root, "t1"))
+
+
+def test_legacy_compare_reports_unavailable_honestly(tmp_path):
+    from fwcore.gates_db import legacy_compare
+
+    con, dom, root = _mk(tmp_path)
+    out = legacy_compare(con, root, "t1")
+    assert out["available"] is False and "error" not in out

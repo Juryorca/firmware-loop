@@ -31,7 +31,7 @@
 
 | 项 | 状态 | 下一步 |
 |---|---|---|
-| **Gate 迁移到权威状态** | 🟡 第一步完成 | `fwcore/gates_db.py`(覆盖度/收尾/三镜/材料全部只读 SQLite)+ `tests/test_gates_db.py`;下一步:把 `derived_check.sh` 的 KB/引用/材料检查也接上,并加 `fw-core gates --legacy` 对比模式 |
+| **Gate 迁移到权威状态** | 🟡 第二步完成 | `fwcore/gates_db.py`:覆盖度/收尾/三镜/材料 + **KB 条数 / 附件引用完整性 / legacy 对照**;CLI `fw-core gates <target> [--legacy]`;`tests/test_gates_db.py` 6 条 0.81s ✓;下一步:把 findings/证据强度也纳入禁写测试,并让 Pi 侧调用同一 gate |
 | Pi 兼容适配器 | 🟡 桥已实现 | `fwcore/pi_bridge.py` + `fw-core pi-event`(stdin 事件流,幂等,坏事件不写);`tests/test_pi_bridge.py` 4 条 ✓;待:`.pi/extensions/` 里真正的 hook 接线 |
 | 独立 MCP 客户端 | ✅ | `fwcore/mcp_client.py`(initialize/tools.list/tools.call;select 等超时;关闭时 killpg)+ `fw-core mcp list|probe|call`;`tests/test_mcp_client.py` 6 条 1.06s ✓(含"server 起不来必须 unreachable") |
 | 结构化研究工具 | ⬜ | IDA/Ghidra/仿真/fuzz 输出 → 结构化观测(字段而非文本尾巴),并记录 provider/arch/env |
