@@ -5,9 +5,6 @@
 
 from __future__ import annotations
 
-import os
-import time
-
 import pytest
 
 from fwcore import db as _db
@@ -281,3 +278,30 @@ def test_external_tool_always_needs_confirm(tmp_path):
     assert reg.call(ctx, "submit_report", {})["status"] == "cancelled"
     ctx2 = ToolContext(domain=dom, root=root, policy=Policy(authorization=az, confirm=lambda s: True))
     assert reg.call(ctx2, "submit_report", {})["status"] == "ok"
+
+
+# ---------- 授权 vs 沙箱:必须诚实说明"只做授权与路径检查" ----------
+
+def test_authz_reports_isolation_none_by_default(tmp_path):
+    from fwcore.policy import Authz
+
+    az = Authz(roots=[str(tmp_path)])
+    d = az.describe()
+    assert d["isolation"] == "none"
+    assert "仅授权与路径检查" in d["note"] or "仍可访问" in d["note"]
+
+
+def test_authz_root_check_does_not_sandbox_process(tmp_path):
+    """路径检查只约束**传给工具的路径**;进程本身仍能访问 root 之外(所以不能宣传成沙箱)。"""
+    from fwcore.policy import Authz, Policy
+    from fwcore.tools import ToolContext, default_registry
+
+    con, dom, root = _setup(tmp_path)
+    az = Authz(roots=[root], allow_shell=True, allow_high_risk=True)
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az))
+    outside = tmp_path.parent
+    out = default_registry().call(ctx, "shell_exec",
+                                  {"command": f"sh -c 'ls {outside} >/dev/null && echo reached'"})
+    assert out["status"] == "ok", out
+    with open(out["stdout_path"], encoding="utf-8", errors="replace") as f:
+        assert "reached" in f.read()

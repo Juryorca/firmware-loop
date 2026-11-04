@@ -53,3 +53,11 @@
 - 修真实 bug:注册处用 `isfile` 判**目录** `tools/ghidra_scripts` ⇒ 永不注册(改为 `isdir`)
 - 证据:`tests/test_toolkit_structured.py` 8 passed in 1.03s(含"缺能力必须报错"与"有 runner 则结构化")
 - 仍未完成(需授权/外部条件):Pi hook 接线(改 live harness)、与 Pi 线对比
+
+### Iteration 7(授权口径诚实化)
+- 完成:权限 vs 沙箱口径 —— `Authz.isolation`(默认 `none`)+ `describe()` + `fw-core authz`;
+  用例证明"路径检查 ≠ 沙箱"(受权 shell 仍能访问 root 之外)
+- 证据:`tests/test_lifecycle_semantics.py -k authz` 2 passed in 0.19s
+- 完成判据#2 记录:`bash tools/fwcore_verify.sh`(cwd=仓库根;脚本自设 PYTHONPATH;临时目录 `.tmp/verify` 自删)
+  实测输出:`pytest(8 文件) 61 passed in 15.20s` / `capabilities 10 项` / `gates 如实报阻塞` / `git clean` / rc=0
+- 仍未完成(需授权/外部条件):Pi hook 接线、与 Pi 线对比

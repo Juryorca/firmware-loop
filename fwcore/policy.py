@@ -28,6 +28,8 @@ class Authz:
     expires_at: float | None = None
     revoked: bool = False
     reason: str = ""
+    # 诚实标注:**本层只做授权判断与路径检查,不提供文件系统/网络沙箱**
+    isolation: str = "none"      # none | chroot | container | bwrap(当前实现只有 none)
 
     def active(self, now: float | None = None) -> bool:
         import time as _t
@@ -37,6 +39,13 @@ class Authz:
         if self.expires_at is not None and (_t.time() > self.expires_at):
             return False
         return True
+
+    def describe(self) -> dict:
+        return {"roots": list(self.roots), "allow_shell": self.allow_shell,
+                "allow_high_risk": self.allow_high_risk, "active": self.active(),
+                "isolation": self.isolation,
+                "note": ("仅授权与路径检查;进程仍可访问该 root 之外的文件/网络"
+                         if self.isolation == "none" else "外部隔离层由调用方提供")}
 
     def covers(self, path: str) -> bool:
         p = os.path.realpath(path)

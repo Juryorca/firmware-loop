@@ -69,6 +69,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("conclude"); p.add_argument("hypothesis"); p.add_argument("verdict")
     p.add_argument("--scope", required=True)
 
+    p = sub.add_parser("authz", help="显示当前授权口径与**真实隔离级别**(不把 cwd 检查说成沙箱)")
+    p.add_argument("--roots", nargs="*", default=["."])
+    p.add_argument("--isolation", default="none", choices=["none", "chroot", "container", "bwrap"])
     p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
     p.add_argument("action", choices=["list", "probe", "call"])
     p.add_argument("--server")
@@ -121,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
             print(dom.add_observation(args.target, args.text, attempt_id=args.attempt))
         elif args.cmd == "conclude":
             print(dom.conclude(args.hypothesis, args.verdict, args.scope))
+        elif args.cmd == "authz":
+            from .policy import Authz
+            az = Authz(roots=[os.path.abspath(r) for r in args.roots], isolation=args.isolation)
+            print(json.dumps(az.describe(), ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":
             from .mcp_client import MCPClient, load_servers, probe as mcp_probe
             cfgs = [os.path.join(args.root, "state", "mcp.json"),
