@@ -86,3 +86,12 @@
     `评测答案隔离 PASS` / `git clean` / 退出码 0
 - 阻塞(不影响本轮增量,但挡住"全部验收"):Pi hook 接线(待授权)、与 Pi 线对比(待外部条件)
 - 因此**不输出 COMPLETE**;继续按 ROADMAP 可推进项迭代
+
+### Iteration 11(ROADMAP 一致性防漂 + 清掉最后一个 ⬜)
+- 增量:`tools/fwcore_verify.sh` 新增两项检查
+  ① **评测答案隔离**(bundle 内不得出现 `control_verdict|expected_why|scope_must_mention`)
+  ② **ROADMAP 一致性**(引用的 `tests/test_*.py` 必须存在;不允许残留 ⬜ 行)
+- 顺带:把"研究评测加难"从 ⬜ 改为 ✅(三个任务 + 因果评分),修 SC2013(while read)
+- 实测(`bash tools/fwcore_verify.sh`,cwd=仓库根,脚本自设 PYTHONPATH,临时目录 .tmp/verify 自删):
+  `pytest(8 文件) 64 passed in 16.14s` / `capabilities 10 项` / `gates 如实报阻塞` /
+  `答案隔离 PASS` / `ROADMAP 一致性 PASS` / `git clean` ⇒ rc=0

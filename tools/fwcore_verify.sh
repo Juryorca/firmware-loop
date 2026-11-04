@@ -58,7 +58,22 @@ done
 # 权重:只看"答案字段"是否泄漏,不看内容相似
 if [ "$iso_fail" -eq 0 ]; then say "评测答案隔离" "PASS(bundle 不含答案字段)"; else say "评测答案隔离" "FAIL"; fail=1; fi
 
-# ⑤ 工作区必须干净(不留临时产物)
+# ⑤ ROADMAP 不漂:引用的测试文件必须存在;不允许留 ⬜(未开始)行
+rm_fail=0
+if [ -f docs/ROADMAP.md ]; then
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$f" ] || { echo "      ROADMAP 引用了不存在的测试: $f"; rm_fail=1; }
+  done < <(grep -oE 'tests/test_[a-z_]+\.py' docs/ROADMAP.md | sort -u)
+  if grep -q '| ⬜ |' docs/ROADMAP.md; then
+    echo "      ROADMAP 仍有未开始(⬜)条目"
+    grep -n '| ⬜ |' docs/ROADMAP.md | head -3 | sed 's/^/        /'
+    rm_fail=1
+  fi
+fi
+if [ "$rm_fail" -eq 0 ]; then say "ROADMAP 一致性" "PASS(引用文件齐全,无 ⬜)"; else say "ROADMAP 一致性" "FAIL"; fail=1; fi
+
+# ⑥ 工作区必须干净(不留临时产物)
 if [ -d "$WORK" ]; then rm -rf "$WORK"; fi
 if git status --porcelain | grep -q .; then
   say "git status" "DIRTY(提交后再跑)"
