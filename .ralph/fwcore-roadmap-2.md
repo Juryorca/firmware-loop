@@ -38,3 +38,12 @@
 - 顺带修:`eval/run.py` 输出/目录操作加保护;`tests/test_eval_scoring.py` 全部改 context manager
 - 证据:`tests/test_eval_scoring.py` 4 passed in 0.81s
 - 下一项:Pi hook 接线(Pi 事件 → `fw-cored pi-event`);之后做最终可重跑验证
+
+### Iteration 5/5
+- 完成:**恢复幂等**对抗用例 —— 模拟"工具已产生副作用、检查点未落盘":
+  删检查点 + `runs.step` 回退 + 死 pid ⇒ `recover_stale()` 暂停 ⇒ `resume()` 重放同一 `call_key`
+  命中幂等缓存,**副作用只发生一次**;running 的工具状态如实可见(不伪装 ok)
+- 顺带:最终验证命令 `bash tools/fwcore_verify.sh`(cwd=仓库根;PYTHONPATH 由脚本设;`.tmp/verify` 跑完自删)
+  实测:`pytest(8 文件) 52 passed in 9.62s` / `capabilities 9 项` / `gates 如实报阻塞` / `git clean` ⇒ **PASS**
+- 证据:`tests/test_recovery_idempotency.py` 2 passed in 0.41s;`tools/fwcore_verify.sh` 退出码 0
+- 仍未完成(不属于本轮 5 次迭代可闭环):Pi hook 接线(需用户授权改 live harness)、与 Pi 线对比、Ghidra/emu 结构化
