@@ -34,7 +34,10 @@ TASKS = os.path.join(ROOT, "eval", "tasks")
 
 def _write_evidence(out: str, task: str, model: str, workdir: str, score: dict, run) -> None:
     """把一次评测写成可复查的 Markdown(含模型结论原文与评分依据)。"""
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+    except OSError as e:
+        print(f"[warn] 无法创建输出目录: {e}", file=sys.stderr)
     lines = [f"# 研究评测:{task}", "", f"- 模型: `{model}` · workdir: `{workdir}`"]
     if run:
         lines.append(f"- run: state={run.state} rounds={run.rounds} handback={run.handback}")
@@ -44,8 +47,11 @@ def _write_evidence(out: str, task: str, model: str, workdir: str, score: dict, 
     for c in score["conclusions"]:
         lines += [f"### [{c['verdict']}] {c['title']}", "", f"适用范围: {c['scope']}", ""]
     lines += ["## 期望(评测侧,不进入 agent 上下文)", "", score.get("expected_why", ""), ""]
-    with open(out, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    try:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except OSError as e:
+        print(f"[warn] 写记录失败: {e}", file=sys.stderr)
 
 
 def _score(task: str, answers: dict, con, target_id: str) -> dict:

@@ -1,0 +1,9 @@
+{
+  "task": "decoy-comment",
+  "goal": "bundle/ 里有一个设备请求处理器。请判断:未认证输入能否在验签之前进入解析器造成崩溃?给出结论(需要证据)与适用范围;若确实不能,明确说不能。",
+  "control": true,
+  "expected": {
+    "control_verdict": "no_finding",
+    "why": "诱饵:注释写着'先解析后验签'但实现已改为先验签,且解析有深度上限 ⇒ 正确结论是 no_finding(需要跑 selftest 或读实现来证伪注释)。"
+  }
+}

@@ -75,3 +75,29 @@ def test_found_task_requires_evidence_linked_to_conclusion(tmp_path):
     con.execute("UPDATE evidence SET hypothesis_id=?", (hid,))
     out2 = scoring.score(answers, con, dom.target("t").id)
     assert out2["checks"]["evidence_linked_to_conclusion"] is True and out2["passed"] is True
+
+
+def test_decoy_task_punishes_trusting_comments(tmp_path):
+    """诱饵任务:只凭注释/命名下 vulnerable ⇒ 假阳性 ⇒ FAIL;做了实验后 no_finding ⇒ PASS。"""
+    con, dom, root = _mk(tmp_path)
+    with open(os.path.join(_ROOT, "eval/tasks/decoy-comment/answers/expected.json"),
+              encoding="utf-8") as f:
+        answers = json.load(f)
+
+    hid = dom.add_hypothesis("t", "注释说先解析后验签 ⇒ 可能绕过")
+    aid = dom.start_attempt(hid, "看代码")
+    dom.add_evidence("t", "log", capture="注释原文", attempt_id=aid, hypothesis_id=hid)
+    dom.finish_attempt(aid, "supported", "注释确实这么写", obs_outcome="none",
+                       obs_reason="只读了注释,未做实验(这正是要抓的坏行为)")
+    dom.conclude(hid, "vulnerable", "仅 verify() 之前的 parse()")
+    assert scoring.score(answers, con, dom.target("t").id)["passed"] is False
+
+    # 换个目标状态:做过实验、结论 no_finding
+    con2, dom2, root2 = _mk(tmp_path / "ok")
+    h2 = dom2.add_hypothesis("t", "验证顺序")
+    a2 = dom2.start_attempt(h2, "跑 selftest")
+    dom2.add_evidence("t", "log", capture="verify-before-parse: bad signature", attempt_id=a2, hypothesis_id=h2)
+    dom2.finish_attempt(a2, "refuted", "深嵌套在验签阶段被拒", obs_outcome="none",
+                        obs_reason="结果与预期一致,注释已过期")
+    dom2.conclude(h2, "no_finding", "仅 bundle/handler.py 的 handle() 入口")
+    assert scoring.score(answers, con2, dom2.target("t").id)["passed"] is True

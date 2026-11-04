@@ -30,3 +30,11 @@
 - 顺带修:`eval/run.py` 丢失的 `_write_evidence`(编译失败);测试 stub 脚本权限收到 0o700
 - 证据:`tests/test_toolkit_structured.py` 6 passed in 0.66s
 - 下一项:诱饵/竞争解释评测任务;随后 Pi hook 接线
+
+### Iteration 4/5
+- 完成:**诱饵/竞争解释任务** `eval/tasks/decoy-comment/`(注释写"先解析后验签",实现已安全;
+  只有跑 `selftest` 或读实现才能证伪注释)
+- 评分器复用对照组模式:只凭注释下 vulnerable ⇒ 假阳性 ⇒ FAIL;做实验后 no_finding ⇒ PASS
+- 顺带修:`eval/run.py` 输出/目录操作加保护;`tests/test_eval_scoring.py` 全部改 context manager
+- 证据:`tests/test_eval_scoring.py` 4 passed in 0.81s
+- 下一项:Pi hook 接线(Pi 事件 → `fw-cored pi-event`);之后做最终可重跑验证
