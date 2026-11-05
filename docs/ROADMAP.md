@@ -64,7 +64,7 @@
 | Watchdog 正式路径默认启用 + 旧 PGID 误杀 | ✅ | CLI `run/resume/advance` 默认开看护(`--no-watchdog` 可关,help 可发现);`.pgids` 记录 `pgid + starttime`,杀组前核对 `/proc/<pid>/stat` 的 starttime ⇒ **pid 复用不误杀**;`Watchdog.health()` 暴露 scans/errors/stopped_reason/alive,`Runner.progress()` 带出;`tests/test_watchdog.py` +2 条、`test_cli_smoke.py` +1 条 |
 | prepare hook 超时后的线程泄漏 | ✅ | 弃用 `ThreadPoolExecutor`(退出会 `shutdown(wait=True)` ⇒ 被卡死钩子拖住 ✗),改 **daemon 线程 + join(timeout)**:超时即放弃、迟到结果不采纳、`prepare_abandoned` 可观测;`test_prepare_timeout_does_not_wait_for_hung_hook` 断言"5s 钩子不拖住主流程(<3s)" |
 | 完整研究授权机制(目标/工作区/时限/撤销/审计) | ⬜ 下一步 | 在 `Authz` 之上加**显式授权文件**(目标名 + roots + 到期 + 撤销)与 `events` 审计;高风险工具不再全局放行 |
-| 评测隔离(`eval/run.py` 从答案读 goal) | ⬜ 下一步 | 任务元数据与私有答案分离:`task.json`(公开 goal)+ `answers/`(私有);评分只读私有侧 |
+| 评测隔离(`eval/run.py` 从答案读 goal) | ✅ | 5 个任务都拆成 `task.json`(**公开 goal**)与 `answers/expected.json`(**私有判据**,已移除 goal);`load_task()` 两文件分离且**拒绝**私有侧带 goal;`prepare_workspace()` 只拷 `bundle/`(工作区无 answers/、无 task.json);`tests/test_eval_isolation.py` **13 passed**(含"goal 不得泄漏答案文本") |
 
 ## 阻塞 / 推迟(需授权或外部条件)
 

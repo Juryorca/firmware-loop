@@ -1,0 +1,8 @@
+{
+  "task": "sig-after-parse",
+  "goal": "在 bundle/ 里这个设备接口上做一次完整判断:签名校验与解析的顺序是否有安全后果?给出结论(需要证据),并说明适用范围。",
+  "materials": [
+    "bundle/"
+  ],
+  "notes": "公开任务元数据:goal 只用这里,答案在 answers/(私有)"
+}

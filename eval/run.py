@@ -32,6 +32,48 @@ from fwcore.runtime import Runner                      # noqa: E402
 TASKS = os.path.join(ROOT, "eval", "tasks")
 
 
+def load_task(task: str) -> tuple[dict, dict]:
+    """返回 (公开任务元数据, 私有答案)。
+
+    **隔离原则**:`goal` 只从 `task.json`(公开)读取;`answers/expected.json` 只用于评分,
+    绝不允许把私有文件内容喂给 agent(也不能把它的目录拷进工作区)。
+    """
+    tdir = os.path.join(TASKS, task)
+    pub_path = os.path.join(tdir, "task.json")
+    priv_path = os.path.join(tdir, "answers", "expected.json")
+    for p_, label in ((pub_path, "公开 task.json"), (priv_path, "私有 answers/expected.json")):
+        if not os.path.isfile(p_):
+            raise SystemExit(f"任务缺少{label}: {p_}")
+    try:
+        with open(pub_path, encoding="utf-8") as f:
+            public = json.load(f)
+        with open(priv_path, encoding="utf-8") as f:
+            private = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        raise SystemExit(f"读任务文件失败: {e}") from e
+    if not public.get("goal"):
+        raise SystemExit(f"{pub_path} 缺 goal(goal 必须来自公开侧)")
+    if "goal" in private:
+        raise SystemExit(f"{priv_path} 里还有 goal ✗(goal 必须只在公开侧)")
+    return public, private
+
+
+def prepare_workspace(task: str) -> str:
+    """建临时工作区:只拷 `bundle/`,**不拷** answers/。"""
+    tdir = os.path.join(TASKS, task)
+    scratch = os.path.join(ROOT, "state", "_scratch")
+    try:
+        os.makedirs(scratch, exist_ok=True)
+        work = tempfile.mkdtemp(prefix=f"fweval-{task}-", dir=scratch)
+        shutil.copytree(os.path.join(tdir, "bundle"), os.path.join(work, "bundle"))
+        os.makedirs(os.path.join(work, "state"), exist_ok=True)
+    except OSError as e:
+        raise SystemExit(f"准备工作区失败: {e}") from e
+    if os.path.exists(os.path.join(work, "answers")):
+        raise SystemExit("工作区里出现了 answers/ ⇒ 隔离被破坏")
+    return work
+
+
 def _write_evidence(out: str, task: str, model: str, workdir: str, score: dict, run) -> None:
     """把一次评测写成可复查的 Markdown(含模型结论原文与评分依据)。"""
     try:
@@ -78,8 +120,7 @@ def main() -> int:
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
-    tdir = os.path.join(TASKS, args.task)
-    answers = json.load(open(os.path.join(tdir, "answers", "expected.json"), encoding="utf-8"))
+    public, answers = load_task(args.task)
 
     if args.rescore:
         con0 = _db.connect(os.path.join(args.rescore, "state", "fwcore.sqlite3"))
@@ -91,11 +132,7 @@ def main() -> int:
         print(f"[evidence] {out0}(重评,未调用模型)")
         return 0 if score0["passed"] else 1
 
-    scratch = os.path.join(ROOT, "state", "_scratch")
-    os.makedirs(scratch, exist_ok=True)
-    work = tempfile.mkdtemp(prefix=f"fweval-{args.task}-", dir=scratch)
-    shutil.copytree(os.path.join(tdir, "bundle"), os.path.join(work, "bundle"))
-    os.makedirs(os.path.join(work, "state"), exist_ok=True)
+    work = prepare_workspace(args.task)      # 内部已建好 state/_scratch 并只拷 bundle/
 
     con = _db.connect(os.path.join(work, "state", "fwcore.sqlite3"))
     dom = Domain(con, work)
@@ -112,7 +149,7 @@ def main() -> int:
     authz = Authz(roots=[work], allow_shell=True, allow_high_risk=True, reason="评测授权(仅本临时工作区)")
     runner = Runner(con, work, adapter, max_steps=(args.steps or None),
                     policy=Policy(authorization=authz), timeout=60, max_seconds=args.max_seconds)
-    res = runner.advance(args.task, answers["goal"], max_rounds=args.rounds)
+    res = runner.advance(args.task, public["goal"], max_rounds=args.rounds)
     score = _score(args.task, answers, con, tid)
     score.update({"run": {"state": res.state, "rounds": res.rounds, "handback": res.handback,
                           "final": res.final[:300]}, "workdir": work})
