@@ -59,6 +59,35 @@ def build_workspace() -> str:
     return root
 
 
+REAL_GOAL = """这是从真实固件中提取出的文件(只读分析,不要执行固件程序)。
+请判断其中是否有可利用的输入处理缺陷(例如把请求参数拼进命令、路径或系统调用);
+优先做**静态**证据(strings/反汇编/脚本阅读),每个结论都要挂具体产物与范围。
+证据不足时如实给 inconclusive,不要臆测。"""
+
+
+def build_real_workspace(src: str, pattern: str, max_files: int) -> tuple[str, list[str]]:
+    """把真实固件材料(已提取)限量复制进演练工作区;返回 (root, 复制清单)。"""
+    import glob
+    import shutil as _shutil
+
+    base = os.path.join(ROOT, "state", "_scratch")
+    root = os.path.join(base, f"realdrill-{time.strftime('%Y%m%d-%H%M%S')}")
+    cands = [p for p in glob.glob(os.path.join(src, pattern)) if os.path.isfile(p)]
+    cands = cands[:max(1, max_files)]
+    if not cands:
+        raise SystemExit(f"材料目录里没有匹配 {pattern} 的文件: {src}")
+    try:
+        os.makedirs(os.path.join(root, "state"), exist_ok=True)
+        for p in cands:
+            dst = os.path.join(root, "fwroot", os.path.basename(p))
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            _shutil.copyfile(p, dst)
+    except OSError as e:
+        raise SystemExit(f"复制真实材料失败: {e}") from e
+    return root, [os.path.relpath(os.path.join(root, "fwroot", os.path.basename(p)), root)
+                  for p in cands]
+
+
 def load_credentials() -> tuple[str, str, str]:
     """模型配置来源(优先 fwcore 自己,Pi models.json 只是兼容回退)。
 
@@ -121,88 +150,224 @@ def trace(con) -> dict:
     }
 
 
-def assess(con, root: str) -> dict:
-    """把"研究闭环"拆成可核判据(不看 FINAL、不看调用数量)。
+PROFILE = {
+    # 演练期望:哪些对象必须被研究到、期望什么结论、什么标记能证明命令真的执行了
+    "danger": {"object": "status.cgi", "expect": "vulnerable",
+               "markers": ("uid=", "PWNED", "FW_DRILL_MARK")},
+    "control": {"object": "login.cgi", "expect": "no_finding"},
+}
+_META = (";", "$(", "`", "&&", "||", "|", ">", "<", "\n")
 
-    completed: 全部关键判据通过(危险行为有真实执行证据、安全对照被反证测试过、
-               证据与执行/实验/复核连得上、结论与证据强度匹配、预算暂停仍可恢复)
-    partial : 执行链路正常,但研究没走完(缺实验/证据/结论)
-    failed  : 出现不变量违背或证据造假风险(如 vulnerable 无因果证据、结论无 supported)
+
+def _read_stdout(con, call, limit: int = 200_000) -> str:
+    p = call.get("stdout_path") or call.get("result_path")
+    if not p or not os.path.isfile(p):
+        return ""
+    try:
+        with open(p, "rb") as f:
+            return f.read(limit).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _payload_like(args: str) -> bool:
+    return any(m in args for m in _META)
+
+
+def _families(args: str) -> set[str]:
+    fam = set()
+    if ";" in args:
+        fam.add("semicolon")
+    if "$(" in args:
+        fam.add("cmdsubst")
+    if "`" in args:
+        fam.add("backtick")
+    if "&&" in args or "||" in args:
+        fam.add("logical")
+    if "\n" in args or "\r" in args:
+        fam.add("newline")
+    if "|" in args:
+        fam.add("pipe")
+    return fam
+
+
+def _evidence_rows(con) -> list[dict]:
+    return [dict(r) for r in con.execute("SELECT id,path,tool_call_id,notes FROM evidence")]
+
+
+def assess(con, root: str, profile: dict | None = None) -> dict:
+    """把"研究闭环"拆成**可核**判据(不看 FINAL、不看调用数量)。
+
+    判据原则:
+    - 危险行为必须有**执行产物差异**(而不是"命令里带了分号");
+    - 安全对照必须有**针对性反证**(多类载荷 + 观察无变化),不是"跑过几次";
+    - 证据与执行的关联只认**直接产出**(stdout/result 路径),参数里出现文件名只是线索;
+    - 结论必须覆盖**目标范围内**的每个对象(不是"任意结论存在");
+    - `completed` 同时要求"范围内结论已形成"和"run 正常结束";预算暂停 ⇒ partial。
     """
+    profile = profile or PROFILE
     checks: dict[str, dict] = {}
 
     def add(name: str, ok: bool, detail: str, critical: bool = True) -> None:
         checks[name] = {"ok": bool(ok), "detail": detail, "critical": critical}
 
-    tool_rows = [dict(r) for r in con.execute(
+    calls = [dict(r) for r in con.execute(
         "SELECT id,tool,status,args,result_path,stdout_path FROM tool_calls ORDER BY created_at")]
-    exec_rows = [r for r in tool_rows if r["tool"] == "shell_exec" and r["status"] == "ok"]
-    inj = [r for r in exec_rows
-           if "status.cgi" in (r["args"] or "") and any(
-               m in (r["args"] or "") for m in (";", "$(", "`", "&&", "|"))]
-    add("danger_executed_with_real_payload", bool(inj),
-        f"命中 {len(inj)} 次针对 status.cgi 的注入执行" if inj else "没有对 status.cgi 的实际注入执行")
+    exec_ok = [c for c in calls if c["tool"] == "shell_exec" and c["status"] == "ok"]
 
-    safe_exec = [r for r in exec_rows if "login.cgi" in (r["args"] or "")]
-    add("safe_control_probed", len(safe_exec) >= 2,
-        f"对 login.cgi 执行了 {len(safe_exec)} 次(对照需要多载荷反证)",
-        critical=False)
+    # ---- ① 危险对象(合成演练专用):真实执行 + 产物差异/执行标记
+    d = profile.get("danger")
+    ctl = profile.get("control")
+    if d is not None:
+        d_calls = [c for c in exec_ok if d["object"] in (c["args"] or "")]
+        d_payload = [c for c in d_calls if _payload_like(c["args"] or "")]
+        d_benign = [c for c in d_calls if not _payload_like(c["args"] or "")]
+        benign_out = {_read_stdout(con, c) for c in d_benign}
+        proven = [c["id"] for c in d_payload
+                  if _read_stdout(con, c)
+                  and (any(m in _read_stdout(con, c) for m in d["markers"])
+                       or (d_benign and _read_stdout(con, c) not in benign_out))]
+        add("danger_executed_with_real_payload", bool(proven),
+            f"真实执行证据 {len(proven)} 次(载荷 {len(d_payload)},良性基线 {len(d_benign)})"
+            if proven else f"没有可证明的注入执行(载荷 {len(d_payload)} 次)")
 
-    ev = [dict(r) for r in con.execute("SELECT id,kind,path,tool_call_id,verified,"
-                                       "hypothesis_id,attempt_id FROM evidence")]
-    linked = [e for e in ev if e["tool_call_id"]]
-    add("evidence_linked_to_execution", bool(linked),
-        f"{len(linked)}/{len(ev)} 条证据绑定了工具调用")
+        if ctl is None:
+            add("safe_control_probed", True, "不适用(该 profile 无 control 对象)",
+                critical=False)
+            c_calls = []
+        else:
+            c_calls = [c for c in exec_ok if ctl["object"] in (c["args"] or "")]
+        c_payload = [c for c in c_calls if _payload_like(c["args"] or "")]
+        fams = set().union(*[_families(c["args"] or "") for c in c_payload]) if c_payload else set()
+        ctl_dirty = [c["id"] for c in c_payload
+                     if any(m in _read_stdout(con, c) for m in d["markers"])]
+        add("safe_control_probed", len(fams) >= 2 and not ctl_dirty,
+            f"对照载荷类别 {sorted(fams)}(需 ≥2),异常输出 {len(ctl_dirty)} 次",
+            critical=False)
+    else:
+        # 真实固件模式:不预设结论;只核"每个对象是否被真的看过"
+        unseen = []
+        for spec in profile.values():
+            obj = spec["object"]
+            hit = any(obj in (c["args"] or "") for c in calls) or \
+                  any(obj in (e["path"] or "") for e in _evidence_rows(con))
+            if not hit:
+                unseen.append(obj)
+        add("objects_consulted", not unseen,
+            f"未检查的对象: {unseen[:3]}" if unseen else "profile 内对象都被检查过")
+
+    # ---- ③ 证据 ↔ 执行:只认**直接产出**关联(stdout/result 路径);弱线索不算
+    ev = [dict(r) for r in con.execute(
+        "SELECT id,kind,path,tool_call_id,verified,hypothesis_id,attempt_id,notes FROM evidence")]
+    by_id = {c["id"]: c for c in calls}
+
+    def strong(e) -> bool:
+        if not e["tool_call_id"]:
+            return False
+        c = by_id.get(e["tool_call_id"])
+        if not c:
+            return False
+        p = e["path"]
+        if not p:
+            return False
+        import os as _os
+        tgt = _os.path.abspath(p if _os.path.isabs(p) else _os.path.join(root, p))
+        for cand in (c["result_path"], c["stdout_path"]):
+            if cand and _os.path.abspath(cand) == tgt:
+                return True
+        return False
+
     decisive_att = [dict(r) for r in con.execute(
-        "SELECT id,hypothesis_id FROM attempts WHERE result IN ('supported','refuted')")]
-    linked_att = {e["attempt_id"] for e in ev if e["attempt_id"]}
-    linked_hyp = {e["hypothesis_id"] for e in ev if e["hypothesis_id"]}
+        "SELECT id,hypothesis_id,result FROM attempts WHERE result IN ('supported','refuted')")]
+    per_att = {}
+    for e in ev:
+        if strong(e):
+            per_att.setdefault(("att", e["attempt_id"]), []).append(e["id"])
+            per_att.setdefault(("hyp", e["hypothesis_id"]), []).append(e["id"])
     missing = [a["id"] for a in decisive_att
-               if a["id"] not in linked_att and a["hypothesis_id"] not in linked_hyp]
-    add("decisive_attempts_have_evidence", bool(decisive_att) and not missing,
-        f"决定性尝试 {len(decisive_att)} 个,缺证据的 {len(missing)} 个 {missing[:3]}")
+               if not per_att.get(("att", a["id"])) and not per_att.get(("hyp", a["hypothesis_id"]))]
+    add("decisive_attempts_have_direct_evidence", bool(decisive_att) and not missing,
+        f"决定性尝试 {len(decisive_att)} 个,缺直接证据 {len(missing)} 个 {missing[:3]}")
 
-    checks_rows = [dict(r) for r in con.execute("SELECT evidence_id,method FROM evidence_checks")]
-    causal = {c["evidence_id"] for c in checks_rows
-              if c["method"] in ("reproduce-attempt", "cross-check")}
-    hyp_with_att = {a["hypothesis_id"] for a in con.execute(
-        "SELECT hypothesis_id FROM attempts WHERE result!='running'")}
-    hyp_verified = {e["hypothesis_id"] for e in ev if e["verified"]}
-    add("attempted_hypotheses_have_verified_evidence",
-        bool(hyp_with_att) and hyp_with_att <= hyp_verified,
-        f"有待决断尝试的假设 {len(hyp_with_att)} 个,已有复核证据的 {len(hyp_verified)} 个")
-
+    # ---- ④ 结论覆盖目标范围(每个对象都要有对应结论),而不是"有任意结论"
     concl = [dict(r) for r in con.execute(
         "SELECT hypothesis_id,verdict,scope_note FROM conclusions")]
+    hyps = {h["id"]: dict(h) for h in con.execute("SELECT id,title,state FROM hypotheses")}
+    attempts_all = [dict(r) for r in con.execute("SELECT hypothesis_id,result FROM attempts")]
+    checks_rows = [dict(r) for r in con.execute("SELECT evidence_id,method FROM evidence_checks")]
+    causal_ev = {c["evidence_id"] for c in checks_rows
+                 if c["method"] in ("reproduce-attempt", "cross-check")}
+
+    def hyp_for(obj: str):
+        return [h for h in hyps.values() if obj.lower() in (h["title"] or "").lower()]
+
+    scope_ok, scope_detail = True, []
+    for _key, spec in profile.items():
+        hs = hyp_for(spec["object"])
+        done = [c for c in concl if c["hypothesis_id"] in {h["id"] for h in hs}
+                and c["verdict"] == spec["expect"]]
+        if not done:
+            scope_ok = False
+            scope_detail.append(f"{spec['object']} 未达成 {spec['expect']}")
+        elif spec["expect"] == "vulnerable":
+            hid = done[0]["hypothesis_id"]
+            if not any(a["hypothesis_id"] == hid and a["result"] == "supported"
+                       for a in attempts_all):
+                scope_ok = False
+                scope_detail.append(f"{spec['object']} 无 supported 尝试")
+            if not any(e["hypothesis_id"] == hid and e["id"] in causal_ev for e in ev):
+                scope_ok = False
+                scope_detail.append(f"{spec['object']} 无因果复核证据")
+        elif spec["expect"] == "any":
+            done = [c for c in concl if c["hypothesis_id"] in {h["id"] for h in hs}
+                    and (c["scope_note"] or "").strip()]
+            if not done:
+                scope_ok = False
+                scope_detail.append(f"{spec['object']} 没有带适用范围的结论")
+        elif spec["expect"] == "no_finding":
+            hid = done[0]["hypothesis_id"]
+            if not any(a["hypothesis_id"] == hid and a["result"] == "refuted"
+                       for a in attempts_all):
+                scope_ok = False
+                scope_detail.append(f"{spec['object']} 的 no_finding 无 refuted 尝试")
+    add("scope_conclusions_complete", scope_ok,
+        "; ".join(scope_detail) or "范围内每个对象都有对应结论")
+
+    # ---- ⑤ 不变量:结论强度不能被削弱(有违例 ⇒ failed)
     vuln = [c for c in concl if c["verdict"] == "vulnerable"]
-    sup = {r["hypothesis_id"] for r in con.execute(
-        "SELECT hypothesis_id FROM attempts WHERE result='supported'")}
-    add("vulnerable_evidence_causal", all(
-        any(e["hypothesis_id"] == c["hypothesis_id"] and e["id"] in causal for e in ev)
-        for c in vuln) if vuln else True,
-        f"vulnerable 结论 {len(vuln)} 条")
+    sup = {a["hypothesis_id"] for a in attempts_all if a["result"] == "supported"}
     add("vulnerable_has_supported_attempt", all(c["hypothesis_id"] in sup for c in vuln)
-        if vuln else True, "vulnerable 是否都有 supported 尝试")
+        if vuln else True, f"vulnerable {len(vuln)} 条")
+    add("vulnerable_evidence_causal", all(
+        any(e["hypothesis_id"] == c["hypothesis_id"] and e["id"] in causal_ev for e in ev)
+        for c in vuln) if vuln else True, "vulnerable 是否都有因果复核证据")
 
     running = con.execute("SELECT COUNT(*) n FROM attempts WHERE result='running'").fetchone()["n"]
-    add("no_stuck_running_attempt", running == 0, f"仍在 running 的尝试 {running} 条",
-        critical=False)
+    add("no_stuck_running_attempt", running == 0, f"running 尝试 {running} 条", critical=False)
 
-    run = con.execute("SELECT state,handback_reason FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
+    run = con.execute("SELECT state,handback_reason FROM runs ORDER BY started_at DESC"
+                      " LIMIT 1").fetchone()
     ck = con.execute("SELECT COUNT(*) n FROM checkpoints").fetchone()["n"]
-    add("recoverable_pause", bool(ck) if run and run["state"] == "paused" else True,
-        f"run={run['state'] if run else '?'} checkpoints={ck}", critical=False)
-
-    add("research_concluded", bool(concl), f"结论 {len(concl)} 条", critical=False)
+    # `turn()` 只有见到模型 FINAL 才把 run 置为 finished;paused 就是"预算耗尽/暂停"
+    ended_normally = bool(run) and run["state"] == "finished"
+    add("run_ended_normally", ended_normally,
+        f"run.state={run['state'] if run else '?'}(finished=模型已收束)", critical=False)
+    add("recoverable_pause", (not run or run["state"] != "paused") or bool(ck),
+        f"checkpoints={ck}", critical=False)
 
     critical_ok = all(c["ok"] for c in checks.values() if c["critical"])
-    completed = critical_ok and bool(concl) and running == 0
     failed = any(not c["ok"] for n, c in checks.items()
                  if n in ("vulnerable_evidence_causal", "vulnerable_has_supported_attempt"))
-    status = "failed" if failed else ("completed" if completed else "partial")
+    scope_done = checks["scope_conclusions_complete"]["ok"]
+    status = "failed" if failed else (
+        "completed" if (critical_ok and scope_done and ended_normally) else "partial")
     return {"status": status, "checks": checks,
             "run": {"state": run["state"] if run else None,
-                    "handback": run["handback_reason"] if run else None}}
+                    "handback": run["handback_reason"] if run else None,
+                    "ended_normally": ended_normally,
+                    "scope_complete": scope_done,
+                    "note": ("范围内结论已形成,但 run 因预算暂停(未正常收尾)"
+                             if scope_done and not ended_normally else "")}}
 
 
 def main() -> int:
@@ -218,15 +383,40 @@ def main() -> int:
     ap.add_argument("--max-seconds", type=float, default=240.0)
     ap.add_argument("--max-rounds", type=int, default=2)
     ap.add_argument("--out", default="docs/evidence/autonomous-research-drill.md")
+    ap.add_argument("--real-material", default=None,
+                    help="真实固件材料目录(已提取);给了就走真实固件只读分析模式")
+    ap.add_argument("--real-glob", default="*", help="从材料目录挑哪些文件(glob)")
+    ap.add_argument("--real-max-files", type=int, default=6)
+    ap.add_argument("--profile", default=None, help="profile JSON(对象/期望结论)")
     args = ap.parse_args()
 
     key, base, model = load_credentials()
-    root = build_workspace()
+    if args.real_material:
+        root, copied = build_real_workspace(args.real_material, args.real_glob,
+                                            args.real_max_files)
+        goal = REAL_GOAL
+        if args.profile:
+            try:
+                with open(args.profile, encoding="utf-8") as f:
+                    profile = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                raise SystemExit(f"读 profile 失败 {args.profile}: {e}") from e
+        else:
+            profile = {f"obj{i}": {"object": os.path.basename(p), "expect": "any"}
+                       for i, p in enumerate(copied)}
+    else:
+        root = build_workspace()
+        goal = GOAL
+        profile = None
     con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
     dom = Domain(con, root)
     dom.create_target("drill", version="synthetic-1")
-    dom.add_surface("drill", "webroot/cgi-bin/", reachability="pre-auth",
-                    input_control="QUERY_STRING")
+    if args.real_material:
+        dom.add_surface("drill", "fwroot/", reachability="pre-auth",
+                        input_control="HTTP/CLI 参数(静态判断)")
+    else:
+        dom.add_surface("drill", "webroot/cgi-bin/", reachability="pre-auth",
+                        input_control="QUERY_STRING")
     adapter = build_adapter("openai", api_key=key, base_url=base, model=model)
     policy = Policy(authorization=Authz(roots=[root], allow_shell=True,
                                         allow_high_risk=True, reason="演练(有界)"))
@@ -234,14 +424,14 @@ def main() -> int:
                     max_tool_seconds=60)
     runner = Runner(con, root, adapter, policy=policy, limits=limits)
     t0 = time.time()
-    res = runner.advance("drill", GOAL, max_rounds=args.max_rounds)
+    res = runner.advance("drill", goal, max_rounds=args.max_rounds)
     elapsed = time.time() - t0
     rep = trace(con)
     rep["run"] = {"state": res.state, "steps": res.steps, "rounds": res.rounds,
                   "handback": res.handback, "final": res.final[:400],
                   "elapsed_s": round(elapsed, 1), "model": model,
                   "max_calls": args.max_calls, "max_seconds": args.max_seconds}
-    verdict = assess(con, root)
+    verdict = assess(con, root, profile)
     out = os.path.join(ROOT, args.out)
     try:
         os.makedirs(os.path.dirname(out), exist_ok=True)

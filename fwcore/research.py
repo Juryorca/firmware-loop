@@ -229,23 +229,29 @@ class Research:
             "                          'cancelled') THEN 1 ELSE 0 END) nondec,"
             "  (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id) ev,"
             "  (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1) ev_ok,"
+            "  (SELECT COUNT(DISTINCT c.evidence_id) FROM evidence_checks c"
+            "     JOIN evidence e2 ON e2.id=c.evidence_id"
+            "    WHERE e2.hypothesis_id=h.id AND c.method IN"
+            "          ('reproduce-attempt','cross-check')) ev_causal,"
             "  (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=0) ev_open"
             " FROM hypotheses h LEFT JOIN attempts a ON a.hypothesis_id=h.id"
             " WHERE h.target_id=? AND h.state IN ('open','investigating')"
             " GROUP BY h.id", (t.id,)).fetchall()
         hints = []
         for r in ready:
-            if r["sup"] and r["ev_ok"]:
-                hints.append(f"- {r['id']} 有 supported 尝试且证据都已复核 ⇒ 可 `state_conclude("
+            if r["sup"] and r["ev_causal"]:
+                hints.append(f"- {r['id']} 有 supported 尝试且已有 {r['ev_causal']} 条因果复核证据"
+                             f"(reproduce-attempt/cross-check)⇒ 可 `state_conclude("
                              f"hypothesis_id='{r['id']}', verdict='vulnerable', scope_note=…"
                              f"`(scope 要写清只管哪个入口/参数/版本)")
             elif r["ref"] and r["ev_ok"]:
                 hints.append(f"- {r['id']} 有 refuted 尝试且证据已复核 ⇒ 可 `state_conclude("
                              f"hypothesis_id='{r['id']}', verdict='no_finding', scope_note=…"
                              f"`(否证也要写清范围)")
-            elif r["sup"] and not r["ev_ok"]:
-                hints.append(f"- {r['id']} 已有 supported 尝试,但还没有已复核的证据 ⇒ "
-                             "先 state_verify_evidence(因果复核)再收口")
+            elif r["sup"] and not r["ev_causal"]:
+                hints.append(f"- {r['id']} 已有 supported 尝试,但只有 {r['ev_ok']} 条复核证据、"
+                             "其中 0 条是因果复核 ⇒ 先 state_verify_evidence("
+                             "method=reproduce-attempt|cross-check);**只有 recheck-sha256 不够**")
             if r["ev_open"] and r["ev_ok"]:
                 hints.append(f"- {r['id']} 另有 {r['ev_open']} 条证据未复核:不影响收口,"
                              "但结论不得引用未复核证据")
@@ -253,6 +259,16 @@ class Research:
             out = ["### 已具备收口条件(程序按事实判断;verdict 由你定)", *hints,
                    ""] + out
 
+        no_attempt = con.execute(
+            "SELECT h.id, h.title FROM hypotheses h WHERE h.target_id=?"
+            "   AND h.state IN ('open','investigating')"
+            "   AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.hypothesis_id=h.id)"
+            " ORDER BY h.created_at LIMIT 5", (t.id,)).fetchall()
+        if no_attempt:
+            out.append("### 已提出但还没开始验证的假设")
+            for r in no_attempt:
+                out.append(f"- {r['id']} {r['title'][:70]} ⇒ 先 `state_start_attempt("
+                           f"hypothesis_id='{r['id']}', method=…)` 记录你打算怎么验证")
         fails = con.execute(
             "SELECT tool, status, note FROM tool_calls WHERE run_id IN"
             " (SELECT id FROM runs WHERE target_id=?) AND status!='ok'"

@@ -17,8 +17,8 @@ import os
 import shlex
 import subprocess
 import time
-from dataclasses import dataclass, field
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # 只用于类型,避免循环导入
@@ -195,10 +195,8 @@ def _kill_group(proc: subprocess.Popen) -> None:
 
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    try:
+    with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        pass
 
 
 def _record(ctx: ToolContext, tool: str, args: dict, status: str, note: str = "",
@@ -215,7 +213,7 @@ def _record(ctx: ToolContext, tool: str, args: dict, status: str, note: str = ""
 def _now() -> str:
     import datetime as _d
 
-    return _d.datetime.now(_d.timezone.utc).isoformat(timespec="seconds")
+    return _d.datetime.now(_d.UTC).isoformat(timespec="seconds")
 
 
 # ---------------- 内置工具 ----------------
@@ -236,11 +234,13 @@ def _cancel_requested(ctx) -> bool:
     return bool(row and (row["handback_reason"] or "").startswith("user_stop"))
 
 
-_SHELL_META = (";", "|", "&&", "||", ">", "<", "$(", "`", "\n", "*", "?", "~")
+# 只有**改变命令结构**的语法才需要 shell;`* ? ~` 是普通字符(是否展开由调用方决定),
+# 不能因为文件名里有 `?` 就换成 shell 语义(那会意外改变含义)。
+_SHELL_SYNTAX = (";", "|", "&&", "||", ">", "<", "$(", "`", "\n")
 
 
 def _needs_shell(cmd: str) -> bool:
-    return any(m in cmd for m in _SHELL_META)
+    return any(m in cmd for m in _SHELL_SYNTAX)
 
 
 def shell_exec(ctx: ToolContext, args: dict) -> dict:
@@ -253,7 +253,15 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
     cmd = args.get("command")
     if not cmd:
         return {"status": "error", "error": "command 必填"}
-    use_shell = bool(args.get("shell")) or _needs_shell(cmd)
+    mode = str(args.get("mode") or "auto").lower()
+    if args.get("shell") is True:          # 兼容旧参数:等价 mode=shell
+        mode = "shell"
+    if isinstance(cmd, list):
+        mode = "argv"                      # 已是 argv 形式
+    if mode not in ("auto", "shell", "argv"):
+        return {"status": "error", "error": f"mode 非法: {mode}(允许 auto|shell|argv)"}
+    use_shell = (mode == "shell") or (
+        mode == "auto" and isinstance(cmd, str) and _needs_shell(cmd))
     pol = ctx.policy or Policy()
     workdir = pol.resolve_path(ctx.root, args.get("cwd", "."))
     if not os.path.isdir(workdir):
@@ -269,59 +277,67 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
     ep = os.path.join(art, f"{oid}.stderr")
     started = _now()
     try:
-        stack = contextlib.ExitStack()
-        fo = stack.enter_context(open(op, "wb"))
-        fe = stack.enter_context(open(ep, "wb"))
+        with open(op, "ab") as fo, open(ep, "ab") as fe:
+            try:
+                argv = (["bash", "-lc", cmd] if use_shell
+                        else (shlex.split(cmd) if isinstance(cmd, str) else cmd))
+                proc = subprocess.Popen(
+                    argv, cwd=workdir, stdout=fo, stderr=fe,
+                    start_new_session=True,     # 独立进程组 ⇒ 超时可整组杀掉
+                )
+                try:                        # 记录 pgid + 启动时间:看护杀组前要核对,防 pid 复用误杀
+                    pg = os.getpgid(proc.pid)
+                    with open(os.path.join(art, ".pgids"), "a", encoding="utf-8") as pf:
+                        pf.write(f"{pg} {_proc_starttime(proc.pid) or 0}\n")
+                except OSError:
+                    pass
+            except FileNotFoundError as e:
+                with open(ep, "ab") as fe2:
+                    fe2.write(f"命令不存在: {e}".encode())
+                return {"status": "error", "exit_code": None, "stdout_path": op, "stderr_path": ep,
+                        "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep)}
+            deadline = time.time() + float(timeout)
+            try:
+                while True:
+                    slice_s = max(0.02, min(0.2, deadline - time.time()))
+                    try:
+                        proc.wait(timeout=slice_s)
+                        code = proc.returncode
+                        status = "ok" if code == 0 else (
+                            "cancelled" if _cancel_requested(ctx) else "error")
+                        break
+                    except subprocess.TimeoutExpired:
+                        if _cancel_requested(ctx):
+                            _kill_group(proc)              # 取消:整组杀掉,不留在飞进程
+                            with contextlib.suppress(Exception):
+                                proc.wait(timeout=2)
+                            code, status = None, "cancelled"
+                            break
+                        if time.time() >= deadline:
+                            _kill_group(proc)              # 超时:同理会收拾整组
+                            code, status = None, "timeout"
+                            break
+            except BaseException:               # 中断(KeyboardInterrupt 等)也要收拾干净
+                _kill_group(proc)
+                raise
     except OSError as e:
-        return {"status": "error", "error": f"无法创建输出文件: {e}"}
-    with stack:
-        try:
-            argv = (["bash", "-lc", cmd] if use_shell
-                    else (shlex.split(cmd) if isinstance(cmd, str) else cmd))
-            proc = subprocess.Popen(
-                argv, cwd=workdir, stdout=fo, stderr=fe,
-                start_new_session=True,     # 独立进程组 ⇒ 超时可整组杀掉
-            )
-            try:                        # 记录 pgid + 启动时间:看护杀组前要核对,防 pid 复用误杀
-                pg = os.getpgid(proc.pid)
-                with open(os.path.join(art, ".pgids"), "a", encoding="utf-8") as pf:
-                    pf.write(f"{pg} {_proc_starttime(proc.pid) or 0}\n")
-            except OSError:
-                pass
-        except FileNotFoundError as e:
-            with open(ep, "ab") as fe2:
-                fe2.write(f"命令不存在: {e}".encode())
-            return {"status": "error", "exit_code": None, "stdout_path": op, "stderr_path": ep,
-                    "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep)}
-        deadline = time.time() + float(timeout)
-        try:
-            while True:
-                slice_s = max(0.02, min(0.2, deadline - time.time()))
-                try:
-                    proc.wait(timeout=slice_s)
-                    code = proc.returncode
-                    status = "ok" if code == 0 else (
-                        "cancelled" if _cancel_requested(ctx) else "error")
-                    break
-                except subprocess.TimeoutExpired:
-                    if _cancel_requested(ctx):
-                        _kill_group(proc)              # 取消:整组杀掉,不留在飞进程
-                        with contextlib.suppress(Exception):
-                            proc.wait(timeout=2)
-                        code, status = None, "cancelled"
-                        break
-                    if time.time() >= deadline:
-                        _kill_group(proc)              # 超时:同理会收拾整组
-                        code, status = None, "timeout"
-                        break
-        except BaseException:               # 中断(KeyboardInterrupt 等)也要收拾干净
-            _kill_group(proc)
-            raise
+        return {"status": "error", "error": f"无法写输出文件: {e}"}
     return {
-        "status": status, "exit_code": code, "started_at": started, "shell": use_shell,
+        "status": status, "exit_code": code, "started_at": started,
+        "shell": use_shell, "mode": mode,
         "stdout_path": op, "stderr_path": ep,
         "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep),
     }
+
+
+_INTERNAL_PREFIXES = ("state/fwcore.sqlite3", "state/artifacts/", "state/ida/",
+                      "state/_scratch/")
+
+
+def _is_internal(rel: str) -> bool:
+    """`state/` 下的框架内部文件(状态库/产物目录)不是研究对象。"""
+    norm = rel.replace(os.sep, "/").lstrip("./")
+    return any(norm == p.rstrip("/") or norm.startswith(p) for p in _INTERNAL_PREFIXES)
 
 
 def fs_read(ctx: ToolContext, args: dict) -> dict:
@@ -330,6 +346,12 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
         p = pol.resolve_path(ctx.root, args["path"])
     except Exception as e:
         return {"status": "error", "error": f"路径不合法: {e}"}
+    rel = os.path.relpath(p, ctx.root)
+    if _is_internal(rel):
+        return {"status": "error",
+                "error": f"{rel} 是框架内部文件(状态库/产物目录),不是研究对象。"
+                         "看汇总用 research_derived / research_queue;读工具输出用返回里的 "
+                         "stdout_path;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
     limit = int(args.get("limit", 64_000))
@@ -352,6 +374,12 @@ def fs_hash(ctx: ToolContext, args: dict) -> dict:
         p = pol.resolve_path(ctx.root, args["path"])
     except Exception as e:
         return {"status": "error", "error": f"路径不合法: {e}"}
+    rel = os.path.relpath(p, ctx.root)
+    if _is_internal(rel):
+        return {"status": "error",
+                "error": f"{rel} 是框架内部文件(状态库/产物目录),不是研究对象。"
+                         "看汇总用 research_derived / research_queue;读工具输出用返回里的 "
+                         "stdout_path;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
     return {"status": "ok", "sha256": _sha256(p), "bytes": os.path.getsize(p)}
@@ -370,42 +398,49 @@ def state_add_observation(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "observation_id": oid}
 
 
-def _auto_link_tool_call(ctx: ToolContext, path: str | None) -> tuple[str | None, str | None]:
-    """按产物路径回溯到产生它的工具调用(只认本 run 内成功的调用)。
+RELATION_BY_TOOL = {"fs_read": "read", "fs_hash": "hash",
+                     "shell_exec": "execution", "ida_query": "decompiled",
+                     "ghidra_query": "decompiled", "fw_extract": "extracted"}
 
-    为什么需要:模型经常只给 path,不记得给 tool_call_id ⇒ 证据与执行断链,复核也无从谈起。
-    路径匹配是**可复核**的确定性关联(不是猜):把命中的调用 id 记进证据,并在返回里说明。
+
+def _auto_link_tool_call(ctx: ToolContext, path: str | None) -> tuple[str | None, str | None, str | None]:
+    """按产物路径回溯到产生它的工具调用。返回 (tool_call_id, relation, weak_hint)。
+
+    **只把"直接产出"当作关联**:
+      - 证据路径 == 某次调用的 stdout/result 路径 ⇒ 直接来源,写 tool_call_id;
+      - 路径只出现在命令参数里(如 `cat a > b`)⇒ 只是**弱线索**:不写 tool_call_id,
+        返回提示串写进 notes(保留未关联状态,后续可补)。
     """
     if not path:
-        return None, None
-    try:
-        rows = ctx.domain.con.execute(
-            "SELECT id, provider, args, result_path, stdout_path FROM tool_calls"
-            " WHERE run_id=? AND status='ok' ORDER BY created_at DESC LIMIT 50",
-            (ctx.run_id,)).fetchall()
-    except Exception:
-        return None, None
+        return None, None, None
+    rows = ctx.domain.con.execute(
+        "SELECT id, tool, args, result_path, stdout_path FROM tool_calls"
+        " WHERE run_id=? AND status='ok' ORDER BY created_at DESC LIMIT 50",
+        (ctx.run_id,)).fetchall()
     target = os.path.abspath(path if os.path.isabs(path) else os.path.join(ctx.root, path))
-    rel = os.path.relpath(target, ctx.root)
     for r in rows:
-        for cand in (r["result_path"], r["stdout_path"]):
-            if cand and os.path.abspath(cand) == target:
-                return r["id"], "auto-linked-by-path"
-    # 次强证据:该路径出现在某次成功调用的参数里(例如 `echo x > proof.txt` / `cp a b`)
-    # —— 仍然是确定性的文本匹配,但比"产物路径完全相等"弱,所以在 link 里标出来
+        for out_path, direct_rel in ((r["result_path"], "tool-result"),
+                                     (r["stdout_path"], "execution-output")):
+            if out_path and os.path.abspath(out_path) == target:
+                relation = RELATION_BY_TOOL.get(r["tool"], "tool-output") \
+                    if direct_rel == "execution-output" else direct_rel
+                return r["id"], relation, None
+    rel_path = os.path.relpath(target, ctx.root)
+    base = os.path.basename(target)
     for r in rows:
         args = r["args"] or ""
-        if rel in args or os.path.basename(target) in args:
-            return r["id"], "auto-linked-by-args(弱关联:路径出现在命令里)"
-    return None, None
+        if rel_path in args or base in args:
+            return None, None, f"weak-args:路径出现在 {r['id']} 的参数里(不是直接产出)"
+    return None, None, None
 
 
 def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
     path = args.get("path")
     tid = args.get("tool_call_id")
-    link_note = None
+    relation = None
+    weak_hint = None
     if not tid:
-        tid, link_note = _auto_link_tool_call(ctx, path)
+        tid, relation, weak_hint = _auto_link_tool_call(ctx, path)
     eid = ctx.domain.add_evidence(
         args["target"], args["kind"], path=path, capture=args.get("capture"),
         attempt_id=args.get("attempt_id"), hypothesis_id=args.get("hypothesis_id"),
@@ -414,11 +449,15 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
         tool_call_id=tid, source=args.get("source"),
     )
     out = {"status": "ok", "evidence_id": eid, "linked_tool_call_id": tid,
-           "verified": False,
+           "relation": relation, "verified": False,
            "next": "复核后才算证据:state_verify_evidence(evidence_id, method=recheck-sha256|"
                    "reproduce-attempt|cross-check)"}
-    if link_note:
-        out["link"] = link_note
+    if relation:
+        out["link"] = f"direct:{relation}"
+    if weak_hint:
+        out["link"] = weak_hint
+        out["note"] = ("未建立来源关联(弱线索);如需确定来源,补充 tool_call_id 或"
+                       "用产生该文件的那次调用的产物路径")
     return out
 
 
@@ -507,9 +546,15 @@ def _sha256(path: str) -> str:
 def default_registry() -> Registry:
     r = Registry()
     r.register(ToolSpec(
-        "shell_exec", "在工作区里执行一条命令(有超时;输出落盘 + sha256)",
+        "shell_exec",
+        "在工作区里执行一条命令(有超时;输出落盘 + sha256)。"
+        "mode=auto(默认):含真正 shell 语法(; | && || > < $( ) ` 换行)时用 bash -lc,否则按 argv 执行;"
+        "mode=shell 强制 bash -lc;mode=argv 强制直接执行(不解释语法)。`* ? ~` 不触发 shell 模式",
         {"type": "object", "properties": {
-            "command": {"type": "string"}, "cwd": {"type": "string"},
+            "command": {"type": "string", "description": "命令字符串或 argv 数组"},
+            "mode": {"type": "string", "enum": ["auto", "shell", "argv"],
+                     "description": "auto=按语法判断;shell=bash -lc;argv=直接执行"},
+            "cwd": {"type": "string"},
             "timeout": {"type": "number"}}, "required": ["command"]},
         shell_exec, risk="high"))
     r.register(ToolSpec(

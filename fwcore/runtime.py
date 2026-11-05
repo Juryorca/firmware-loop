@@ -417,7 +417,24 @@ class Runner:
                                       artifacts_dir=os.path.join(self.root, "state", "artifacts", rid),
                                       policy=self.policy, research=self.research)
                     stalled = False
-                    for call in reply.tool_calls:
+                    cap = max(1, int(self.limits.max_tool_calls_per_turn))
+                    calls_this_turn = list(reply.tool_calls)
+                    if len(calls_this_turn) > cap:
+                        # 防止一次模型回复刷出上百次调用(演练里出现过 121 次):
+                        # 超出的**显式**告知未执行,而不是静默丢弃
+                        skipped = calls_this_turn[cap:]
+                        calls_this_turn = calls_this_turn[:cap]
+                        for c in skipped:
+                            history.append({"role": "tool", "tool_call_id": c.get("id"),
+                                            "name": c.get("name"),
+                                            "content": json.dumps(
+                                                {"status": "cancelled",
+                                                 "error": f"未执行:单轮工具调用上限 {cap}"
+                                                          "(把命令合并成更少的调用)"},
+                                                ensure_ascii=False)})
+                        _event(self.con, "run.tool_cap", rid,
+                               {"requested": len(reply.tool_calls), "executed": cap})
+                    for call in calls_this_turn:
                         sig = call["name"] + "|" + json.dumps(call.get("args") or {}, sort_keys=True,
                                                               ensure_ascii=False)
                         seen[sig] = seen.get(sig, 0) + 1
