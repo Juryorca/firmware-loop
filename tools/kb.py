@@ -21,7 +21,18 @@
 安全: flock 串行化并发写 → 临时文件 + os.replace 原子替换 → 结构自检 → 失败自动回滚原字节
 """
 
-import argparse, contextlib, datetime, fcntl, glob, hashlib, os, re, shutil, subprocess, sys, tarfile, tempfile
+import argparse
+import contextlib
+import datetime
+import fcntl
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.join(os.path.dirname(HERE), "knowledge")

@@ -5,7 +5,13 @@ The window width is computed from the longest visible line so the terminal
 background fills the image edge-to-edge (no bands); body and terminal share the
 same background color, making rounding leftovers invisible.
 """
-import html, math, re, subprocess, sys, tempfile, os
+import html
+import math
+import os
+import re
+import subprocess
+import sys
+import tempfile
 
 BASIC = ["#000000","#cd3131","#0dbc79","#e5e510","#2472c8","#bc3fbc","#11a8cd","#e5e510","#666666","#f14c4c","#23d18b","#f5f543","#3b8eea","#d670d6","#29b8db","#f5f543"]
 def xterm(n):

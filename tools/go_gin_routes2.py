@@ -5,7 +5,9 @@ Resolves Go string (ptr,len) from LEAQ/MOVL and tracks gin RouterGroup
 return values stored in stack slots, so nested Group("/x") prefixes are
 composed. Prints: file:line METHOD fullpath [scopes] handler.
 """
-import subprocess, re, sys
+import re
+import subprocess
+import sys
 
 GIN='github.com/gin-gonic/gin.(*RouterGroup).'
 METHODS={'GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS','Any','Static','StaticFS','StaticFile','handle'}

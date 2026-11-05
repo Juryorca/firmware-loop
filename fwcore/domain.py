@@ -587,6 +587,10 @@ class Domain:
         if not scope_note or len(scope_note.strip()) < 8:
             raise InvariantViolation("结论必须写适用范围(scope_note):这条结论管到哪个函数/入口/版本")
         h = self.hypothesis(hid)
+        if h["state"] == "concluded":
+            raise InvariantViolation(
+                f"该假设已收口(verdict={h['verdict']}),不能重复下结论;"
+                "要改判先明确撤销/重开(当前没有这个操作,请新建假设)")
         atts = self.con.execute("SELECT result FROM attempts WHERE hypothesis_id=?", (hid,)).fetchall()
         if not atts:
             raise InvariantViolation("没有任何尝试就下结论(先 start_attempt/finish_attempt)")

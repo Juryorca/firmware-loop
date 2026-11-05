@@ -6,7 +6,9 @@ Resolves LEAQ x(IP) string operands (Go string = ptr+len) and prints
 source-line, gin method, path, and nearby referenced funcs.
 Requires: go tool in PATH, readelf.
 """
-import subprocess, re, sys, struct
+import re
+import subprocess
+import sys
 
 GIN = 'github.com/gin-gonic/gin.(*RouterGroup).'
 METHODS = {'GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS','Any','Group','Use','Static','StaticFS','StaticFile','Handle','handle'}
@@ -109,7 +111,7 @@ def main():
                     for f in funcs[-8:]:
                         short=f.split('/')[-1]
                         ann.append(short+(' [scope='+closure_scope[f]+']' if f in closure_scope else ''))
-                    print(f"  {src}:{ln} {str(real):6} path={path!r} funcs={ann}")
+                    print(f"  {src}:{ln} {real!s:6} path={path!r} funcs={ann}")
                 recent=[]
             if len(recent)>80: recent=recent[-80:]
 

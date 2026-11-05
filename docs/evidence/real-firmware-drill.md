@@ -2,15 +2,16 @@
 
 **等级:长程真实模型演练(质量验收候选;预算≠完成标准)**
 
-- 结果: `{"state": "paused", "steps": 237, "rounds": 0, "handback": null, "final": "", "model": "deepseek-flash", "resumed_from": "R-20261105-0b4df34e", "max_calls": 220, "max_seconds": 3600.0, "counters": {"rounds": 0, "model_calls": 220, "tool_calls": 219, "elapsed_s": 846.27}}`
+- 结果: `{"state": "paused", "steps": 437, "rounds": 0, "handback": null, "final": "", "model": "deepseek-flash", "resumed_from": "R-20261105-0b4df34e", "max_calls": 420, "max_seconds": 5400.0, "counters": {"rounds": 0, "model_calls": 420, "tool_calls": 219, "elapsed_s": 1096.75}}`
 
 ## 闭环判定: **partial**
 
 | 判据 | ok | 说明 |
 |---|---|---|
 | objects_consulted | ✅ | profile 内对象都被检查过 |
-| decisive_attempts_have_direct_evidence | ❌ | 决定性尝试 4 个,缺直接证据 4 个 ['A-20261105-6f53ed83', 'A-20261105-3fe88e54', 'A-20261105-20124b78'] |
-| scope_conclusions_complete | ❌ | authLogin.cgi 未达成 any |
+| decisive_attempts_have_source_links | ❌ | 决定性尝试 4 个,无任何来源链接 3 个 ['A-20261105-3fe88e54', 'A-20261105-20124b78', 'A-20261105-62d5f2d1'] |
+| decisive_attempts_have_direct_evidence(非关键) | ❌ | 直接产出证据(source-link)覆盖 0/4 |
+| scope_conclusions_complete | ✅ | 范围内每个对象都有对应结论 |
 | vulnerable_has_supported_attempt | ✅ | vulnerable 0 条 |
 | vulnerable_evidence_causal | ✅ | vulnerable 是否都有因果复核证据 |
 | no_stuck_running_attempt(非关键) | ✅ | running 尝试 0 条 |

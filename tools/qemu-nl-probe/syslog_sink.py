@@ -3,7 +3,9 @@
 用途: 让 chroot 里的 guest daemon 能 connect("/dev/log")(很多 Synology 守护在拿不到
 syslog 时会直接 exit(1))。纯用户态,不改系统、不装东西。
 """
-import os, socket, sys
+import os
+import socket
+import sys
 
 path = sys.argv[1]
 try:

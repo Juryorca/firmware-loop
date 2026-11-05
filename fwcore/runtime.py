@@ -372,6 +372,7 @@ class Runner:
 
         try:
             seen: dict[str, int] = {}
+            empty_streak = 0
             since = _now()
             while budget is None or budget > 0:
                 stopped = self._external_stop(rid)
@@ -416,7 +417,18 @@ class Runner:
                 reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
                 history.append(reply.assistant_message() if (reply.content or reply.tool_calls)
                                else {"role": "assistant", "content": ""})
+                if not reply.tool_calls and not reply.content.strip().startswith("FINAL:"):
+                    # 既没有工具调用也不是 FINAL:对研究没有任何推进。连续多次就停(不是结论)
+                    empty_streak += 1
+                    if empty_streak >= self.stall_repeats:
+                        _event(self.con, "run.stalled", rid,
+                               {"reason": "no_tool_no_final", "streak": empty_streak})
+                        state = "paused"
+                        break
+                elif reply.tool_calls:
+                    empty_streak = 0
                 if reply.content.strip().startswith("FINAL:"):
+                    empty_streak = 0
                     final = reply.content.strip()
                     stopped_by_final = True
                     step += 1

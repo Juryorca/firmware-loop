@@ -89,35 +89,14 @@ def build_real_workspace(src: str, pattern: str, max_files: int) -> tuple[str, l
 
 
 def load_credentials() -> tuple[str, str, str]:
-    """模型配置来源(优先 fwcore 自己,Pi models.json 只是兼容回退)。
+    """与 CLI 共用同一份模型配置契约(`models.load_model_config`)。"""
+    from fwcore.models import load_model_config
 
-    1. 环境变量:FW_MODEL_API_KEY / FW_MODEL_BASE_URL / FW_MODEL_NAME(以及旧 FW_API_KEY/FW_BASE_URL)
-    2. `<root>/state/model.json`(或 FW_MODEL_CONFIG 指定):{"api_key","base_url","model"}
-    fwcore 不读 Pi 的配置;Pi 只是开发期的历史来源,不是契约。
-    """
-    key = os.environ.get("FW_MODEL_API_KEY") or os.environ.get("FW_API_KEY", "")
-    base = os.environ.get("FW_MODEL_BASE_URL") or os.environ.get("FW_BASE_URL", "")
-    model = os.environ.get("FW_MODEL_NAME", "")
-    if key and base and model:
-        return key, base, model
-
-    cfg_path = os.environ.get("FW_MODEL_CONFIG") or os.path.join("state", "model.json")
-    if os.path.isfile(cfg_path):
-        try:
-            with open(cfg_path, encoding="utf-8") as f:
-                d = json.load(f)
-            key = key or d.get("api_key", "")
-            base = base or d.get("base_url", "")
-            model = model or d.get("model", "")
-        except (OSError, json.JSONDecodeError) as e:
-            raise SystemExit(f"读不到模型配置 {cfg_path}: {e}") from e
-        if key and base and model:
-            return key, base, model
-
-    if key and base and model:
-        return key, base, model
-    raise SystemExit("没有模型配置:设置 FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME,"
-                     "或写 state/model.json(字段 api_key/base_url/model)")
+    key, base, model = load_model_config(ROOT)
+    if not (key and base and model):
+        raise SystemExit("没有模型配置:设置 FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME,"
+                         "或写 state/model.json(api_key/base_url/model)")
+    return key, base, model
 
 
 def trace(con) -> dict:
@@ -305,6 +284,13 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
 
     scope_ok, scope_detail = True, []
     for _key, spec in profile.items():
+        if spec["expect"] == "any":
+            # 真实固件模式:**不按标题猜对象**;只要求目标上有带适用范围的真实结论
+            done = [c for c in concl if (c["scope_note"] or "").strip()]
+            if not done:
+                scope_ok = False
+                scope_detail.append("没有任何带适用范围的结论")
+            continue
         hs = hyp_for(spec["object"])
         done = [c for c in concl if c["hypothesis_id"] in {h["id"] for h in hs}
                 and c["verdict"] == spec["expect"]]
@@ -320,12 +306,6 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
             if not any(e["hypothesis_id"] == hid and e["id"] in causal_ev for e in ev):
                 scope_ok = False
                 scope_detail.append(f"{spec['object']} 无因果复核证据")
-        elif spec["expect"] == "any":
-            done = [c for c in concl if c["hypothesis_id"] in {h["id"] for h in hs}
-                    and (c["scope_note"] or "").strip()]
-            if not done:
-                scope_ok = False
-                scope_detail.append(f"{spec['object']} 没有带适用范围的结论")
         elif spec["expect"] == "no_finding":
             hid = done[0]["hypothesis_id"]
             if not any(a["hypothesis_id"] == hid and a["result"] == "refuted"
@@ -449,6 +429,8 @@ def main() -> int:
                     help="墙钟预算秒(默认:smoke=240,长程=3600)")
     ap.add_argument("--max-rounds", type=int, default=None,
                     help="最多自动继续多少轮(默认:smoke=2,长程=不限;只防死循环)")
+    ap.add_argument("--goal", default=None,
+                    help="恢复时给模型的研究方向(默认沿用通用'继续研究')")
     ap.add_argument("--resume", default=None,
                     help="从已有演练工作区恢复(不新建工作区/不重复付费重跑)")
     ap.add_argument("--out", default="docs/evidence/autonomous-research-drill.md")
@@ -482,7 +464,8 @@ def main() -> int:
                         max_tool_seconds=120)
         runner = Runner(con, root, build_adapter(
             "openai", api_key=key, base_url=base, model=model), policy=policy, limits=limits)
-        res = runner.resume(row["id"], "继续研究(恢复:沿用已有假设/实验/证据)")
+        resume_goal = args.goal or "继续研究(恢复:沿用已有假设/实验/证据;不要重复已可靠完成的产物)"
+        res = runner.resume(row["id"], resume_goal)
         rep = trace(con)
         rep["run"] = {"state": res.state, "steps": res.steps, "rounds": res.rounds,
                       "handback": res.handback, "final": res.final[:400],

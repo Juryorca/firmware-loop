@@ -5,8 +5,15 @@
 #   .text encrypted page-by-page; per 64-byte chunk counter resets to 0 at the
 #   page's processing start => same 4KB keystream reused on every page/file.
 #   Page 0 is partial (starts at .text offset); pages>=1 are 4096-aligned.
-import struct, collections, math, sys, glob, os
+import collections
+import glob
+import math
+import os
+import struct
+import sys
+
 from capstone import *
+
 
 def shdr(d, name):
     e_shoff=struct.unpack_from('<Q',d,40)[0]; e_shentsize=struct.unpack_from('<H',d,58)[0]

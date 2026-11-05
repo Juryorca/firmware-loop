@@ -123,3 +123,29 @@ def test_elapsed_accumulates(tmp_path):
     r.resume(rid, "t1")
     second = _counters(con, rid)["elapsed_s"]
     assert second >= first, "累计墙钟只能增长"
+
+
+def test_no_tool_no_final_replies_pause_instead_of_burning_budget(tmp_path):
+    """模型连续只回文字、不调工具也不 FINAL ⇒ 暂停(不能白烧几百次调用)。"""
+    class EmptyAdapter:
+        name = "empty"
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools):
+            self.calls += 1
+            from fwcore.models import Reply
+
+            return Reply(content="我想想", tool_calls=[])
+
+    con, dom, root = _setup(tmp_path)
+    ad = EmptyAdapter()
+    r = Runner(con, root, ad, limits=Limits(max_model_calls=50), stall_repeats=3,
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+    rid = r.start("t1")
+    res = r.run(rid, "t1")
+    assert res.state == "paused"
+    assert ad.calls == 3, f"连续 3 次空转就应停,实际 {ad.calls}"
+    kinds = [row["kind"] for row in con.execute("SELECT kind FROM events")]
+    assert "run.stalled" in kinds

@@ -2,7 +2,9 @@
 """信号判定: 扫描 strace 日志输出二值判定 HIT/MISS。
 用法: parse_signal.py <strace日志> [payload标记串]
 HIT 判据: execve 命中 /bin/sh|busybox,含 payload 标记串的 execve,或 SIGSEGV/SIGILL/SIGBUS。"""
-import re, sys
+import re
+import sys
+
 log = sys.argv[1] if len(sys.argv) > 1 else "/tmp/emu_strace.log"
 mark = sys.argv[2] if len(sys.argv) > 2 else ""
 try:

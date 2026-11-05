@@ -23,19 +23,23 @@ import sys
 
 def sha256(p: str) -> str:
     h = hashlib.sha256()
-    with open(p, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    try:
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError as e:
+        raise SystemExit(f"读文件失败 {p}: {e}") from e
     return h.hexdigest()
 
 
-def text_range(elf: str) -> tuple[int, int]:
-    """用 readelf 取 .text 的 offset/size。"""
-    out = subprocess.run(["readelf", "-SW", elf], capture_output=True, text=True, timeout=60).stdout
+def text_range(elf: str) -> tuple[int, int, int]:
+    """用 readelf 取 .text 的 (虚拟地址, 文件偏移, 大小)。"""
+    out = subprocess.run(["readelf", "-SW", elf], capture_output=True, text=True,
+                         check=False, timeout=60).stdout
     for line in out.splitlines():
         m = re.match(r"\s*\[\s*\d+\]\s+\.text\s+\w+\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)", line)
         if m:
-            return int(m.group(1), 16), int(m.group(2), 16)
+            return int(m.group(1), 16), int(m.group(2), 16), int(m.group(3), 16)
     raise SystemExit(f"找不到 .text: {elf}")
 
 
@@ -48,18 +52,22 @@ def main() -> int:
     ap.add_argument("--expect-len", type=int, default=None)
     args = ap.parse_args()
 
-    with open(args.recovered, "rb") as f:
-        rec = f.read()
-    with open(args.original, "rb") as f:
-        orig_all = f.read()
+    try:
+        with open(args.recovered, "rb") as f:
+            rec = f.read()
+        with open(args.original, "rb") as f:
+            orig_all = f.read()
+    except OSError as e:
+        raise SystemExit(f"读输入失败: {e}") from e
     elf = args.elf or args.original
-    off, size = text_range(elf)
+    vaddr, off, size = text_range(elf)
     print(f"# 核验 {os.path.basename(args.recovered)}")
     print(f"- 恢复文本长度: {len(rec)}" + (f"(期望 {args.expect_len})" if args.expect_len else ""))
-    print(f"- .text offset=0x{off:x} size={size}")
+    print(f"- .text vaddr=0x{vaddr:x} offset=0x{off:x} size={size}")
     print(f"- sha256(recovered) = {sha256(args.recovered)}")
     ok_len = (args.expect_len is None or len(rec) == args.expect_len)
     print(f"- 长度匹配: {'PASS' if ok_len else 'FAIL'}")
+    failures: list[str] = [] if ok_len else ["恢复文本长度与期望不一致"]
 
     region = orig_all[off:off + len(rec)]
     n = min(len(region), len(rec))
@@ -76,6 +84,9 @@ def main() -> int:
         print(f"- period {p:6d}: key 一致率 {hit(p):.4f}")
     best = max((1024, 2048, args.period, args.period * 2), key=hit)
     print(f"- 最一致周期: {best} (一致率 {hit(best):.4f})")
+    if best != args.period or hit(best) < 0.99:
+        failures.append(f"周期检验未通过: 期望 {args.period} 且一致率≥0.99,"
+                        f"实际 best={best} rate={hit(best):.4f}")
 
     if args.elf and os.path.isfile(args.elf):
         print("\n## AArch64 解码质量")
@@ -88,9 +99,20 @@ def main() -> int:
         print(f"- 反汇编指令数: {len(lines)};疑似非法/未定义: {len(udf)} "
               f"({(100.0 * len(udf) / max(1, len(lines))):.2f}%)")
         print(f"- 函数序言(stp x29, x30): {len(pro)};BL 调用: {len(bls)}")
-        inside = [int(x, 16) for x in bls if off <= int(x, 16) < off + len(rec)]
+        inside = [int(x, 16) for x in bls if vaddr <= int(x, 16) < vaddr + size]
         print(f"- BL 目标落在 .text 内: {len(inside)}/{len(bls)}")
-    return 0 if ok_len else 1
+        bad_ratio = len(udf) / max(1, len(lines))
+        if bad_ratio > 0.01:
+            failures.append(f"反汇编非法率过高: {bad_ratio:.2%} > 1%")
+        if bls and len(inside) / len(bls) < 0.2:
+            failures.append(f"BL 目标落在 .text 内比例过低: {len(inside)}/{len(bls)}")
+    if failures:
+        print("\n## 结论: **FAIL**")
+        for f in failures:
+            print(f"- {f}")
+        return 1
+    print("\n## 结论: **PASS**(长度/周期/反汇编判据全部通过)")
+    return 0
 
 
 if __name__ == "__main__":

@@ -1,4 +1,8 @@
-import sys, os, time, threading
+import os
+import sys
+import threading
+import time
+
 sys.path.insert(0, r"C:\Users\30104\AppData\Roaming\Hex-Rays\IDA Pro\plugins")
 from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler
 

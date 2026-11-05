@@ -4,14 +4,20 @@
 退出码: 0 = 能接上(可以开始填表) / 1 = 接不上(打不开开关) / 2 = 环境问题(包跑不起来)
 不改任何配置:直接跟官方包走 stdio JSON-RPC,调一次 list_pages。
 """
-import json, subprocess, sys, threading, time
+import json
+import subprocess
+import sys
+import threading
+import time
+
 
 def main():
     tmo = 60
     if "--timeout" in sys.argv:
         tmo = int(sys.argv[sys.argv.index("--timeout") + 1])
     # WSL 里 --autoConnect 默认找本机(Linux)profile ⇒ 必须指到 Windows 的 profile 目录
-    import glob, os
+    import glob
+    import os
     ud = None
     for c in glob.glob("/mnt/c/Users/*/AppData/Local/Google/Chrome/User Data"):
         ud = c; break

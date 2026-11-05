@@ -294,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "view":
             print(render_view(con, args.root, args.target))
         elif args.cmd in ("run", "resume", "advance"):
-            model = _model(args.model, getattr(args, "script", None))
+            model = _model(args.model, args.root, getattr(args, "script", None))
             runner = Runner(con, args.root, model, max_steps=(args.steps or None),
                             watchdog=getattr(args, "watchdog", False),
                             watchdog_poll_s=getattr(args, "watchdog_poll", 5.0),
@@ -314,12 +314,18 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
 
-def _model(name: str, script_path: str | None = None):
+def _model(name: str, root: str, script_path: str | None = None):
+    """构造模型适配器。配置错误必须**报出来**,不能悄悄换一个模型。"""
     if name in ("openai", "deepseek", "openai-compat"):
         try:
-            key, base, model = load_model_config(args.root)
-        except Exception:
-            key, base, model = os.environ.get("FW_API_KEY", ""), os.environ.get("FW_BASE_URL", ""), "deepseek-chat"
+            key, base, model = load_model_config(root)
+        except ValueError as e:                 # 配置文件坏 / 读不了
+            raise SystemExit(f"模型配置错误: {e}") from e
+        if not (key and base and model):
+            raise SystemExit(
+                "模型配置不完整:设置 FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME,"
+                f"或写 {os.path.join(root, 'state', 'model.json')}"
+                "(字段 api_key/base_url/model)")
         return build_adapter("openai", api_key=key, base_url=base, model=model)
     # scripted:默认脚本 = 登记一条假设后收束(便于本地冒烟,不产生外部调用);
     # 给了 --script 就用文件里的脚本(测试/复现"模型决定了什么"时唯一确定的手段)

@@ -104,7 +104,7 @@ CREATE TABLE IF NOT EXISTS evidence (
   capture     TEXT,
   source      TEXT,
   tool_call_id TEXT,
-  verified    INTEGER NOT NULL DEFAULT 1,
+  verified    INTEGER NOT NULL DEFAULT 0,
   notes       TEXT,
   link_relation TEXT,
   created_at  TEXT NOT NULL
@@ -291,7 +291,7 @@ BASELINE_COLUMNS: dict[str, list[tuple[str, str]]] = {
              ("elapsed_s", "REAL NOT NULL DEFAULT 0"), ("budget_note", "TEXT")],
     "hypotheses": [("surface_key", "TEXT")],
     "evidence": [("source", "TEXT"), ("tool_call_id", "TEXT"),
-                 ("verified", "INTEGER NOT NULL DEFAULT 1"), ("notes", "TEXT"),
+                 ("verified", "INTEGER NOT NULL DEFAULT 0"), ("notes", "TEXT"),
                  ("link_relation", "TEXT")],
 }
 
@@ -304,21 +304,29 @@ def _migrate(con: sqlite3.Connection) -> None:
       测试库/临时库直接重建;研究工作区用 `python3 tools/db_rebaseline.py <db>`。
     研发期不为历史格式积累升级分支;只有正式发布、出现持久用户数据后才需要版本兼容策略。
     """
-    con.executescript(SCHEMA)
-    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    # 先读版本:旧库必须在**任何 DDL 之前**被拒绝,避免"拒绝的同时已经改了库"
+    script = SCHEMA
     try:
-        have = int(row["value"]) if row else 0
-    except (TypeError, ValueError):
-        raise RuntimeError(f"meta.schema_version 不是整数: {row['value']!r}") from None
-    if have == 0:
+        row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    except sqlite3.OperationalError:
+        row = None                      # 连 meta 都没有 ⇒ 全新的空库
+    if row is not None:
+        try:
+            have = int(row["value"])
+        except (TypeError, ValueError):
+            raise RuntimeError(f"meta.schema_version 不是整数: {row['value']!r}") from None
+        if have not in (0, SCHEMA_VERSION):
+            raise RuntimeError(
+                f"数据库 schema 版本 {have} ≠ 当前基线 {SCHEMA_VERSION}(开发期不做逐版本升级)。\n"
+                f"  测试/临时库:直接重建;研究工作区:先备份,再运行\n"
+                f"    python3 tools/db_rebaseline.py {con.execute('PRAGMA database_list').fetchone()[2]}\n"
+                f"  该脚本会做一致性快照、补齐基线列、校验完整性与关联。")
+    con.executescript(script)
+    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if row is None or int(row["value"]) == 0:
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
                     (str(SCHEMA_VERSION),))
-    elif have != SCHEMA_VERSION:
-        raise RuntimeError(
-            f"数据库 schema 版本 {have} ≠ 当前基线 {SCHEMA_VERSION}(开发期不做逐版本升级)。\n"
-            f"  测试/临时库:直接重建;研究工作区:先备份,再运行\n"
-            f"    python3 tools/db_rebaseline.py {con.execute('PRAGMA database_list').fetchone()[2]}\n"
-            f"  该脚本会复制 .bak 备份、补齐基线列、保留全部数据。")
     con.executescript(INDEXES)
 
 

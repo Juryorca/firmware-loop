@@ -13,14 +13,13 @@
 from __future__ import annotations
 
 import os
-import shutil
 import sqlite3
 import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fwcore.db import BASELINE_COLUMNS, INDEXES, SCHEMA, SCHEMA_VERSION  # noqa: E402
+from fwcore.db import BASELINE_COLUMNS, INDEXES, SCHEMA, SCHEMA_VERSION
 
 TABLES = ("targets", "surfaces", "hypotheses", "attempts", "observations",
           "evidence", "evidence_checks", "conclusions", "tool_calls", "runs",
@@ -33,6 +32,8 @@ def counts(con: sqlite3.Connection) -> dict[str, int]:
         if t not in TABLES:
             raise ValueError(f"非法表名: {t!r}")
         try:
+            # 表名来自本文件固定白名单(TABLES),不含外部输入
+
             out[t] = con.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()[0]  # nosemgrep: python.lang.security.audit.formatted-sql-query
         except sqlite3.OperationalError:
             out[t] = -1
@@ -44,11 +45,17 @@ def rebaseline(db: str) -> int:
         print(f"[skip] 不存在: {db}")
         return 0
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    for suffix in ("", "-wal", "-shm"):
-        src = db + suffix
-        if os.path.isfile(src):
-            shutil.copy2(src, f"{db}.bak-{stamp}{suffix}")
-    print(f"[backup] {db}.bak-{stamp}")
+    backup = f"{db}.bak-{stamp}"
+    # 用 SQLite 在线备份 API 做**一致性快照**(直接拷 db/-wal/-shm 在写入时可能不一致)
+    src = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        dst = sqlite3.connect(backup)
+        with dst:
+            src.backup(dst)
+        dst.close()
+    finally:
+        src.close()
+    print(f"[backup] {backup}(sqlite backup API 一致性快照)")
 
     con = sqlite3.connect(db, isolation_level=None)
     con.row_factory = sqlite3.Row
@@ -72,12 +79,36 @@ def rebaseline(db: str) -> int:
     con.executescript(INDEXES)
     after = counts(con)
     bad = [t for t in TABLES if before.get(t, 0) >= 0 and before[t] != after[t]]
-    con.close()
     print("[counts]", " ".join(f"{t}={after[t]}" for t in TABLES if after[t]))
+
+    problems: list[str] = []
     if bad:
-        print(f"[FAIL] 行数变化: {bad}", file=sys.stderr)
+        problems.append(f"行数变化: {bad}")
+    integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+    if integrity != "ok":
+        problems.append(f"integrity_check: {integrity}")
+    fk = con.execute("PRAGMA foreign_key_check").fetchall()
+    if fk:
+        problems.append(f"外键不成立 {len(fk)} 条(示例: {tuple(fk[0])[:3]})")
+    # 关键关联:证据必须挂到存在的目标/尝试;尝试必须挂到存在的假设;run 必须挂到存在的目标
+    for sql, label in (
+            (("SELECT COUNT(*) FROM evidence e LEFT JOIN targets t ON t.id=e.target_id "
+              "WHERE t.id IS NULL"), "证据指向不存在的目标"),
+            (("SELECT COUNT(*) FROM attempts a LEFT JOIN hypotheses h ON h.id=a.hypothesis_id "
+              "WHERE h.id IS NULL"), "尝试指向不存在的假设"),
+            (("SELECT COUNT(*) FROM runs r LEFT JOIN targets t ON t.id=r.target_id "
+              "WHERE t.id IS NULL"), "run 指向不存在的目标"),
+            (("SELECT COUNT(*) FROM evidence_checks c LEFT JOIN evidence e ON e.id=c.evidence_id "
+              "WHERE e.id IS NULL"), "复核记录指向不存在的证据")):
+        n = con.execute(sql).fetchone()[0]  # nosemgrep: python.lang.security.audit.formatted-sql-query
+        if n:
+            problems.append(f"{label}: {n} 条")
+    con.close()
+    if problems:
+        print("[FAIL] " + "; ".join(problems), file=sys.stderr)
+        print(f"       备份仍在: {backup}", file=sys.stderr)
         return 2
-    print("[ok] 数据行数保持一致")
+    print("[ok] 完整性/外键/关键关联校验通过,行数一致")
     return 0
 
 
