@@ -149,3 +149,11 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   断言 rc=0、输出 state、stderr 无 UnboundLocalError)
 - 证据:**`tests/test_cli_smoke.py` 6 passed in 12.86s**
 - 教训:编译器/Pyright 报的 "unbound" 不要一律当缓存假报 —— 这条是真的会挂 CLI 的
+
+### Iteration 17(`fw-core resume/advance` 缺 `--model` ⇒ AttributeError)
+- **复现**:`fw-core resume <rid>` / `fw-core advance t` ⇒ argparse 报 `unrecognized arguments: --model`,
+  而代码分支里用的是 `args.model` ⇒ 这两条 CLI 路径本来就是坏的(和 Iteration 16 同源:没人测过 CLI 分支)
+- 修复:`resume` 子命令补 `--model/--goal/--steps`;`advance` 已有 `--model/--rounds/--steps` ✓
+- 反例回归:`tests/test_cli_smoke.py::test_resume_and_advance_cli_paths`
+  (run → 取 run_id → resume → advance,三条都断言 rc=0 且 stderr 无 UnboundLocalError/AttributeError)
+- 证据:**`tests/test_cli_smoke.py` 7 passed in 12.83s**

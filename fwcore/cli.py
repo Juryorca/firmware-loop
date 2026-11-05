@@ -91,7 +91,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("run"); p.add_argument("target"); p.add_argument("--goal")
     p.add_argument("--model", default="scripted"); p.add_argument("--steps", type=int, default=0,
                    help="0 = 不限(默认;由模型自己决定何时收)")
-    p = sub.add_parser("resume"); p.add_argument("run_id"); p.add_argument("--steps", type=int, default=40)
+    p = sub.add_parser("resume"); p.add_argument("run_id")
+    p.add_argument("--model", default="scripted"); p.add_argument("--goal")
+    p.add_argument("--steps", type=int, default=0, help="0 = 不限")
     p = sub.add_parser("advance"); p.add_argument("target"); p.add_argument("--goal")
     p.add_argument("--model", default="scripted"); p.add_argument("--rounds", type=int, default=4)
     p.add_argument("--steps", type=int, default=40)

@@ -80,3 +80,29 @@ def test_run_command_works_end_to_end(tmp_path):
     out = json.loads(r.stdout)
     assert out["state"] in ("finished", "paused")
     assert "UnboundLocalError" not in r.stderr
+
+
+def test_resume_and_advance_cli_paths(tmp_path):
+    """同一个 UnboundLocalError 也会挂 resume/advance 分支 ⇒ 两条都要有反例覆盖。"""
+    root = str(tmp_path)
+    db = str(tmp_path / "ra.sqlite3")
+    env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t")
+    assert _run("--root", root, "--db", db, "init", "t", "--version", "1").returncode == 0
+
+    r1 = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
+                         "run", "t", "--model", "scripted", "--steps", "1"],
+                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r1.returncode == 0, r1.stderr[-500:]
+    rid = json.loads(r1.stdout)["run_id"]
+
+    r2 = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
+                         "resume", rid, "--model", "scripted", "--steps", "1"],
+                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r2.returncode == 0, r2.stderr[-500:]
+    assert "UnboundLocalError" not in r2.stderr
+
+    r3 = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
+                         "advance", "t", "--model", "scripted", "--rounds", "1", "--steps", "1"],
+                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r3.returncode == 0, r3.stderr[-500:]
+    assert "UnboundLocalError" not in r3.stderr
