@@ -108,8 +108,10 @@ def test_stop_only_kills_own_supervisor_and_matching_workers(tmp_path):
         out = subprocess.run(["bash", "tools/ida_stop.sh"], env=env,
                              capture_output=True, text=True, timeout=120)
         assert out.returncode == 0, out.stderr
-        time.sleep(0.5)
-        sup.poll()
+        # 轮询而不是固定 sleep:Windows 互操作(taskkill.exe)可能慢,固定等待会 flaky
+        deadline = time.time() + 10
+        while time.time() < deadline and sup.poll() is None:
+            time.sleep(0.1)
         assert sup.returncode is not None, "本环境的 supervisor 应被停掉"
         # 其它环境的 worker 注册不能被动
         assert (inst / "theirs.json").exists(), "不允许动其它实例的注册"
