@@ -12,7 +12,7 @@ import json
 import os
 import re
 
-from .tools import Registry, ToolContext, ToolSpec, shell_exec
+from .tools import Registry, ToolContext, shell_exec
 
 
 OBSERVERS = {}
@@ -133,101 +133,19 @@ def _obs_ida(text: str) -> dict:
     return {"status": "unparsed", "raw_tail": text[-160:]}
 
 
-def register_repo_tools(reg: Registry, root: str) -> None:
-    """注册 main 里已有的研究工具(按仓库实际存在的脚本)。"""
-    def exists(rel: str) -> bool:
-        return os.path.isfile(os.path.join(root, rel))
+def register_repo_tools(reg: Registry, root: str) -> dict:
+    """把仓库研究工具注册进 Registry。
 
-    if exists("tools/derived_check.sh"):
-        reg.register(ToolSpec(
-            "research_derived",
-            "重算派生量/覆盖度/材料完整性(程序可核):KB 条数、A2 覆盖度、finding 包、收尾前置",
-            {"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
-            lambda ctx, a: _run(ctx, f"bash tools/derived_check.sh {a['target']}", 90,
-                                tool="research_derived",
-                                meta={"capability": "gate.derived", "provider": "repo:derived_check.sh"})))
+    **不再逐个硬编码**:工具来自 `<root>/tools/registry/*.json` 的声明(见 `fwcore/toolreg.py`)。
+    新增已有执行类型的工具 = 加一个 manifest(+必要时适配器/解析器),不改这个函数、不改 Agent Loop。
 
-    if exists("tools/queue_state.sh"):
-        reg.register(ToolSpec(
-            "research_queue",
-            "队列/轮/池状态探针(只读):OPEN/BAD/ROUND/STOP/POOL/NEXT",
-            {"type": "object", "properties": {"target": {"type": "string"}}, "required": ["target"]},
-            lambda ctx, a: _run(ctx, f"bash tools/queue_state.sh {a['target']}", 60,
-                                tool="research_queue",
-                                meta={"capability": "state.queue", "provider": "repo:queue_state.sh"})))
+    返回注册报告(registered / unavailable / skipped),便于在 CLI/进度里如实展示"哪些工具没装上、为什么"。
+    """
+    from .adapters_ida import factory as ida_factory
+    from .toolreg import register_feature, register_manifests
 
-    if exists("tools/parse_signal.py"):
-        reg.register(ToolSpec(
-            "research_signal",
-            "按仓库信号约定判读工具输出(命令注入/崩溃等);返回 HIT/MISS 与依据",
-            {"type": "object", "properties": {"log": {"type": "string"}}, "required": ["log"]},
-            lambda ctx, a: _run(ctx, f"python3 tools/parse_signal.py {a['log']}", 60,
-                                tool="research_signal",
-                                meta={"capability": "signal.parse", "provider": "repo:parse_signal.py"})))
-
-    if exists("tools/cgi_fuzz.sh"):
-        reg.register(ToolSpec(
-            "fuzz_cgi",
-            "对厂商 CGI 做有界变异 fuzz(需提供字节/字符串种子与目标可执行);高风险,需确认",
-            {"type": "object", "properties": {
-                "args": {"type": "string", "description": "透传给 cgi_fuzz.sh 的参数串"},
-                "timeout": {"type": "number"}}, "required": ["args"]},
-            lambda ctx, a: _run(ctx, f"bash tools/cgi_fuzz.sh {a['args']}",
-                                float(a.get("timeout", 300)), tool="fuzz_cgi",
-                                meta={"capability": "fuzz.cgi", "provider": "repo:cgi_fuzz.sh"}),
-            risk="high"))
-
-    if os.path.isdir(os.path.join(root, "tools", "ghidra_scripts")):   # 目录要用 isdir,
-        def _ghidra(ctx: ToolContext, a: dict) -> dict:
-            """Ghidra 无头批处理(经既有脚本)。能力不可用时**如实报错**,不伪装成功。"""
-            from .providers import default_capabilities
-
-            cap = default_capabilities(ctx.root).get("debug.ghidra")
-            if cap is not None:
-                best, probe = cap.best()
-                if probe is None or probe.status == "missing":
-                    return {"status": "error",
-                            "error": "能力不可用:debug.ghidra 没有可用 provider(不会静默成功)",
-                            "meta": {"capability": "debug.ghidra", "provider": None}}
-            return _run(ctx, f"bash tools/ghidra_run.sh {a.get('args', '')}", float(a.get("timeout", 300)),
-                        tool="ghidra_query",
-                        meta={"capability": "debug.ghidra", "provider": "repo:ghidra_run.sh"})
-
-        reg.register(ToolSpec(
-            "ghidra_query",
-            "调用 Ghidra 无头脚本做函数画像/反编译;输出结构化;能力缺失时如实报错",
-            {"type": "object", "properties": {
-                "args": {"type": "string"}, "timeout": {"type": "number"}}, "required": ["args"]},
-            _ghidra, risk="high"))
-
-    if exists("tools/ida_call.sh"):
-        def _ida(ctx: ToolContext, a: dict) -> dict:
-            # 复用既有生命周期封装:先确保 supervisor 起来(幂等),再调用
-            start = os.path.join(root, "tools", "ida_start.sh")
-            if os.path.isfile(start):
-                shell_exec(ctx, {"command": f"bash {start}", "timeout": 120})
-            argv = a.get("args", "")
-            return _run(ctx, f"bash tools/ida_call.sh {argv}", float(a.get("timeout", 180)),
-                        tool="ida_query",
-                        meta={"capability": "debug.ida", "provider": "repo:ida_call.sh",
-                              "arch": a.get("arch")})
-
-        reg.register(ToolSpec(
-            "ida_query",
-            "调用 Windows IDA(经 WSL,复用 tools/ida_*.sh 生命周期)做反编译/函数画像;输出被结构化成字段",
-            {"type": "object", "properties": {
-                "args": {"type": "string", "description": "透传给 ida_call.sh 的参数串"},
-                "arch": {"type": "string"}, "timeout": {"type": "number"}},
-             "required": ["args"]},
-            _ida, risk="high"))
-
-    if exists("tools/emu_run.sh"):
-        reg.register(ToolSpec(
-            "emu_run",
-            "在提取的 rootfs 上跑用户态仿真(需要 rootfs 路径与命令);高风险,需确认",
-            {"type": "object", "properties": {
-                "args": {"type": "string"}, "timeout": {"type": "number"}}, "required": ["args"]},
-            lambda ctx, a: _run(ctx, f"bash tools/emu_run.sh {a['args']}",
-                                float(a.get("timeout", 180)), tool="emu_run",
-                                meta={"capability": "emu.run", "provider": "repo:emu_run.sh"}),
-            risk="high"))
+    # 特色适配器只在这里登记"名字 → 工厂";Registry 只按名字取,不知道 Windows/端口/暂存目录
+    register_feature("ida", ida_factory)
+    report = register_manifests(reg, root)
+    reg.registration = report
+    return report

@@ -1,0 +1,35 @@
+{
+  "name": "fuzz_cgi",
+  "description": "对厂商 CGI 做有界变异 fuzz(需提供字节/字符串种子与目标可执行);高风险,需确认",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "args": {
+        "type": "string",
+        "description": "透传给 cgi_fuzz.sh 的参数串"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "args"
+    ]
+  },
+  "kind": "script",
+  "argv": [
+    "bash",
+    "tools/cgi_fuzz.sh",
+    "{args}"
+  ],
+  "split_args": [
+    "args"
+  ],
+  "timeout": 300,
+  "timeout_arg": "timeout",
+  "observer": "fuzz_cgi",
+  "risk": "high",
+  "capability": "fuzz.cgi",
+  "provider": "repo:cgi_fuzz.sh",
+  "requires_file": "tools/cgi_fuzz.sh"
+}

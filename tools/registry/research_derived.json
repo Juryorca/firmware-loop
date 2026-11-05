@@ -1,0 +1,26 @@
+{
+  "name": "research_derived",
+  "description": "重算派生量/覆盖度/材料完整性(程序可核):KB 条数、A2 覆盖度、finding 包、收尾前置",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "target": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "target"
+    ]
+  },
+  "kind": "script",
+  "argv": [
+    "bash",
+    "tools/derived_check.sh",
+    "{target}"
+  ],
+  "timeout": 90,
+  "observer": "research_derived",
+  "capability": "gate.derived",
+  "provider": "repo:derived_check.sh",
+  "requires_file": "tools/derived_check.sh"
+}

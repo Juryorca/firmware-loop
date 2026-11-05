@@ -1,0 +1,29 @@
+{
+  "name": "research_signal",
+  "description": "按仓库信号约定判读工具输出(命令注入/崩溃等);返回 HIT/MISS 与依据",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "log": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "log"
+    ]
+  },
+  "kind": "script",
+  "argv": [
+    "python3",
+    "tools/parse_signal.py",
+    "{log}"
+  ],
+  "split_args": [
+    "log"
+  ],
+  "timeout": 60,
+  "observer": "research_signal",
+  "capability": "signal.parse",
+  "provider": "repo:parse_signal.py",
+  "requires_file": "tools/parse_signal.py"
+}

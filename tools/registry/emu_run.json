@@ -1,0 +1,34 @@
+{
+  "name": "emu_run",
+  "description": "在提取的 rootfs 上跑用户态仿真(需要 rootfs 路径与命令);高风险,需确认",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "args": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "args"
+    ]
+  },
+  "kind": "script",
+  "argv": [
+    "bash",
+    "tools/emu_run.sh",
+    "{args}"
+  ],
+  "split_args": [
+    "args"
+  ],
+  "timeout": 180,
+  "timeout_arg": "timeout",
+  "observer": "emu_run",
+  "risk": "high",
+  "capability": "emu.run",
+  "provider": "repo:emu_run.sh",
+  "requires_file": "tools/emu_run.sh"
+}

@@ -10,15 +10,16 @@
 
 from __future__ import annotations
 
-import hashlib
 import contextlib
+import hashlib
 import json
 import os
 import shlex
 import subprocess
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # 只用于类型,避免循环导入
     from .research import Research
@@ -33,11 +34,13 @@ class ToolSpec:
     name: str
     description: str
     input_schema: dict
-    handler: Callable[["ToolContext", dict], dict]
+    handler: Callable[[ToolContext, dict], dict]
     risk: str = "low"        # low | high
     # requires: 该类工具需要的授权能力(如 "mcp")。它是**可核的授权门**,不是提示
     requires: str | None = None
     external: bool = False   # 外网/登录态/公开提交:永远需要人类确认(high 需要人类确认,见 Runner)
+    # manifest:该工具来自哪个声明(fwcore/toolreg.py);核心工具为 None。仅审计用,运行时不读。
+    manifest: object | None = None
 
 
 @dataclass
@@ -49,12 +52,14 @@ class ToolContext:
     artifacts_dir: str = ""
     confirm: Callable[[str], bool] | None = None
     policy: Policy = None  # type: ignore[assignment]
-    research: "Research | None" = None    # 工具用它记三镜(见 fwcore/research.py)
+    research: Research | None = None    # 工具用它记三镜(见 fwcore/research.py)
 
 
 @dataclass
 class Registry:
     specs: dict[str, ToolSpec] = field(default_factory=dict)
+    # 注册报告(manifest 来源):registered / unavailable / skipped。空 = 还没做过 manifest 装载。
+    registration: dict = field(default_factory=dict)
 
     NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -182,10 +187,8 @@ def _kill_group(proc: "subprocess.Popen") -> None:
     """杀整个进程组(含子进程),并等待回收。"""
     import signal
 
-    try:
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
@@ -238,17 +241,21 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
         return {"status": "error", "error": f"cwd 不存在: {args.get('cwd', '.')}"}
     timeout = pol.clamp_timeout(args.get("timeout", ctx.timeout))
     art = ctx.artifacts_dir or os.path.join(ctx.root, "state", "artifacts", ctx.run_id or "local")
-    os.makedirs(art, exist_ok=True)
+    try:
+        os.makedirs(art, exist_ok=True)
+    except OSError as e:
+        return {"status": "error", "error": f"无法创建产物目录: {e}"}
     oid = new_id("OUT")
     op = os.path.join(art, f"{oid}.stdout")
     ep = os.path.join(art, f"{oid}.stderr")
     started = _now()
     try:
-        fo = open(op, "wb")
-        fe = open(ep, "wb")
+        stack = contextlib.ExitStack()
+        fo = stack.enter_context(open(op, "wb"))
+        fe = stack.enter_context(open(ep, "wb"))
     except OSError as e:
         return {"status": "error", "error": f"无法创建输出文件: {e}"}
-    with fo, fe:
+    with stack:
         try:
             proc = subprocess.Popen(
                 shlex.split(cmd) if isinstance(cmd, str) else cmd,
@@ -306,8 +313,11 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
     limit = int(args.get("limit", 64_000))
-    with open(p, "rb") as f:
-        data = f.read(limit + 1)
+    try:
+        with open(p, "rb") as f:
+            data = f.read(limit + 1)
+    except OSError as e:
+        return {"status": "error", "error": f"读文件失败: {e}"}
     truncated = len(data) > limit
     return {
         "status": "ok", "path": args["path"], "bytes": os.path.getsize(p),

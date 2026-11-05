@@ -1,0 +1,35 @@
+{
+  "name": "ghidra_query",
+  "description": "调用 Ghidra 无头脚本做函数画像/反编译;输出结构化;能力缺失时如实报错",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "args": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "args"
+    ]
+  },
+  "kind": "script",
+  "argv": [
+    "bash",
+    "tools/ghidra_run.sh",
+    "{args}"
+  ],
+  "split_args": [
+    "args"
+  ],
+  "timeout": 300,
+  "timeout_arg": "timeout",
+  "observer": "ghidra_query",
+  "risk": "high",
+  "capability": "debug.ghidra",
+  "provider": "repo:ghidra_run.sh",
+  "capability_required": "debug.ghidra",
+  "requires_file": "tools/ghidra_run.sh"
+}

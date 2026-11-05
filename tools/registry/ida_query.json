@@ -1,0 +1,31 @@
+{
+  "name": "ida_query",
+  "description": "调用 Windows IDA(经 WSL,自动启动 supervisor)做反编译/函数画像;输出被结构化成字段",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "args": {
+        "type": "string",
+        "description": "透传给 ida_call.sh 的参数串"
+      },
+      "arch": {
+        "type": "string"
+      },
+      "timeout": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "args"
+    ]
+  },
+  "kind": "feature",
+  "adapter": "ida",
+  "timeout": 180,
+  "timeout_arg": "timeout",
+  "observer": "ida_query",
+  "risk": "high",
+  "capability": "debug.ida",
+  "provider": "ida:supervisor",
+  "requires_file": "tools/ida_call.sh"
+}

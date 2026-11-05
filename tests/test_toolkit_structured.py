@@ -89,8 +89,9 @@ def test_ida_query_structured_json_and_fallback(tmp_path):
     assert OBSERVERS["ida_query"]("什么都没有")["status"] == "unparsed"
 
 
-def test_ida_tool_registered_and_uses_lifecycle(tmp_path):
+def test_ida_tool_registered_and_uses_lifecycle(tmp_path, monkeypatch):
     con, dom, root, reg, ctx = _setup(tmp_path)
+    monkeypatch.setenv("FW_IDA_PROBE", "0")     # 测试里不探测真实 Windows supervisor
     _stub(root, "tools/ida_start.sh", '#!/bin/sh\necho started\n')
     _stub(root, "tools/ida_call.sh", '#!/bin/sh\necho "{\\"functions\\": [], \\"count\\": 0}"\n')
     reg2 = Registry()
@@ -100,7 +101,8 @@ def test_ida_tool_registered_and_uses_lifecycle(tmp_path):
     assert out["observation"]["status"] == "ok"
     row = con.execute("SELECT provider, capability FROM tool_calls WHERE tool='ida_query'"
                       " ORDER BY created_at DESC LIMIT 1").fetchone()
-    assert row["provider"] == "repo:ida_call.sh" and row["capability"] == "debug.ida"
+    # 统一契约后 provider 由 manifest 声明(IDA 特色适配器的身份),不再是脚本名
+    assert row["provider"] == "ida:supervisor" and row["capability"] == "debug.ida"
 
 
 def test_ghidra_missing_capability_is_honest_error(tmp_path, monkeypatch):
@@ -114,6 +116,8 @@ def test_ghidra_missing_capability_is_honest_error(tmp_path, monkeypatch):
     monkeypatch.setattr(pv, "default_capabilities", lambda root: {"debug.ghidra": _Missing()})
     con, dom, root, reg, ctx = _setup(tmp_path)
     _stub(root, "tools/ghidra_scripts/dummy.java", "// stub\n")
+    # 统一契约:工具由 manifest 声明,入口脚本缺失就不注册(诚实报告能力缺失)
+    _stub(root, "tools/ghidra_run.sh", '#!/bin/sh\necho stub\n')
     reg2 = Registry()
     register_repo_tools(reg2, root)
     assert "ghidra_query" in {s["name"] for s in reg2.describe()}

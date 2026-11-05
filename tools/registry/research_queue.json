@@ -1,0 +1,26 @@
+{
+  "name": "research_queue",
+  "description": "队列/轮/池状态探针(只读):OPEN/BAD/ROUND/STOP/POOL/NEXT",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "target": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "target"
+    ]
+  },
+  "kind": "script",
+  "argv": [
+    "bash",
+    "tools/queue_state.sh",
+    "{target}"
+  ],
+  "timeout": 60,
+  "observer": "research_queue",
+  "capability": "state.queue",
+  "provider": "repo:queue_state.sh",
+  "requires_file": "tools/queue_state.sh"
+}

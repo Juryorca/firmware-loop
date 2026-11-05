@@ -17,8 +17,8 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 READY = "ready"
 PARTIAL = "partial"
@@ -232,9 +232,12 @@ def windows_ida_provider(root: str) -> Provider:
         if not os.path.isfile(idat):
             return Probe(MISSING, f"缺 {idat}")
         stage = "/mnt/d/ida_test"
-        if not os.path.isdir(stage) or not os.access(stage, os.W_OK):
-            return Probe(NOT_STARTED, f"{stage} 不可写")
-        ports = glob.glob(os.path.join(stage, ".port-*"))
+        try:
+            if not os.path.isdir(stage) or not os.access(stage, os.W_OK):
+                return Probe(NOT_STARTED, f"{stage} 不可写")
+            ports = glob.glob(os.path.join(stage, ".port-*"))
+        except OSError as e:
+            return Probe(NOT_STARTED, f"暂存区不可读: {e}")
         started = bool(ports)
         return Probe(READY if started else NOT_STARTED,
                      "IDA supervisor 已启动(端口文件存在)" if started
@@ -250,15 +253,19 @@ def windows_ida_provider(root: str) -> Provider:
 
 def mcp_provider(name: str, config_paths: list[str]) -> Provider:
     def _load() -> dict:
+        last_err = ""
         for p in config_paths:
             if os.path.isfile(p):
                 try:
-                    d = json.load(open(p, encoding="utf-8"))
+                    with open(p, encoding="utf-8") as f:
+                        d = json.load(f)
                     srv = (d.get("mcpServers") or {}).get(name)
                     if srv:
                         return srv
-                except Exception:
+                except (OSError, json.JSONDecodeError) as e:
+                    last_err = f"{p}: {e}"
                     continue
+        _ = last_err
         return {}
 
     def probe() -> Probe:
@@ -277,8 +284,9 @@ def _guest_roots(root: str) -> list[str]:
     """找可用于验证 guest 支持的 rootfs(只读扫描 state/*/rootfs*)。"""
     import glob as _g
 
-    return sorted({os.path.dirname(p) for p in _g.glob(os.path.join(root, "state", "*", "rootfs*", "bin"))
-                   } | {p for p in _g.glob(os.path.join(root, "state", "*", "rootfs*"))})
+    roots = {os.path.dirname(p) for p in _g.glob(os.path.join(root, "state", "*", "rootfs*", "bin"))}
+    roots |= set(_g.glob(os.path.join(root, "state", "*", "rootfs*")))
+    return sorted(roots)
 
 
 def default_capabilities(root: str, home: str | None = None) -> dict[str, Capability]:
@@ -332,4 +340,12 @@ def inventory(root: str) -> list[dict]:
                     "best": best.id if best else None,
                     "best_status": best_probe.status if best_probe else MISSING,
                     "providers": entries})
+    # 工具 manifest 是"能力 → 工具"的单一来源:这里只读,不重复维护清单
+    from .toolreg import capability_index
+
+    tools = capability_index(root)
+    for row in out:
+        own = tools.get(row["capability"]) or []
+        if own:
+            row["tools"] = own
     return out

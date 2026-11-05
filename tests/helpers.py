@@ -23,3 +23,8 @@ def verify(dom, ev_id: str, root: str, *, name: str = "cross-check.txt",
     """用 cross-check(带产物)把证据复核成 verified。"""
     return dom.verify_evidence(ev_id, "cross-check", artifact=artifact(root, name),
                                detail=detail)
+
+
+def echo_tool(ctx, args):
+    """供 manifest(kind=python)测试用的最小适配器。"""
+    return {"status": "ok", "text": f"echo:{args.get('text', '')}"}
