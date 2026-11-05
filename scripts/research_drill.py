@@ -213,7 +213,8 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
             f"对照载荷类别 {sorted(fams)}(需 ≥2),异常输出 {len(ctl_dirty)} 次",
             critical=False)
     else:
-        # 真实固件模式:不预设结论;只核"每个对象是否被真的看过"
+        # 真实固件模式:每个**对象**都要有证据路径/调用参数覆盖;
+        # 一条结论不能算覆盖多个对象(多对象 profile 必须逐个落实)
         unseen = []
         for spec in profile.values():
             obj = spec["object"]
@@ -285,11 +286,27 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
     scope_ok, scope_detail = True, []
     for _key, spec in profile.items():
         if spec["expect"] == "any":
-            # 真实固件模式:**不按标题猜对象**;只要求目标上有带适用范围的真实结论
+            # 真实固件模式:**不按标题猜对象**;只认"带适用范围的结论"。
+            # 多对象 profile:每个对象还必须被某条结论关联的证据路径覆盖
             done = [c for c in concl if (c["scope_note"] or "").strip()]
             if not done:
                 scope_ok = False
                 scope_detail.append("没有任何带适用范围的结论")
+                continue
+            if len(profile) == 1:
+                continue          # 单对象真实样本:一条带范围的结论即可(不按文件名猜)
+            obj = spec["object"]
+            hyp_ids = {c["hypothesis_id"] for c in done}
+            related = [e for e in ev if e["hypothesis_id"] in hyp_ids]
+            covered = any(obj in (e["path"] or "") or obj in (e.get("notes") or "")
+                          for e in related)
+            if not covered:
+                # 证据通常写在 report/artifacts 下、文件名不带样本名 ⇒ 再允许经假设正文关联
+                body_ok = any(obj in (hyps[h]["title"] + " " + (hyps[h].get("body") or ""))
+                              for h in hyp_ids if h in hyps)
+                if not body_ok:
+                    scope_ok = False
+                    scope_detail.append(f"{obj} 没有与结论关联的证据/假设")
             continue
         hs = hyp_for(spec["object"])
         done = [c for c in concl if c["hypothesis_id"] in {h["id"] for h in hs}
@@ -465,7 +482,17 @@ def main() -> int:
         runner = Runner(con, root, build_adapter(
             "openai", api_key=key, base_url=base, model=model), policy=policy, limits=limits)
         resume_goal = args.goal or "继续研究(恢复:沿用已有假设/实验/证据;不要重复已可靠完成的产物)"
+        # 恢复后按轮继续(每轮 resume 都从最新 checkpoint 载入历史,不会丢上下文);
+        # 轮数只是"这次恢复最多自动推进几轮",不是研究完成标准
+        rounds = args.max_rounds or 3
         res = runner.resume(row["id"], resume_goal)
+        for _ in range(rounds - 1):
+            if res.state in ("finished", "failed") or res.handback in (
+                    "closed", "awaiting_user_close", "needs_user_input", "user_stop"):
+                break
+            if res.state == "paused":
+                break
+            res = runner.resume(row["id"], resume_goal)
         rep = trace(con)
         rep["run"] = {"state": res.state, "steps": res.steps, "rounds": res.rounds,
                       "handback": res.handback, "final": res.final[:400],

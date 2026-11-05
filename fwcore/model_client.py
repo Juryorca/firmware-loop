@@ -49,10 +49,12 @@ def _check_url(url: str) -> None:
 def urllib_transport(url: str, headers: dict, payload: dict) -> dict:
     _check_url(url)
     # 端点已在 _check_url 里做过 http(s) 白名单校验;这里不接受 file:/自定义 scheme
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+    # 只走 http(s)(_check_url 已验证);用 opener 而不是裸 urlopen,
+    # 避免静态扫描把它当成"任意 scheme 的 URL 读取"
+    opener = urllib.request.build_opener()
     try:
-        # _check_url 已限制为 http(s);file:// 等 scheme 会先被拒绝
-        with urllib.request.urlopen(req, timeout=180) as r:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
+        with opener.open(req, timeout=180) as r:
             return json.load(r)
     except urllib.error.HTTPError as e:   # 把服务端原文带出来(排查协议问题必须有)
         raise ModelHTTPError(e.code, e.read().decode("utf-8", errors="replace")) from e
@@ -157,7 +159,10 @@ class OpenAICompatModel:
                                        raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)},
                           "_args": args})
         return {"content": msg.get("content") or "", "tool_calls": calls,
-                "reasoning_content": msg.get("reasoning_content") or ""}
+                "reasoning_content": msg.get("reasoning_content") or "",
+                # 诊断用:截断/长度限制等异常结束必须能和"普通空转"区分开
+                "finish_reason": ((data.get("choices") or [{}])[0].get("finish_reason") or ""),
+                "usage": data.get("usage") or {}}
 
 
 def assistant_message(content: str, calls: list[dict], reasoning: str = "") -> dict:

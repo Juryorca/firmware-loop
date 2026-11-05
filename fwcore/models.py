@@ -18,23 +18,30 @@ import os
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from .model_client import ModelHTTPError, OpenAICompatModel, assistant_message, to_api_messages
+from .model_client import (
+    ModelHTTPError,
+    OpenAICompatModel,
+    assistant_message,
+    to_api_messages,
+)
 
 __all__ = [
-    "Reply",
     "Adapter",
-    "ScriptedAdapter",
-    "OpenAICompatAdapter",
     "ModelHTTPError",
+    "OpenAICompatAdapter",
+    "Reply",
+    "ScriptedAdapter",
     "assistant_message",
-    "to_api_messages",
     "build_adapter",
+    "to_api_messages",
 ]
 
 
 @dataclass
 class Reply:
     content: str = ""
+    finish_reason: str = ""      # stop / length / tool_calls / content_filter …
+    usage: dict = field(default_factory=dict)     # token 统计(服务端给就给)
     tool_calls: list[dict] = field(default_factory=list)   # [{id, name, args(dict), args_raw(str)}]
     reasoning: str = ""
 

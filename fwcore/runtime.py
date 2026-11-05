@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import socket
@@ -28,6 +29,9 @@ from .policy import Policy
 from .research import Research
 from .toolkit import register_repo_tools
 from .tools import Registry, ToolContext, default_registry
+
+# FINAL 可能出现在多段文字里的任意**行首**(模型常写"本轮已收口…\nFINAL: …")
+_FINAL_RE = __import__("re").compile(r"(?m)^\s*FINAL:")
 
 # 兼容旧名(测试与脚本可能仍在用)
 ScriptedModel = ScriptedAdapter
@@ -373,6 +377,7 @@ class Runner:
         try:
             seen: dict[str, int] = {}
             empty_streak = 0
+            last_content_hashes: list[str] = []
             since = _now()
             while budget is None or budget > 0:
                 stopped = self._external_stop(rid)
@@ -415,19 +420,48 @@ class Runner:
                     break
                 run_calls += 1
                 reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
-                history.append(reply.assistant_message() if (reply.content or reply.tool_calls)
-                               else {"role": "assistant", "content": ""})
-                if not reply.tool_calls and not reply.content.strip().startswith("FINAL:"):
-                    # 既没有工具调用也不是 FINAL:对研究没有任何推进。连续多次就停(不是结论)
+                # 推理-only 的回复(content 空但 reasoning 非空)也要按 assistant 记录,
+                # 否则历史里只剩一条空白回复,既丢诊断信息也会让 thinking 模式协议不完整
+                if reply.content or reply.tool_calls or reply.reasoning:
+                    history.append(reply.assistant_message())
+                else:
+                    history.append({"role": "assistant", "content": ""})
+                _final_hit = _FINAL_RE.search(reply.content or "")
+                if not reply.tool_calls and not _final_hit:
+                    # 既没有工具调用也不是 FINAL:对研究没有推进。先记结构化诊断,再决定停不停
+                    content = reply.content or ""
+                    chash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
+                    last_content_hashes.append(chash)
+                    _event(self.con, "model.reply", rid, {
+                        "tool_calls": 0, "content_len": len(content),
+                        "reasoning_len": len(reply.reasoning or ""),
+                        "content_hash": chash,
+                        "finish_reason": reply.finish_reason or "",
+                        "usage": reply.usage or {},
+                        "preview": content[:120],
+                        # 分类:空 / 推理-only / 截断 / 纯文字
+                        "class": ("reasoning_only" if not content and reply.reasoning else
+                                  "empty" if not content and not reply.reasoning else
+                                  "truncated" if (reply.finish_reason or "").lower() == "length"
+                                  else "text_only")})
                     empty_streak += 1
-                    if empty_streak >= self.stall_repeats:
+                    repeated = (len(last_content_hashes) >= self.stall_repeats and
+                                len(set(last_content_hashes[-self.stall_repeats:])) == 1)
+                    if empty_streak >= self.stall_repeats or repeated:
+                        reason = "repeated_content" if repeated else "no_tool_no_final"
                         _event(self.con, "run.stalled", rid,
-                               {"reason": "no_tool_no_final", "streak": empty_streak})
+                               {"reason": reason, "streak": empty_streak,
+                                "finish_reason": reply.finish_reason or "",
+                                "content_hash": chash})
                         state = "paused"
+                        with contextlib.suppress(Exception):
+                            _persist()
+                        with contextlib.suppress(Exception):
+                            self._checkpoint(rid, step, history)   # 诊断状态必须落库
                         break
                 elif reply.tool_calls:
                     empty_streak = 0
-                if reply.content.strip().startswith("FINAL:"):
+                if _final_hit:
                     empty_streak = 0
                     final = reply.content.strip()
                     stopped_by_final = True

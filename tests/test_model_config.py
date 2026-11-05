@@ -119,3 +119,35 @@ def test_assess_any_mode_needs_scope_not_title_match(tmp_path):
     spec.loader.exec_module(m)
     verdict = m.assess(con, root, {"obj0": {"object": "authLogin.cgi", "expect": "any"}})
     assert verdict["checks"]["scope_conclusions_complete"]["ok"] is True
+
+
+def test_assess_any_multi_object_needs_each_object_covered(tmp_path):
+    """多对象 profile:一条结论不能算覆盖所有对象(真实反例)。"""
+    import importlib.util
+    import sys
+
+    from fwcore import db as _db
+    from fwcore.domain import Domain
+
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("drill", version="1")
+    hid = dom.add_hypothesis("drill", "认证前分发存在绕过", body="b", source="[RE]")
+    aid = dom.start_attempt(hid, "审计")
+    ev = dom.add_evidence("drill", "log", capture="分支清单", attempt_id=aid,
+                          hypothesis_id=hid, path=None)
+    dom.finish_attempt(aid, "inconclusive", "未完成", evidence=[ev],
+                       obs_outcome="none", obs_reason="与预期一致,无新观察")
+    dom.conclude(hid, "inconclusive", "仅覆盖 5 个入口中的 2 个")
+
+    spec = importlib.util.spec_from_file_location("drillmod2", "scripts/research_drill.py")
+    assert spec and spec.loader
+    m = importlib.util.module_from_spec(spec)
+    sys.modules["drillmod2"] = m
+    spec.loader.exec_module(m)
+    one = m.assess(con, root, {"o0": {"object": "authLogin.cgi", "expect": "any"}})
+    assert one["checks"]["scope_conclusions_complete"]["ok"] is True
+    two = m.assess(con, root, {"o0": {"object": "authLogin.cgi", "expect": "any"},
+                               "o1": {"object": "other.bin", "expect": "any"}})
+    assert two["checks"]["scope_conclusions_complete"]["ok"] is False

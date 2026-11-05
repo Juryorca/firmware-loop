@@ -2,7 +2,7 @@
 
 **等级:长程真实模型演练(质量验收候选;预算≠完成标准)**
 
-- 结果: `{"state": "paused", "steps": 437, "rounds": 0, "handback": null, "final": "", "model": "deepseek-flash", "resumed_from": "R-20261105-0b4df34e", "max_calls": 420, "max_seconds": 5400.0, "counters": {"rounds": 0, "model_calls": 420, "tool_calls": 219, "elapsed_s": 1096.75}}`
+- 结果: `{"state": "finished", "steps": 438, "rounds": 0, "handback": null, "final": "本轮已收口，无待办工具调用。\n\nFINAL: 研究收口。弱混淆定性、99.4% 代码还原与三面审计完成；认证绕过 inconclusive，其余四项 no_finding；状态与材料齐备。", "model": "deepseek-flash", "resumed_from": "R-20261105-0b4df34e", "max_calls": 432, "max_seconds": 7200.0, "counters": {"rounds": 0, "model_calls": 421, "tool_calls": 219, "elapsed_s": 1099.86}}`
 
 ## 闭环判定: **partial**
 
@@ -11,11 +11,11 @@
 | objects_consulted | ✅ | profile 内对象都被检查过 |
 | decisive_attempts_have_source_links | ❌ | 决定性尝试 4 个,无任何来源链接 3 个 ['A-20261105-3fe88e54', 'A-20261105-20124b78', 'A-20261105-62d5f2d1'] |
 | decisive_attempts_have_direct_evidence(非关键) | ❌ | 直接产出证据(source-link)覆盖 0/4 |
-| scope_conclusions_complete | ✅ | 范围内每个对象都有对应结论 |
+| scope_conclusions_complete | ❌ | authLogin.cgi 没有与结论关联的证据 |
 | vulnerable_has_supported_attempt | ✅ | vulnerable 0 条 |
 | vulnerable_evidence_causal | ✅ | vulnerable 是否都有因果复核证据 |
 | no_stuck_running_attempt(非关键) | ✅ | running 尝试 0 条 |
-| run_ended_normally(非关键) | ❌ | run.state=paused(finished=模型已收束) |
+| run_ended_normally(非关键) | ✅ | run.state=finished(finished=模型已收束) |
 | recoverable_pause(非关键) | ✅ | checkpoints=120 |
 
 ## 工具调用
