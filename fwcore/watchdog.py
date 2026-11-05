@@ -131,6 +131,25 @@ class Watchdog:
             n_ck = con.execute(
                 "SELECT COUNT(*) n FROM checkpoints WHERE run_id=?", (r["id"],)).fetchone()["n"]
             too_many = n_ck > max(self.limits.checkpoints_keep * 2, 10)
+            if stale:
+                # 长工具在飞 ≠ 研究停滞:工具在跑时不能暂停/杀进程组
+                inflight = con.execute(
+                    "SELECT tool, created_at FROM tool_calls WHERE run_id=? AND status='running'"
+                    " ORDER BY created_at DESC LIMIT 1", (r["id"],)).fetchone()
+                if inflight:
+                    started = _epoch(inflight["created_at"])
+                    grace = max(float(self.limits.max_tool_seconds), self.heartbeat_timeout_s) + 120.0
+                    if started and (now - started) < grace:
+                        with _db.Tx(con) as c:
+                            c.execute("UPDATE runs SET heartbeat_at=? WHERE id=?", (_now(), r["id"]))
+                            c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                                      (_now(), "watchdog.tool_inflight", r["id"],
+                                       json.dumps({"tool": inflight["tool"],
+                                                   "running_s": round(now - started, 1),
+                                                   "grace_s": grace}, ensure_ascii=False)))
+                        actions.append({"run": r["id"], "kept_alive_by": "tool_inflight",
+                                        "tool": inflight["tool"]})
+                        continue
             if stale or too_many or size > self.limits.max_db_bytes:
                 killed = self._kill_pgids(r["id"])
                 with _db.Tx(con) as c:

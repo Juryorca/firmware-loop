@@ -216,7 +216,9 @@ def default_db_path(root: str) -> str:
 
 def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    con = sqlite3.connect(path, timeout=timeout, isolation_level=None)
+    # check_same_thread=False:取消/看护/长工具会在别的线程里读同一连接。
+    # 写路径一律 `BEGIN IMMEDIATE` + busy_timeout 串行化 ⇒ 由 SQLite 兜并发,不靠 Python 线程锁。
+    con = sqlite3.connect(path, timeout=timeout, isolation_level=None, check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+import contextlib
 import json
 import os
 import shlex
@@ -89,9 +90,14 @@ class Registry:
             return {"status": "error", "error": bad}
         prev = None
         if call_key:
-            prev = ctx.domain.con.execute(
-                "SELECT * FROM tool_calls WHERE run_id=? AND call_key=?", (ctx.run_id, call_key)
-            ).fetchone()
+            if ctx.run_id:
+                prev = ctx.domain.con.execute(
+                    "SELECT * FROM tool_calls WHERE run_id=? AND call_key=?", (ctx.run_id, call_key)
+                ).fetchone()
+            else:   # 没有 run 归属的临时调用也要幂等,否则同一 key 会重复产生副作用
+                prev = ctx.domain.con.execute(
+                    "SELECT * FROM tool_calls WHERE run_id IS NULL AND call_key=?", (call_key,)
+                ).fetchone()
         if prev and prev["status"] not in ("pending", "running"):
             return {"status": prev["status"], "replayed": True, "tool_call_id": prev["id"],
                     "exit_code": prev["exit_code"], "note": prev["note"],
@@ -116,6 +122,14 @@ class Registry:
         except Exception as e:  # 工具抛异常 = 工具失败,不是研究结论
             out = {"status": "error", "error": f"{type(e).__name__}: {e}"}
             status = "error"
+        # 运行被取消时,在飞工具的中断是**取消**而不是工具失败:
+        # 语义差别很重要 —— cancelled/timeout 不能当证据,error 会被误读成"工具坏了"
+        if status in ("error", "timeout") and ctx.run_id:
+            hb = ctx.domain.con.execute("SELECT handback_reason FROM runs WHERE id=?",
+                                        (ctx.run_id,)).fetchone()
+            if hb and (hb["handback_reason"] or "").startswith("user_stop"):
+                status = "cancelled"
+                out["error"] = "运行已取消:工具执行被中断"
         dur = int((time.time() - t0) * 1000)
         with _db.Tx(ctx.domain.con) as c:
             meta = out.get("meta") or {}
@@ -180,6 +194,18 @@ def _abs(ctx: ToolContext, p: str) -> str:
     return p if os.path.isabs(p) else os.path.join(ctx.root, p)
 
 
+def _cancel_requested(ctx) -> bool:
+    """运行是否已被取消(用户/外部停止)。长工具靠它做到"取消即停",而不是干等到超时。"""
+    if not ctx.run_id:
+        return False
+    try:
+        row = ctx.domain.con.execute("SELECT handback_reason FROM runs WHERE id=?",
+                                     (ctx.run_id,)).fetchone()
+    except Exception:
+        return False
+    return bool(row and (row["handback_reason"] or "").startswith("user_stop"))
+
+
 def shell_exec(ctx: ToolContext, args: dict) -> dict:
     """跑一条命令(有超时);stdout/stderr 落盘并算 sha256。"""
     cmd = args.get("command")
@@ -214,12 +240,27 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
                 fe2.write(f"命令不存在: {e}".encode())
             return {"status": "error", "exit_code": None, "stdout_path": op, "stderr_path": ep,
                     "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep)}
+        deadline = time.time() + float(timeout)
         try:
-            proc.wait(timeout=timeout)
-            code, status = proc.returncode, "ok" if proc.returncode == 0 else "error"
-        except subprocess.TimeoutExpired:
-            _kill_group(proc)               # 杀掉整组,避免遗留子进程继续写盘
-            code, status = None, "timeout"
+            while True:
+                slice_s = max(0.02, min(0.2, deadline - time.time()))
+                try:
+                    proc.wait(timeout=slice_s)
+                    code = proc.returncode
+                    status = "ok" if code == 0 else (
+                        "cancelled" if _cancel_requested(ctx) else "error")
+                    break
+                except subprocess.TimeoutExpired:
+                    if _cancel_requested(ctx):
+                        _kill_group(proc)              # 取消:整组杀掉,不留在飞进程
+                        with contextlib.suppress(Exception):
+                            proc.wait(timeout=2)
+                        code, status = None, "cancelled"
+                        break
+                    if time.time() >= deadline:
+                        _kill_group(proc)              # 超时:同理会收拾整组
+                        code, status = None, "timeout"
+                        break
         except BaseException:               # 中断(KeyboardInterrupt 等)也要收拾干净
             _kill_group(proc)
             raise

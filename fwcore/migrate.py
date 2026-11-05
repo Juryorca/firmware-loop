@@ -70,6 +70,7 @@ def import_notes(con, root: str, target: str, notes_path: str | None = None) -> 
 
     entries = extract_pool_entries(text)
     created = 0
+    new_doc = False
     for hid_num, entry_text, line_no in entries:
         title = f"[待核对] {hid_num}: {entry_text.strip('-* ')[:120]}"
         existing = con.execute(
