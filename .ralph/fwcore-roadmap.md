@@ -123,3 +123,11 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   断言 CLI 层能调到**真实** `tools/derived_check.sh`(`legacy.available=True`、`summary` 前缀正确、有阻塞时 rc=1)
 - 证据:`tests/test_cli_smoke.py` **5 passed in 12.99s**
 - 先例修正:第一版用 `--root <tmp>` 导致脚本不存在(available=False)—— 已改为 root=仓库、DB=临时(不污染 state/)
+
+### Iteration 14(与 Pi 线对比的**工具化**准备)
+- 背景:"与 Pi 研究线双跑"需要外部条件(阻塞),但**对比口径**可以先固定 —— 否则将来跑完只能靠感觉。
+- 增量:`eval/compare.py` —— 吃结构化输入(`{target, version, conclusions:[{title,verdict,scope,evidence}]}`),
+  输出 `only_a / only_b / verdict_mismatch / evidence_gap / same_verdict / summary` 一行判定;
+  `load()` 读文件失败会明确报错(不静默返回空)
+- 证据:`tests/test_compare.py` **2 passed in 0.01s**(判定分歧与证据缺口都能抓;同一输入为空差异)
+- 状态:工具就绪;**双跑仍需外部条件**(待用户指定目标与时间窗口)
