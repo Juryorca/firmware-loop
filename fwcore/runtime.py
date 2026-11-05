@@ -17,6 +17,7 @@ import json
 import os
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import db as _db
@@ -71,7 +72,7 @@ class Runner:
                  max_steps: int | None = None, timeout: float = 60.0, policy: Policy | None = None,
                  research: Research | None = None, max_seconds: float | None = None,
                  stall_repeats: int = 3, limits: Limits | None = None,
-                 prepare: object = None, prepare_timeout: float = 15.0,
+                 prepare: "Callable[[dict], dict] | None" = None, prepare_timeout: float = 15.0,
                  watchdog: bool = False, watchdog_poll_s: float = 5.0,
                  watchdog_heartbeat_timeout: float = 900.0,
                  mcp: bool = False, mcp_config_paths: list[str] | None = None,
@@ -94,6 +95,7 @@ class Runner:
         self.prepare = prepare
         self.prepare_timeout = prepare_timeout
         self.prepare_timeouts = 0
+        self.prepare_abandoned = 0
         self._watchdog_enabled = watchdog
         self._watchdog_poll_s = watchdog_poll_s
         self._watchdog_heartbeat = watchdog_heartbeat_timeout
@@ -168,6 +170,8 @@ class Runner:
                 "heartbeat_at": row["heartbeat_at"],
                 "blockers": self.domain.closure_blockers(target),
                 "prepare_timeouts": self.prepare_timeouts,
+                "prepare_abandoned": self.prepare_abandoned,
+                "watchdog": (self.watchdog.health() if self.watchdog is not None else None),
                 "limits": self.limits.describe(),
                 "recent_events": events}
 
@@ -188,25 +192,39 @@ class Runner:
             self.mcp_bridge.close()
 
     def _run_prepare(self, target: str, rid: str, step: int) -> dict:
-        """跑轮前准备钩子(带超时)。超时/异常都只记事件并继续,不改变研究结论。"""
+        """跑轮前准备钩子(带超时)。**超时后不等待**:钩子跑在 daemon 线程里,超时就放弃它。
+
+        为什么不继续用 ThreadPoolExecutor:`with ThreadPoolExecutor(...)` 退出时会 `shutdown(wait=True)`
+        —— 超时的任务仍在跑 ⇒ 主流程照样被拖死 ✗(实测过)。
+        语义界定:Python 线程不可强杀 ⇒ 我们能保证的是"**主 Agent 不被拖死 + 迟到结果不被采纳**"。
+        """
         if not self.prepare:
             return {}
-        from concurrent.futures import ThreadPoolExecutor
-        from concurrent.futures import TimeoutError as _T
+        import threading
 
         payload = {"target": target, "run_id": rid, "step": step,
                    "derived": self.domain.derived(target)}
-        try:
-            with ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(self.prepare, payload)      # type: ignore[misc]
-                out = fut.result(timeout=self.prepare_timeout) or {}
-        except _T:
+        box: dict = {}
+
+        def _call():
+            try:
+                box["out"] = self.prepare(payload)
+            except Exception as e:                      # 钩子自己坏了也不能毁掉研究
+                box["err"] = f"{type(e).__name__}: {e}"
+
+        th = threading.Thread(target=_call, name="fwcore-prepare", daemon=True)
+        th.start()
+        th.join(timeout=self.prepare_timeout)
+        if th.is_alive():
             self.prepare_timeouts += 1
-            _event(self.con, "run.prepare_timeout", rid, {"timeout_s": self.prepare_timeout})
+            self.prepare_abandoned += 1                 # 可观测:有被放弃的钩子(可能仍在跑)
+            _event(self.con, "run.prepare_timeout", rid,
+                   {"timeout_s": self.prepare_timeout, "abandoned": True})
             return {}
-        except Exception as e:                              # 钩子自己坏了也不能毁掉研究
-            _event(self.con, "run.prepare_error", rid, {"error": f"{type(e).__name__}: {e}"})
+        if "err" in box:
+            _event(self.con, "run.prepare_error", rid, {"error": box["err"][:300]})
             return {}
+        out = box.get("out") or {}
         if isinstance(out, dict) and out.get("context_note"):
             self._prepare_state = {"context_note": str(out["context_note"])[:4000]}
         return out if isinstance(out, dict) else {}

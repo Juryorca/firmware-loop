@@ -132,6 +132,17 @@ class Registry:
         return out
 
 
+def _proc_starttime(pid: int) -> int | None:
+    """读 /proc/<pid>/stat 的第 22 个字段(进程启动时间,用来识别 pid 复用)。"""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as f:
+            data = f.read()
+        tail = data.rsplit(")", 1)[-1].split()
+        return int(tail[19])          # stat 里 starttime 是第 22 字段(整体)/ 去掉前两个后第 20 个
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 def _kill_group(proc: "subprocess.Popen") -> None:
     """杀整个进程组(含子进程),并等待回收。"""
     import signal
@@ -192,9 +203,10 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
                 cwd=workdir, stdout=fo, stderr=fe,
                 start_new_session=True,     # 独立进程组 ⇒ 超时可整组杀掉
             )
-            try:                        # 记录 pgid:外层看护可在循环失控时整组杀掉
+            try:                        # 记录 pgid + 启动时间:看护杀组前要核对,防 pid 复用误杀
+                pg = os.getpgid(proc.pid)
                 with open(os.path.join(art, ".pgids"), "a", encoding="utf-8") as pf:
-                    pf.write(f"{os.getpgid(proc.pid)}\n")
+                    pf.write(f"{pg} {_proc_starttime(proc.pid) or 0}\n")
             except OSError:
                 pass
         except FileNotFoundError as e:

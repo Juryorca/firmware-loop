@@ -42,6 +42,7 @@ class Watchdog:
     max_consecutive_errors: int = 5
     errors: int = 0
     scans: int = 0
+    paused_count: int = 0
     stopped_reason: str | None = None
 
     @contextlib.contextmanager
@@ -71,20 +72,40 @@ class Watchdog:
         """杀掉该 run 记录过的工具进程组(独立于循环)。"""
         killed: list[int] = []
         pgfile = os.path.join(self.root, "state", "artifacts", run_id, ".pgids")
-        pgids: list[int] = []
+        entries: list[tuple[int, int | None]] = []
         if os.path.isfile(pgfile):
             try:
                 with open(pgfile, encoding="utf-8") as f:
-                    pgids = [int(x) for x in f.read().split() if x.strip().isdigit()]
-            except (OSError, ValueError):
-                pgids = []
-        for pg in pgids:
+                    for line in f:
+                        parts = line.split()
+                        if not parts or not parts[0].isdigit():
+                            continue
+                        start = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+                        entries.append((int(parts[0]), start))
+            except OSError:
+                entries = []
+        for pg, start in entries:
+            if start is not None:
+                cur = _proc_starttime(pg)
+                if cur is None or cur != start:
+                    continue          # pid 已被复用(或进程已死)⇒ 不能杀,避免误伤别人的进程
+
             try:
                 os.killpg(pg, signal.SIGKILL)
                 killed.append(pg)
             except (ProcessLookupError, PermissionError):
                 continue
         return killed
+
+    def health(self) -> dict:
+        """看护自身的可观测状态:外部据此判断"看护是否还活着/是否失效"。"""
+        return {
+            "scans": self.scans,
+            "errors": self.errors,
+            "stopped_reason": self.stopped_reason,
+            "paused_by_me": self.paused_count,
+            "alive": self.stopped_reason is None,
+        }
 
     def scan_once(self) -> list[dict]:
         """检查一轮:返回触发的动作列表(空 = 一切正常)。"""
@@ -146,6 +167,15 @@ class Watchdog:
         th = threading.Thread(target=_loop, name="fwcore-watchdog", daemon=True)
         th.start()
         return th
+
+
+def _proc_starttime(pid: int) -> int | None:
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as f:
+            tail = f.read().rsplit(")", 1)[-1].split()
+        return int(tail[19])
+    except (OSError, IndexError, ValueError):
+        return None
 
 
 def _epoch(ts: str | None) -> float:

@@ -155,3 +155,49 @@ def test_runner_without_watchdog_does_not_start_one(tmp_path):
                limits=Limits(max_model_calls=2), policy=Policy(allow_high_risk=True))
     r.run(r.start("t1"), "t1")
     assert r.watchdog is None and r._wd_thread is None
+
+
+# ---------- PGID 误杀防护 + 看护可观测 ----------
+
+def test_kill_pgids_refuses_reused_pid(tmp_path):
+    """pgid 已被复用(starttime 不匹配)⇒ 绝不能杀;匹配才杀。"""
+    from fwcore.tools import _proc_starttime
+
+    con, dom, root, rid, hid = _mk(tmp_path)
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        pg = os.getpgid(child.pid)
+        real = _proc_starttime(pg)
+        art = os.path.join(root, "state", "artifacts", rid)
+        os.makedirs(art, exist_ok=True)
+        wd = Watchdog(con=con, root=root, limits=Limits())
+
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{pg} {(real or 0) + 1}\n")      # 伪造"pid 复用"
+        assert wd._kill_pgids(rid) == []
+        time.sleep(0.2)
+        assert child.poll() is None, "starttime 不匹配时不许杀"
+
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{pg} {real}\n")                # 匹配 ⇒ 应当杀
+        assert wd._kill_pgids(rid) == [pg]
+        time.sleep(0.3)
+        assert child.poll() is not None
+    finally:
+        if child.poll() is None:
+            child.kill()
+
+
+def test_runner_progress_exposes_watchdog_health(tmp_path):
+    from fwcore.models import ScriptedAdapter
+    from fwcore.runtime import Runner
+
+    con, dom, root, rid, hid = _mk(tmp_path)
+    r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: 收工", "tool_calls": []}]),
+               limits=Limits(max_model_calls=2), policy=Policy(allow_high_risk=True),
+               watchdog=True, watchdog_poll_s=0.02)
+    res = r.run(rid, "t1")
+    prog = r.progress(rid)
+    assert prog["watchdog"] is not None
+    assert prog["watchdog"]["alive"] is True and prog["watchdog"]["scans"] >= 1
+    assert res.state in ("finished", "paused")

@@ -88,15 +88,25 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("derive"); p.add_argument("target")
     p = sub.add_parser("migrate"); p.add_argument("target"); p.add_argument("--notes")
     p = sub.add_parser("view"); p.add_argument("target")
+    def _wd_args(parser):
+        """三条运行类子命令共用:看护默认开(正式路径必须有外层保护)。"""
+        parser.add_argument("--no-watchdog", dest="watchdog", action="store_false",
+                            help="关闭外层看护(仅调试用)")
+        parser.add_argument("--watchdog-poll", type=float, default=5.0)
+        parser.set_defaults(watchdog=True)
+
     p = sub.add_parser("run"); p.add_argument("target"); p.add_argument("--goal")
     p.add_argument("--model", default="scripted"); p.add_argument("--steps", type=int, default=0,
                    help="0 = 不限(默认;由模型自己决定何时收)")
+    _wd_args(p)
     p = sub.add_parser("resume"); p.add_argument("run_id")
     p.add_argument("--model", default="scripted"); p.add_argument("--goal")
     p.add_argument("--steps", type=int, default=0, help="0 = 不限")
+    _wd_args(p)
     p = sub.add_parser("advance"); p.add_argument("target"); p.add_argument("--goal")
-    p.add_argument("--model", default="scripted"); p.add_argument("--rounds", type=int, default=4)
-    p.add_argument("--steps", type=int, default=40)
+    p.add_argument("--model", default="scripted"); p.add_argument("--rounds", type=int, default=None)
+    p.add_argument("--steps", type=int, default=0, help="0 = 不限")
+    _wd_args(p)
 
     args = ap.parse_args(argv)
     con = _con(args)
@@ -189,7 +199,9 @@ def main(argv: list[str] | None = None) -> int:
             print(render_view(con, args.root, args.target))
         elif args.cmd in ("run", "resume", "advance"):
             model = _model(args.model)
-            runner = Runner(con, args.root, model, max_steps=(args.steps or None))
+            runner = Runner(con, args.root, model, max_steps=(args.steps or None),
+                            watchdog=getattr(args, "watchdog", False),
+                            watchdog_poll_s=getattr(args, "watchdog_poll", 5.0))
             if args.cmd == "advance":
                 res = runner.advance(args.target, args.goal, max_rounds=args.rounds)
             elif args.cmd == "run":

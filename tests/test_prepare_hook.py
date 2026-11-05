@@ -95,3 +95,17 @@ def test_progress_snapshot_is_structured(tmp_path):
     assert p["state"] in ("finished", "paused")
     assert p["blockers"], "有未收口假设 ⇒ blockers 必须非空"
     assert p["limits"]["checkpoints_keep"] > 0 and isinstance(p["recent_events"], list)
+
+
+def test_prepare_timeout_does_not_wait_for_hung_hook(tmp_path):
+    """钩子卡死时主流程必须**立刻**继续(不能等它),并且有可观测计数。"""
+    con, dom, root = _setup(tmp_path)
+    r = Runner(con, root, ScriptedAdapter(script=[FINAL]), limits=Limits(max_model_calls=2),
+               policy=Policy(allow_high_risk=True),
+               prepare=lambda payload: time.sleep(5), prepare_timeout=0.1)
+    t0 = time.time()
+    res = r.run(r.start("t1"), "t1")
+    elapsed = time.time() - t0
+    assert elapsed < 3, f"被卡死的钩子拖住了:{elapsed:.1f}s"
+    assert res.state == "finished"
+    assert r.prepare_timeouts >= 1 and r.prepare_abandoned >= 1

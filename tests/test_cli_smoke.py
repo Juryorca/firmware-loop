@@ -106,3 +106,19 @@ def test_resume_and_advance_cli_paths(tmp_path):
                         cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert r3.returncode == 0, r3.stderr[-500:]
     assert "UnboundLocalError" not in r3.stderr
+
+
+def test_cli_watchdog_flags_exist_and_no_watchdog_runs(tmp_path):
+    """正式路径默认开看护;`--no-watchdog` 必须能显式关掉(调试用)。"""
+    root = str(tmp_path)
+    db = str(tmp_path / "wd.sqlite3")
+    env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t")
+    assert _run("--root", root, "--db", db, "init", "t", "--version", "1").returncode == 0
+    r = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
+                        "run", "t", "--model", "scripted", "--steps", "1", "--no-watchdog"],
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-500:]
+    # 帮助里必须出现默认开关(可发现性)
+    h = subprocess.run([sys.executable, "-m", "fwcore", "run", "--help"],
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+    assert "--no-watchdog" in h.stdout and "--watchdog-poll" in h.stdout
