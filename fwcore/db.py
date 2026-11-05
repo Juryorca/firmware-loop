@@ -9,10 +9,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -253,6 +254,32 @@ def _step2(con: sqlite3.Connection) -> None:
     _add_col(con, "surfaces", "judged_by", "TEXT")
 
 
+def _step9(con: sqlite3.Connection) -> None:
+    """run 级预算计数(跨 turn / resume 累积)。
+
+    - `model_calls` / `tool_calls`:整个 run 的累计次数(不是每轮重置)
+    - `elapsed_s`:累计墙钟(每轮结束后累加)
+    这样"预算"才是 run 的属性:暂停后恢复继续消耗同一份预算,不会重新给一份。
+    """
+    _add_col(con, "runs", "model_calls", "INTEGER NOT NULL DEFAULT 0")
+    _add_col(con, "runs", "tool_calls", "INTEGER NOT NULL DEFAULT 0")
+    _add_col(con, "runs", "elapsed_s", "REAL NOT NULL DEFAULT 0")
+    # 老 run 的 tool_calls 可从表里精确回填;model_calls/elapsed_s 历史上没记,
+    # **不猜**:标记为 legacy_unknown(恢复时预算从头算,这是已知偏差)
+    con.execute("UPDATE runs SET tool_calls = (SELECT COUNT(*) FROM tool_calls"
+                "   WHERE tool_calls.run_id = runs.id) WHERE tool_calls = 0")
+    legacy = con.execute("SELECT COUNT(*) n FROM runs WHERE model_calls = 0 AND tool_calls > 0"
+                         ).fetchone()
+    if legacy and legacy["n"]:
+        con.execute(
+            "INSERT INTO events(ts,kind,ref,payload) VALUES"
+            "(strftime('%Y-%m-%dT%H:%M:%S+00:00','now'),'budget.legacy_unknown',NULL,?)",
+            (json.dumps({"runs": legacy["n"],
+                         "note": "v9 之前的 run 没有 model_calls/elapsed_s 记录"},
+                        ensure_ascii=False),),
+        )
+
+
 def _step8(con: sqlite3.Connection) -> None:
     """记录 run 用的模型名(报告/审计要能说清"这次是哪个模型跑的")。"""
     _add_col(con, "runs", "model", "TEXT")
@@ -328,7 +355,7 @@ def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "hypotheses", "surface_key", "TEXT")
 
 
-STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7, 8: _step8}
+STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7, 8: _step8, 9: _step9}
 
 
 def _migrate(con: sqlite3.Connection) -> None:

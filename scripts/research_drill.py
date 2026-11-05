@@ -370,6 +370,63 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
                              if scope_done and not ended_normally else "")}}
 
 
+def _counters(con, rid: str) -> dict:
+    """run 级计数(rounds / model_calls / tool_calls / elapsed_s)分开看。"""
+    row = con.execute("SELECT rounds,model_calls,tool_calls,elapsed_s FROM runs WHERE id=?",
+                      (rid,)).fetchone()
+    if not row:
+        return {}
+    return {"rounds": row["rounds"], "model_calls": row["model_calls"],
+            "tool_calls": row["tool_calls"], "elapsed_s": round(float(row["elapsed_s"] or 0), 2)}
+
+
+def _resume_authz(root: str):
+    """恢复演练时重建授权(演练工作区没有 authz.json;范围=该工作区)。"""
+    from fwcore.policy import Authz
+
+    return Authz(roots=[root], allow_shell=True, allow_high_risk=True, reason="演练恢复")
+
+
+def _write_report(out: str, rep: dict, verdict: dict, *, smoke: bool) -> None:
+    try:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+    except OSError as e:
+        raise SystemExit(f"创建报告目录失败 {out}: {e}") from e
+    level = ("短程协议冒烟(不代表研究质量)" if smoke
+             else "长程真实模型演练(质量验收候选;预算≠完成标准)")
+    try:
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("# 自主研究演练(真实模型)\n\n")
+            f.write(f"**等级:{level}**\n\n")
+            f.write(f"- 结果: `{json.dumps(rep['run'], ensure_ascii=False)}`\n\n")
+            f.write(f"## 闭环判定: **{verdict['status']}**\n\n")
+            f.write("| 判据 | ok | 说明 |\n|---|---|---|\n")
+            for name, c in verdict["checks"].items():
+                f.write(f"| {name}{'' if c['critical'] else '(非关键)'} | "
+                        f"{'✅' if c['ok'] else '❌'} | {c['detail']} |\n")
+            f.write("\n")
+            for section, title in (("tool_calls", "工具调用"), ("hypotheses", "假设"),
+                                   ("attempts", "尝试"), ("observations", "观测"),
+                                   ("evidence", "证据"), ("checks", "复核记录"),
+                                   ("conclusions", "结论")):
+                f.write(f"## {title}\n\n```json\n")
+                f.write(json.dumps(rep[section], ensure_ascii=False, indent=1))
+                f.write("\n```\n\n")
+            f.write("## 事件序列\n\n```\n")
+            f.write("\n".join(f"{e['kind']} {e['ref'] or ''}" for e in rep["events"][:120]))
+            f.write("\n```\n")
+    except OSError as e:
+        raise SystemExit(f"写报告失败 {out}: {e}") from e
+
+
+def _print_summary(rep: dict, verdict: dict, *, where: str = "") -> None:
+    print(json.dumps({**rep["run"], "verdict": verdict["status"]}, ensure_ascii=False))
+    for name, c in verdict["checks"].items():
+        print(f"  {'PASS' if c['ok'] else 'FAIL'} {name}: {c['detail']}")
+    if where:
+        print(f"[drill] {where}")
+
+
 def main() -> int:
     from fwcore import db as _db
     from fwcore.domain import Domain
@@ -379,9 +436,16 @@ def main() -> int:
     from fwcore.runtime import Runner
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--max-calls", type=int, default=20)
-    ap.add_argument("--max-seconds", type=float, default=240.0)
-    ap.add_argument("--max-rounds", type=int, default=2)
+    ap.add_argument("--smoke", action="store_true",
+                    help="短程协议冒烟(20 calls / 240s / 2 rounds);**不代表研究质量**")
+    ap.add_argument("--max-calls", type=int, default=None,
+                    help="模型调用预算(默认:smoke=20,长程=200);到预算只暂停,不是研究标准")
+    ap.add_argument("--max-seconds", type=float, default=None,
+                    help="墙钟预算秒(默认:smoke=240,长程=3600)")
+    ap.add_argument("--max-rounds", type=int, default=None,
+                    help="最多自动继续多少轮(默认:smoke=2,长程=不限;只防死循环)")
+    ap.add_argument("--resume", default=None,
+                    help="从已有演练工作区恢复(不新建工作区/不重复付费重跑)")
     ap.add_argument("--out", default="docs/evidence/autonomous-research-drill.md")
     ap.add_argument("--real-material", default=None,
                     help="真实固件材料目录(已提取);给了就走真实固件只读分析模式")
@@ -390,7 +454,54 @@ def main() -> int:
     ap.add_argument("--profile", default=None, help="profile JSON(对象/期望结论)")
     args = ap.parse_args()
 
+    if args.max_calls is None:
+        args.max_calls = 20 if args.smoke else 200
+    if args.max_seconds is None:
+        args.max_seconds = 240.0 if args.smoke else 3600.0
+    if args.max_rounds is None and args.smoke:
+        args.max_rounds = 2
+
     key, base, model = load_credentials()
+    if args.resume:
+        root = os.path.abspath(args.resume)
+        db = os.path.join(root, "state", "fwcore.sqlite3")
+        if not os.path.isfile(db):
+            raise SystemExit(f"恢复失败:找不到 {db}")
+        con = _db.connect(db)
+        row = con.execute("SELECT id FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        if not row:
+            raise SystemExit("恢复失败:该工作区没有 run")
+        dom = Domain(con, root)
+        policy = Policy(authorization=_resume_authz(root), allow_high_risk=True)
+        limits = Limits(max_model_calls=args.max_calls, max_seconds=args.max_seconds,
+                        max_tool_seconds=120)
+        runner = Runner(con, root, build_adapter(
+            "openai", api_key=key, base_url=base, model=model), policy=policy, limits=limits)
+        res = runner.resume(row["id"], "继续研究(恢复:沿用已有假设/实验/证据)")
+        rep = trace(con)
+        rep["run"] = {"state": res.state, "steps": res.steps, "rounds": res.rounds,
+                      "handback": res.handback, "final": res.final[:400],
+                      "model": model, "resumed_from": row["id"],
+                      "max_calls": args.max_calls, "max_seconds": args.max_seconds,
+                      "counters": _counters(con, row["id"])}
+        # 恢复时按工作区内容判 profile:有 fwroot/ ⇒ 真实固件模式(不预设结论)
+        if args.profile:
+            try:
+                with open(args.profile, encoding="utf-8") as f:
+                    resume_profile = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                raise SystemExit(f"读 profile 失败 {args.profile}: {e}") from e
+        elif os.path.isdir(os.path.join(root, "fwroot")):
+            files = sorted(os.listdir(os.path.join(root, "fwroot")))[:6]
+            resume_profile = {f"obj{i}": {"object": f, "expect": "any"}
+                              for i, f in enumerate(files)}
+        else:
+            resume_profile = None
+        verdict = assess(con, root, resume_profile)
+        _write_report(os.path.join(ROOT, args.out), rep, verdict, smoke=args.smoke)
+        _print_summary(rep, verdict)
+        print(f"[drill] resumed workspace={root}")
+        return 0
     if args.real_material:
         root, copied = build_real_workspace(args.real_material, args.real_glob,
                                             args.real_max_files)
@@ -432,40 +543,10 @@ def main() -> int:
                   "elapsed_s": round(elapsed, 1), "model": model,
                   "max_calls": args.max_calls, "max_seconds": args.max_seconds}
     verdict = assess(con, root, profile)
+    rep["run"]["counters"] = _counters(con, res.run_id) if hasattr(res, "run_id") else {}
     out = os.path.join(ROOT, args.out)
-    try:
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-    except OSError as e:
-        raise SystemExit(f"创建报告目录失败 {out}: {e}") from e
-    try:
-        with open(out, "w", encoding="utf-8") as f:
-            f.write("# 自主研究演练(真实模型,有界)\n\n")
-            f.write("**等级:真实模型 + 合成目标**(不是真实固件研究质量证明)\n\n")
-            f.write(f"- 模型 `{model}`,上限 calls={args.max_calls} / seconds={args.max_seconds}\n")
-            f.write(f"- 结果: `{json.dumps(rep['run'], ensure_ascii=False)}`\n\n")
-            f.write(f"## 闭环判定: **{verdict['status']}**\n\n")
-            f.write("| 判据 | ok | 说明 |\n|---|---|---|\n")
-            for name, c in verdict["checks"].items():
-                f.write(f"| {name}{'' if c['critical'] else '(非关键)'} | "
-                        f"{'✅' if c['ok'] else '❌'} | {c['detail']} |\n")
-            f.write("\n")
-            for section, title in (("tool_calls", "工具调用"), ("hypotheses", "假设"),
-                                   ("attempts", "尝试"), ("observations", "观测"),
-                                   ("evidence", "证据"), ("checks", "复核记录"),
-                                   ("conclusions", "结论")):
-                f.write(f"## {title}\n\n```json\n")
-                f.write(json.dumps(rep[section], ensure_ascii=False, indent=1))
-                f.write("\n```\n\n")
-            f.write("## 事件序列\n\n```\n")
-            f.write("\n".join(f"{e['kind']} {e['ref'] or ''}" for e in rep["events"][:120]))
-            f.write("\n```\n")
-    except OSError as e:
-        raise SystemExit(f"写报告失败 {out}: {e}") from e
-
-    print(json.dumps({**rep["run"], "verdict": verdict["status"]}, ensure_ascii=False))
-    for name, c in verdict["checks"].items():
-        print(f"  {'PASS' if c['ok'] else 'FAIL'} {name}: {c['detail']}")
-    print(f"[drill] workspace={root} report={out}")
+    _write_report(out, rep, verdict, smoke=args.smoke)
+    _print_summary(rep, verdict, where=f"workspace={root} report={out}")
     return 0
 
 

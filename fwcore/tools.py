@@ -458,6 +458,8 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
         out["link"] = weak_hint
         out["note"] = ("未建立来源关联(弱线索);如需确定来源,补充 tool_call_id 或"
                        "用产生该文件的那次调用的产物路径")
+        out["next"] = ("补来源:state_add_evidence(..., tool_call_id=<产生该文件的那次调用 id>);"
+                       "工具结果里带 tool_call_id 字段")
     return out
 
 
@@ -493,7 +495,9 @@ def state_start_attempt(ctx: ToolContext, args: dict) -> dict:
 def state_finish_attempt(ctx: ToolContext, args: dict) -> dict:
     ctx.domain.finish_attempt(args["attempt_id"], args["result"], args.get("note", ""),
                               obs_outcome=args.get("obs_outcome"), obs_reason=args.get("obs_reason", ""))
-    return {"status": "ok", "attempt_id": args["attempt_id"], "result": args["result"]}
+    return {"status": "ok", "attempt_id": args["attempt_id"], "result": args["result"],
+            "next": "若结论要靠这次实验:证据需绑定来源(tool_call_id 或工具 stdout 路径),"
+                    "并用 state_verify_evidence 做因果复核后再 state_conclude"}
 
 
 def state_record_mirror(ctx: ToolContext, args: dict) -> dict:

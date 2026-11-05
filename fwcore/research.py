@@ -198,6 +198,14 @@ class Research:
                        "inconclusive|environment_failure|no_signal|cancelled, note=…, obs_outcome=new|none,"
                        " obs_reason=…)`")
 
+        orphan_ev = con.execute(
+            "SELECT id, substr(path,-40) p FROM evidence WHERE target_id=? AND tool_call_id IS NULL"
+            "   AND verified=1 ORDER BY created_at DESC LIMIT 5", (t.id,)).fetchall()
+        if orphan_ev:
+            out.append("### 已复核但**没有来源关联**的证据(审计会打折)")
+            for r in orphan_ev:
+                out.append(f"- {r['id']} {r['p']} ⇒ 用产生该文件的那次调用 id 重新登记"
+                           "(tool_call_id=…),否则只能算弱线索")
         pending_ev = con.execute(
             "SELECT id, kind, path FROM evidence WHERE target_id=? AND verified=0"
             " ORDER BY created_at DESC LIMIT 8", (t.id,)).fetchall()

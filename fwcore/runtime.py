@@ -179,6 +179,7 @@ class Runner:
         """结构化进度快照(给外部监控/Pi 适配器用;只读)。"""
         row = self.con.execute(
             "SELECT r.id,r.state,r.step,r.rounds,r.handback_reason,r.goal,r.heartbeat_at,"
+            "       r.model_calls,r.tool_calls,r.elapsed_s,"
             "       t.name AS target FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
             (rid,)).fetchone()
         if not row:
@@ -189,6 +190,8 @@ class Runner:
             " ORDER BY id DESC LIMIT 5", (rid, target)).fetchall()]
         return {"run_id": row["id"], "target": target, "state": row["state"],
                 "steps": row["step"], "rounds": row["rounds"],
+                  "model_calls": row["model_calls"], "tool_calls": row["tool_calls"],
+                  "elapsed_s": row["elapsed_s"],
                 "handback": row["handback_reason"], "goal": row["goal"],
                 "heartbeat_at": row["heartbeat_at"],
                 "blockers": self.domain.closure_blockers(target),
@@ -357,7 +360,17 @@ class Runner:
             seen: dict[str, int] = {}
             t0 = time.time()
             since = _now()
-            model_calls = 0
+            # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)
+            row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
+                                    (rid,)).fetchone()
+            run_calls = int(row0["model_calls"] or 0) if row0 else 0
+            run_tools = int(row0["tool_calls"] or 0) if row0 else 0
+            run_elapsed = float(row0["elapsed_s"] or 0.0) if row0 else 0.0
+
+            def _persist() -> None:
+                with _db.Tx(self.con) as c:
+                    c.execute("UPDATE runs SET model_calls=?, tool_calls=?, elapsed_s=? WHERE id=?",
+                              (run_calls, run_tools, run_elapsed + (time.time() - t0), rid))
             while budget is None or budget > 0:
                 stopped = self._external_stop(rid)
                 if stopped:
@@ -366,9 +379,12 @@ class Runner:
                     break
                 if budget is not None:
                     budget -= 1
-                if self.limits.time_exhausted(time.time() - t0):
+                if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
                     state = "paused"
-                    self._limit_hit(rid, "max_seconds", {"elapsed_s": round(time.time() - t0, 1)})
+                    _persist()
+                    self._limit_hit(rid, "max_seconds",
+                                    {"elapsed_s": round(run_elapsed + (time.time() - t0), 1),
+                                     "budget_s": self.limits.max_seconds})
                     break
                 prep = self._run_prepare(target, rid, step)
                 if prep.get("cancel"):
@@ -380,15 +396,21 @@ class Runner:
                 if _note:
                     _sys += "\n\n## 轮前准备(程序注入)\n" + _note
                 msgs = [{"role": "system", "content": _sys}] + history
-                model_calls += 1
-                if self.limits.calls_exhausted(model_calls):
+                # 先判"下一次会不会超",再计数:计数 = **实际发生的模型调用**,
+                # 不能把被预算挡住的那一次也算进去(否则 resume 会莫名少一次额度)
+                if self.limits.calls_exhausted(run_calls + 1):
                     state = "paused"
-                    self._limit_hit(rid, "max_model_calls", {"calls": model_calls,
-                                                             "limit": self.limits.max_model_calls})
+                    _persist()
+                    self._limit_hit(rid, "max_model_calls",
+                                    {"calls": run_calls, "limit": self.limits.max_model_calls})
                     break
-                if self.limits.time_exhausted(time.time() - t0):
+                run_calls += 1
+                if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
                     state = "paused"
-                    self._limit_hit(rid, "max_seconds", {"elapsed_s": round(time.time() - t0, 1)})
+                    _persist()
+                    self._limit_hit(rid, "max_seconds",
+                                    {"elapsed_s": round(run_elapsed + (time.time() - t0), 1),
+                                     "budget_s": self.limits.max_seconds})
                     break
                 reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
                 history.append(reply.assistant_message() if (reply.content or reply.tool_calls)
@@ -440,6 +462,7 @@ class Runner:
                         seen[sig] = seen.get(sig, 0) + 1
                         if seen[sig] >= self.stall_repeats:
                             stalled = True
+                        run_tools += 1
                         out = self._exec_tool_call(ctx, call, rid)
                         history.append({"role": "tool", "tool_call_id": call.get("id"),
                                         "name": call["name"],
@@ -454,6 +477,7 @@ class Runner:
                         state = "paused"
                         break
                 step += 1
+                _persist()
                 self._checkpoint(rid, step, history)
                 if self._pending_pause:
                     reason, detail = self._pending_pause
@@ -475,6 +499,8 @@ class Runner:
         else:
             state = "finished"
         try:
+            with contextlib.suppress(Exception):
+                _persist()          # 收尾时落一次计数(FINAL/暂停/异常路径都覆盖)
             return self._finish_state(rid, target, state, step, rounds, final, history)
         finally:
             self._watchdog_stop()
