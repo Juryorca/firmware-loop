@@ -18,6 +18,7 @@ if timeout 300 "$PY" -m pytest \
       tests/test_gates_db.py tests/test_pi_bridge.py tests/test_eval_scoring.py \
       tests/test_toolkit_structured.py tests/test_domain_core.py \
       tests/test_recovery_idempotency.py tests/test_providers.py \
+      tests/test_cancel.py tests/test_tool_args_invalid.py tests/test_prepare_hook.py \
       -q --basetemp="$WORK/pytest" > "$WORK/pytest.log" 2>&1; then
   say "pytest(8 个文件)" "PASS $(tail -1 "$WORK/pytest.log" | tr -d '\n')"
 else

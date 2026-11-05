@@ -61,3 +61,13 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   (state/steps/rounds/handback/blockers/prepare_timeouts/limits/recent_events),不解析日志
 - 证据:`tests/test_prepare_hook.py` **5 passed in 2.27s**(含 progress 断言:blockers 非空、limits 可见)
 - 下一项:只读工具并行(按需;若无真实并行需求则标"不采纳+理由");随后 Pi hook 需授权,暂停等用户
+
+### Iteration 6(验证覆盖 + 完成判据记录)
+- 增量:`tools/fwcore_verify.sh` 覆盖 Pi 对齐新增的 3 个测试(`test_cancel` / `test_tool_args_invalid` / `test_prepare_hook`)
+- **完成判据记录(外部可重跑)**
+  - 命令:`bash tools/fwcore_verify.sh`
+  - 工作目录:仓库根(`/home/juryorca/整活/漏洞复现/firmware-loop`)
+  - 环境:`PYTHONPATH=$ROOT`(脚本内设置)、`PY=python3`;不使用 `/tmp`(临时目录 `.tmp/verify`,跑完自删)
+  - 输出摘要:`pytest(8 文件) 74 passed in 17.75s` / `capabilities 10 项` / `gates 如实报阻塞` /
+    `评测答案隔离 PASS` / `ROADMAP 一致性 PASS` / `git status clean` / 退出码 0
+- 仍未完成(阻塞,不影响本轮增量):Pi hook 接线(待授权)、与 Pi 线对比(待外部条件)
