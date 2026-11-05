@@ -90,3 +90,12 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   `--help` / `authz` / `capabilities` / `gates <合成目标>`(有未收口假设必须非零退出)
 - 证据:**4 passed in 11.59s**;证明 CLI 路径可用,不只有库函数可用
 - 下一项:仍只剩阻塞项(Pi hook 待授权 / Pi 线对比待外部条件)
+
+### Iteration 10(研究规则注入:按优先级选段落,替代盲截)
+- 背景:用户此前指出"简单按前 N 字符截断并不能保证关键规则进入上下文"
+- 增量:`fwcore/research.py::select_rules(text, budget)` —— 按 `## ` 分段,优先保留决定行为的章节
+  (`不变量 / 停·不停 / 闸门 / 轮 / 假设池 / 证据 / 三镜 / 收尾 / Exit Criteria / 判据`),
+  其余按原顺序填充;超预算显式标注"已省略 N 段";系统提示改用该函数(不再盲截)
+- 证据:`tests/test_rule_selection.py` **4 passed in 0.01s**
+  (关键段在文末也能保留 / 省略有标注 / 短文档不动 / 真实 AGENTS.md 压到 6000 仍保留停·不停或 Exit Criteria)
+- 下一项:仍只剩阻塞项(Pi hook 待授权 / Pi 线对比待外部条件)

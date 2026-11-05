@@ -16,7 +16,44 @@ from dataclasses import dataclass, field
 from .domain import Domain, new_id, _event, _now
 from .db import Tx
 
-RULES_LIMIT = 12000  # 每个规则文件的字符预算(超出截断,保证上下文可控)
+RULES_LIMIT = 12000  # 每个规则文件的字符预算
+# 按段落选而不是盲截:优先保留"决定行为"的段落(用户批评过"截断可能把关键规则切掉")
+RULE_PRIORITY = ("不变量", "停 / 不停", "停/不停", "闸门", "轮", "假设池", "证据", "三镜",
+                 "收尾", "Exit Criteria", "判据", "交付原则", "例外")
+
+
+def select_rules(text: str, budget: int = RULES_LIMIT) -> str:
+    """在预算内选段落:优先"决定行为"的章节,其余按原顺序填充;超预算时标注省略数量。
+
+    为什么不用"前 N 字符截断":AGENTS/LOOP 的关键约束(停/不停、闸门、轮格式)散落在末尾,
+    盲截会把它们切掉 ⇒ 模型看到的是"没有硬约束的规则书"。
+    """
+    if len(text) <= budget:
+        return text
+    import re as _re
+
+    parts = _re.split(r"(?m)^(?=## )", text)
+    head = parts[0] if parts and not parts[0].startswith("## ") else ""
+    sections = [s for s in parts if s.startswith("## ")]
+    if not sections:
+        return text[:budget] + "\n…(截断)"
+
+    def score(s: str) -> int:
+        title = s.split("\n", 1)[0]
+        return 0 if any(k in title for k in RULE_PRIORITY) else 1
+
+    order = sorted(range(len(sections)), key=lambda i: (score(sections[i]), i))
+    kept: dict[int, str] = {}
+    used = len(head)
+    for i in order:
+        if used + len(sections[i]) <= budget:
+            kept[i] = sections[i]
+            used += len(sections[i])
+    omitted = len(sections) - len(kept)
+    out = head + "".join(kept[i] for i in sorted(kept))
+    if omitted:
+        out += f"\n…(已省略 {omitted} 段:超出预算且优先级较低)\n"
+    return out[: budget + 200]
 
 
 def _read(path: str, limit: int = RULES_LIMIT) -> str:
@@ -180,7 +217,7 @@ class Research:
                   "- 需要结束时输出 `FINAL: <小结>` —— 但这只结束本轮,是否可收尾由程序判定。"]
         # 规则原文(唯一来源;截断到预算)
         for rel in self.rules_files:
-            body = _read(os.path.join(self.root, rel))
+            body = select_rules(_read(os.path.join(self.root, rel), 10 ** 6), RULES_LIMIT)
             if body:
                 parts += ["", f"## 规则原文({rel})", body]
         return "\n".join(parts)
