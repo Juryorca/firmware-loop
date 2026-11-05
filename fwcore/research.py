@@ -300,6 +300,27 @@ class Research:
             __import__("json").dumps(d, ensure_ascii=False, indent=1)[:3000],
             "```",
         ]
+        # 跨 run 继承:把已有假设/证据**事实**摆出来(不是让你重做);
+        # 只有新 run 看得到这些,才不会从零开始重复第一阶段分析
+        t = self.domain.target(target)
+        hyps = list(self.domain.con.execute(
+            "SELECT id,state,verdict,title,scope_note FROM hypotheses"
+            " WHERE target_id=? ORDER BY updated_at DESC LIMIT 25", (t.id,)))
+        evs = list(self.domain.con.execute(
+            "SELECT id,path,link_relation FROM evidence WHERE target_id=?"
+            " ORDER BY created_at DESC LIMIT 25", (t.id,)))
+        if hyps or evs:
+            facts = ["", "## 已有研究事实(程序从数据库读出;先复用,不要重做)"]
+            for h in hyps:
+                facts.append(f"- {h['id']} [{h['state']}/{h['verdict'] or '-'}] "
+                             f"{h['title'][:110]}")
+                if h["scope_note"]:
+                    facts.append(f"  范围: {h['scope_note'][:110]}")
+            for e in evs:
+                facts.append(f"- {e['id']} {e['path'] or '(capture)'} "
+                             f"[{e['link_relation'] or 'unlinked'}]")
+            parts += ["\n".join(facts)[:3000]]
+
         brief = self.progress_brief(target)
         if brief:
             parts += ["", "## 研究进度(程序按数据库事实生成;这些是待办,不是必须按顺序执行的脚本)",

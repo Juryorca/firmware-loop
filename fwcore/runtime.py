@@ -299,6 +299,17 @@ class Runner:
         events.reverse()
         return {"derived": d, "recent_events": events}
 
+    def _artifact_of(self, tool_call_id: str | None) -> str | None:
+        """历史收敛时保留可追溯性:工具调用 → 产物路径(相对工作区)。"""
+        if not tool_call_id:
+            return None
+        row = self.con.execute("SELECT result_path FROM tool_calls WHERE id=?",
+                               (tool_call_id,)).fetchone()
+        if not row or not row["result_path"]:
+            return None
+        p = row["result_path"]
+        return os.path.relpath(p, self.root) if os.path.isabs(p) else p
+
     def _checkpoint(self, rid: str, step: int, history: list[dict]) -> None:
         """存检查点。
 
@@ -404,7 +415,8 @@ class Runner:
                 if _note:
                     _sys += "\n\n## 轮前准备(程序注入)\n" + _note
                 # 历史收敛必须在**每次请求前**生效:只在检查点裁剪 = 每次调用仍带全量旧输出
-                history = _bound_history(history, self.limits.max_context_chars)
+                history = _bound_history(history, self.limits.max_context_chars,
+                                         artifact_of=self._artifact_of)
                 msgs = [{"role": "system", "content": _sys}] + history
                 # 预算判定必须在**计数之前**:被挡住的调用不该记账(时间/次数都一样)
                 if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
@@ -875,10 +887,13 @@ def _context_stats(system: str, history: list[dict]) -> dict:
             "other": other, "total": tool + assistant + other}
 
 
-def _bound_history(history: list[dict], budget_chars: int, *, keep_full: int = 12) -> list[dict]:
-    """把历史压到预算内:**从最老的开始**收窄工具输出,最近 keep_full 条保持全文。
+def _bound_history(history: list[dict], budget_chars: int, *, keep_full: int = 12,
+                   artifact_of=None) -> list[dict]:
+    """**可选**保护:budget_chars=0(默认)= 原样返回,完整历史照常发送。
 
-    只改内容长度,不动 role/tool_call_id 结构(协议与审计需要);完整产物在磁盘/DB。
+    显式设了预算时,从最老的开始收窄工具输出,最近 keep_full 条保持全文。
+    只改内容长度,不动 role/tool_call_id 结构(协议与审计需要);收敛说明里带上
+    产物路径(artifact_of 解析),保证模型仍能回到原文继续验证。
     """
     if budget_chars <= 0:
         return history
@@ -893,7 +908,13 @@ def _bound_history(history: list[dict], budget_chars: int, *, keep_full: int = 1
         c = history[i].get("content")
         if not isinstance(c, str) or len(c) <= 600:
             continue
-        new = f"{c[:400]}\n…(上下文收敛:原 {len(c)} 字符,全文见工具产物文件)…\n{c[-200:]}"
+        note = f"…(上下文收敛:原 {len(c)} 字符"
+        if artifact_of:
+            p = artifact_of(history[i].get("tool_call_id"))
+            if p:
+                note += f",全文: {p}"
+        note += ")…"
+        new = f"{c[:400]}\n{note}\n{c[-200:]}"
         total -= len(c) - len(new)
         history[i] = {**history[i], "content": new}
     # 第二轮:仍超预算 ⇒ 最老的直接压成占位(只留长度提示),不动结构
@@ -904,7 +925,12 @@ def _bound_history(history: list[dict], budget_chars: int, *, keep_full: int = 1
             c = history[i].get("content")
             if not isinstance(c, str) or len(c) <= 200:
                 continue
-            new = f"…(已收敛:原 {len(c)} 字符,全文见工具产物文件)…"
+            note = f"…(已收敛:原 {len(c)} 字符"
+            if artifact_of:
+                p = artifact_of(history[i].get("tool_call_id"))
+                if p:
+                    note += f",全文: {p}"
+            new = note + ")…"
             total -= len(c) - len(new)
             history[i] = {**history[i], "content": new}
     return history

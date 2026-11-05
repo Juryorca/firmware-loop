@@ -85,3 +85,42 @@ def test_every_call_logged_and_context_bounded(tmp_path):
     last = events[-1]
     assert last["history_chars"] <= 3000 + 2500, last["history_chars"]
     assert res.state in ("finished", "paused")
+
+
+def test_default_is_no_trimming():
+    """默认 0 = 不裁剪:完整会话历史照常发送,不做"随机字符上限"式截断。"""
+    from fwcore.limits import Limits
+    assert Limits().max_context_chars == 0
+    history: list[dict] = [{"role": "tool", "tool_call_id": f"c{i}",
+                            "content": _big(5000)} for i in range(40)]
+    out = _bound_history(history, Limits().max_context_chars)
+    assert out is history and all(len(m["content"]) == 5000 for m in out)
+
+
+def test_trim_note_keeps_artifact_path():
+    history: list[dict] = [{"role": "tool", "tool_call_id": "c1", "content": _big(3000)}]
+    out = _bound_history(history, 1000, keep_full=0,
+                         artifact_of=lambda tcid: f"state/artifacts/{tcid}.txt")
+    note = out[0]["content"]
+    assert "state/artifacts/c1.txt" in note and out[0]["tool_call_id"] == "c1"
+
+
+def test_trim_keeps_tool_pairing_and_resume(tmp_path):
+    """裁剪不得破坏 assistant(tool_calls) ↔ tool(tool_call_id) 配对,checkpoint 恢复后仍成对。"""
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    Domain(con, root).create_target("t1", version="1")
+    r = Runner(con, root, _Chatty(4), limits=Limits(max_model_calls=8, max_context_chars=1200),
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+    res = r.run(r.start("t1", "配对"), "t1")
+    ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
+    msgs = json.loads(ck["messages"])
+    pending: set[str] = set()
+    for m in msgs:
+        if m.get("role") == "assistant":
+            for c in m.get("tool_calls") or []:
+                pending.add(c["id"])
+        elif m.get("role") == "tool":
+            assert m["tool_call_id"] in pending, "tool 消息必须能对上前面的 tool_call"
+            pending.discard(m["tool_call_id"])
+    assert res.state in ("finished", "paused")
