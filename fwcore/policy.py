@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import Callable
 
 from .domain import DomainError
 
@@ -56,7 +57,7 @@ class Authz:
 class Policy:
     allow_high_risk: bool = False
     authorization: Authz | None = None
-    confirm: object = None              # Callable[[str], bool] | None
+    confirm: "Callable[[str], bool] | None" = None
     max_timeout: float = 120.0
     sandbox_roots: list[str] = field(default_factory=list)
     require_path_within: bool = True

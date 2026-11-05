@@ -70,7 +70,8 @@ class Runner:
     def __init__(self, con, root: str, model: Adapter, *, registry: Registry | None = None,
                  max_steps: int | None = None, timeout: float = 60.0, policy: Policy | None = None,
                  research: Research | None = None, max_seconds: float | None = None,
-                 stall_repeats: int = 3, limits: Limits | None = None):
+                 stall_repeats: int = 3, limits: Limits | None = None,
+                 prepare: object = None, prepare_timeout: float = 15.0):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -84,6 +85,12 @@ class Runner:
         self.stall_repeats = stall_repeats
         # 每轮最多模型调用次数:执行层保护(上下文/成本),触发时**暂停**而不是收口研究
         self.limits = limits or Limits()
+        # 对齐 Pi 的 prepareNextTurn:每轮模型调用前可做"准备"(压缩上下文/取外部状态),
+        # **必须可取消且有超时**;钩子返回 {"context_note": str} 或 {"cancel": True}
+        self.prepare = prepare
+        self.prepare_timeout = prepare_timeout
+        self.prepare_timeouts = 0
+        self._prepare_state: dict = {}
         self._pending_pause: tuple[str, dict] | None = None
         self.timeout = timeout
         self.policy = policy or Policy()
@@ -114,6 +121,30 @@ class Runner:
         with contextlib.suppress(Exception):
             from .watchdog import Watchdog
             Watchdog(self.con, self.root)._kill_pgids(rid)
+
+    def _run_prepare(self, target: str, rid: str, step: int) -> dict:
+        """跑轮前准备钩子(带超时)。超时/异常都只记事件并继续,不改变研究结论。"""
+        if not self.prepare:
+            return {}
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as _T
+
+        payload = {"target": target, "run_id": rid, "step": step,
+                   "derived": self.domain.derived(target)}
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(self.prepare, payload)      # type: ignore[misc]
+                out = fut.result(timeout=self.prepare_timeout) or {}
+        except _T:
+            self.prepare_timeouts += 1
+            _event(self.con, "run.prepare_timeout", rid, {"timeout_s": self.prepare_timeout})
+            return {}
+        except Exception as e:                              # 钩子自己坏了也不能毁掉研究
+            _event(self.con, "run.prepare_error", rid, {"error": f"{type(e).__name__}: {e}"})
+            return {}
+        if isinstance(out, dict) and out.get("context_note"):
+            self._prepare_state = {"context_note": str(out["context_note"])[:4000]}
+        return out if isinstance(out, dict) else {}
 
     def _exec_tool_call(self, ctx, call: dict, rid: str) -> dict:
         """执行一次工具调用;参数截断/非法 JSON 时**不执行**,显式失败并留痕。"""
@@ -218,7 +249,16 @@ class Runner:
                     state = "paused"
                     self._limit_hit(rid, "max_seconds", {"elapsed_s": round(time.time() - t0, 1)})
                     break
-                msgs = [{"role": "system", "content": self.research.system_prompt(target, goal)}] + history
+                prep = self._run_prepare(target, rid, step)
+                if prep.get("cancel"):
+                    self._limit_hit(rid, "prepare_cancel", {"note": str(prep.get("why") or "")[:120]})
+                    state = "paused"
+                    break
+                _sys = self.research.system_prompt(target, goal)
+                _note = self._prepare_state.get("context_note")
+                if _note:
+                    _sys += "\n\n## 轮前准备(程序注入)\n" + _note
+                msgs = [{"role": "system", "content": _sys}] + history
                 model_calls += 1
                 if self.limits.calls_exhausted(model_calls):
                     state = "paused"

@@ -47,3 +47,11 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   ③ 历史里回填 tool 消息(不静默吞掉)
 - 证据:`tests/test_tool_args_invalid.py` 1 passed in 0.19s(断言:无假设产生 / 记录为 error / 回填含"未执行")
 - 下一项:轮前准备钩子(`prepareNextTurn` 语义:可取消 + 有超时)或只读工具并行(按需)
+
+### Iteration 4(Pi 对齐:轮前准备钩子)
+- 增量:`Runner(prepare=..., prepare_timeout=...)` 对齐 Pi 的 `prepareNextTurn`:
+  每轮模型调用前执行;可用于压缩上下文/取外部状态;返回 `{"context_note": str}` 注入系统提示、
+  `{"cancel": True}` 暂停(不写结论);**有超时**(超时只记 `run.prepare_timeout` 并继续),
+  钩子异常只记 `run.prepare_error`,不中断研究
+- 证据:`tests/test_prepare_hook.py` **4 passed in 2.13s**(注入生效/超时不阻塞/异常不杀 run/取消不收口)
+- 下一项:只读工具并行(按需,Pi 的 executeToolCallsParallel 语义)或研究评测加难下一批

@@ -52,7 +52,7 @@
 | Watchdog 复核(跨线程/自动启动/错误空转) | ✅ | 独立连接 + 退避 + 连续失败停止;`tests/test_watchdog.py` 6 passed 1.63s |
 | 源码级对照表(8 项) | ✅ | `docs/PI-CORE-ALIGNMENT.md`(基线 `d57c2d2`;每项含 Pi 依据/fwcore 现状/差距/是否改/反例) |
 | 取消语义(对齐 AbortSignal) | ✅ | `Runner.cancel()` + 安全点检查;`tests/test_cancel.py` 2 passed 0.38s |
-| 按差距逐项实施 | 🟡 已开始 | ①取消语义 ✅(`Runner.cancel()`;`tests/test_cancel.py` 2 passed 0.38s);②工具参数截断显式失败 ✅(`_exec_tool_call`;`tests/test_tool_args_invalid.py` 1 passed 0.19s);③下一步:轮前准备钩子(可取消+超时) |
+| 按差距逐项实施 | 🟡 已开始 | ①取消语义 ✅(`Runner.cancel()`;`tests/test_cancel.py` 2 passed 0.38s);②工具参数截断显式失败 ✅(`_exec_tool_call`;`tests/test_tool_args_invalid.py` 1 passed 0.19s);③轮前准备钩子 ✅(`prepare`/`prepare_timeout`;`tests/test_prepare_hook.py` 4 passed 2.13s);④下一步:只读工具并行(按需) |
 
 ## 阻塞 / 推迟(需授权或外部条件)
 
