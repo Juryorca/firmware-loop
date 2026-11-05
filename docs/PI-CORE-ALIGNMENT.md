@@ -47,3 +47,17 @@ Capability/Provider/Environment 解析 · 异构固件工具适配 · 长研究�
 - 轮前准备钩子(可取消、有超时)+ 其反例测试
 - 工具参数截断的显式失败语义
 - 若引入只读并行工具:按 `executeToolCallsParallel` 语义实现并测并发安全
+
+## 5. 第二轮增量(2026-11-05,基线仍 `d57c2d2`)
+
+这一轮把"工具执行"从"能跑"推到"可审计、可取消、可恢复"。逐项对照 Pi 的既有机制(引用行号 = `packages/agent/src/agent-loop.ts`):
+
+| 机制 | Pi 怎么做 | fwcore 怎么做 | 差距 / 为什么 |
+|---|---|---|---|
+| 工具批次中途取消 | `executeToolCallsSequential` 每执行完一个调用就检查 `signal?.aborted` 并 `break`(L540–585);并行版在派发前检查(L596+) | `turn()` 的工具循环之间检查 `_external_stop`/`cancel`;`Registry.call` 内层对长命令做 0.2s 切片轮询,发现 `runs.handback_reason=user_stop:*` 就整组杀掉并记 `cancelled` | Pi 靠 AbortSignal 传播;fwcore 的"取消"是**数据库事实**(可跨进程/跨主机),所以取消必须在 DB 里可查——这不冲突,是同一语义的不同载体 |
+| 工具生命周期归属 | 工具执行是**单次 loop** 的一部分,由 session 持有 | MCP 桥归 `Runner` 所有:`turn()` 不关桥,`close()` 幂等,`_ensure_mcp()` 跨轮/恢复自愈并记 `mcp.reopened` | 上一版把桥的关闭放在 `_finish_state()` ⇒ 自动继续的第 2 轮 MCP 全废(已修,见 `tests/test_mcp_lifecycle.py`) |
+| 工具结果作为事实 | 工具结果进消息流;是否"可信"由上层判断 | 工具结果**落盘 + 哈希**(`tool_calls.result_path/result_sha256`),结构化观测存 `observation`;证据必须 `add_evidence(tool_call_id=...)` 且默认 `verified=0`,复核后 `promote_evidence()` 才能支撑 `vulnerable` | 研究领域的核心差异:工具跑成功 ≠ 漏洞成立。Pi 不需要这层,因为它的"事实"由使用者解释;fwcore 要把"解释"变成程序可核的门 |
+| 长工具 vs 停滞 | 无独立看护:传输层超时由工具自己管 | 看护发现心跳过期时先查**在飞 `running` 工具调用**,在 `max(max_tool_seconds, heartbeat)+120s` 内只续心跳,不暂停不杀组 | 外部看护是 fwcore 独有的(事故驱动);判据必须与"研究停滞"区分开,否则会误杀正常的 10 分钟 fuzz |
+| 失联判定 | 进程内运行,不存在"失联" | `recover_stale()`:同主机 pid 存活 + `pid_starttime` 比对(pid 复用视为死);跨主机默认不动,`--include-remote` 才按倍数阈值兜底;长工具在飞同样保活 | 固件研究是长时任务、会换会话/换机器继续,所以"谁还活着"必须是可核事实而不是假设 |
+
+仍未采纳(理由同第 2 节):并行工具批次、流式输出、UI 级消息事件。

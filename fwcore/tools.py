@@ -15,7 +15,6 @@ import contextlib
 import json
 import os
 import shlex
-import sqlite3
 import subprocess
 import time
 from dataclasses import dataclass, field
