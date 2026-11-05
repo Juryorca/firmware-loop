@@ -78,8 +78,10 @@ def test_checkpoint_pruning_keeps_resume_correct(tmp_path):
     # 裁剪后恢复仍然可用,且历史仍然合法
     from fwcore.models import to_api_messages
 
+    # 预算是 **run 级**的:第一次已用掉 12 次 ⇒ 恢复时必须给出更大的预算才能继续
+    # (给更小的预算会立即暂停 —— 这是有意语义,见 tests/test_budget_accounting.py)
     r2 = Runner(con, str(tmp_path), ScriptedAdapter(script=[{"content": "FINAL: 恢复后收工", "tool_calls": []}]),
-                limits=Limits(max_model_calls=3), policy=Policy(allow_high_risk=True))
+                limits=Limits(max_model_calls=20), policy=Policy(allow_high_risk=True))
     res = r2.resume(rid)
     assert res.state == "finished"
     to_api_messages(res.history)
