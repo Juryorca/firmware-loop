@@ -36,7 +36,17 @@ class ModelHTTPError(RuntimeError):
         return int(str(self).split()[1].rstrip(":"))
 
 
+ALLOWED_SCHEMES = ("http://", "https://")
+
+
+def _check_url(url: str) -> None:
+    """只允许 http(s):防止配置被改成 file:// 之类把本地文件读进来(advisory 的真实面)。"""
+    if not url.startswith(ALLOWED_SCHEMES):
+        raise ModelHTTPError(0, f"拒绝非 http(s) 端点: {url[:80]}")
+
+
 def urllib_transport(url: str, headers: dict, payload: dict) -> dict:
+    _check_url(url)
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=180) as r:
@@ -118,6 +128,7 @@ class OpenAICompatModel:
             ]
             payload["tool_choice"] = "auto"
         self.last_request = payload
+        _check_url(self.base_url.rstrip("/") + "/chat/completions")
         try:
             data = self.transport(self.base_url.rstrip("/") + "/chat/completions",
                               {"Content-Type": "application/json", "Authorization": f"Bearer {key}"},

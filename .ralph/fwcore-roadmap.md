@@ -157,3 +157,8 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
 - 反例回归:`tests/test_cli_smoke.py::test_resume_and_advance_cli_paths`
   (run → 取 run_id → resume → advance,三条都断言 rc=0 且 stderr 无 UnboundLocalError/AttributeError)
 - 证据:**`tests/test_cli_smoke.py` 7 passed in 12.83s**
+
+### Iteration 18(端点 scheme 白名单 —— 用户已停循环,收尾增量)
+- 增量:`fwcore/model_client.py` 强制 http(s) 端点(拒绝 `file://` 等),校验放在 `chat()`
+  ⇒ 即使注入 transport 也拦得住(不把请求发出去)
+- 证据:`tests/test_endpoint_scheme.py` **2 passed in 0.01s**(http/https 放行;file:// 抛错且未发请求)
