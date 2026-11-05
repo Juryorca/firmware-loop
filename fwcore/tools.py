@@ -146,11 +146,14 @@ def _kill_group(proc: "subprocess.Popen") -> None:
         pass
 
 
-def _record(ctx: ToolContext, tool: str, args: dict, status: str, note: str = "") -> None:
+def _record(ctx: ToolContext, tool: str, args: dict, status: str, note: str = "",
+            call_key: str | None = None) -> None:
     with _db.Tx(ctx.domain.con) as c:
         c.execute(
-            "INSERT INTO tool_calls(id,run_id,tool,args,status,note,created_at) VALUES(?,?,?,?,?,?,?)",
-            (new_id("TC"), ctx.run_id, tool, json.dumps(args, ensure_ascii=False), status, note, _now()),
+            "INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,note,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?)",
+            (new_id("TC"), call_key, ctx.run_id, tool, json.dumps(args, ensure_ascii=False),
+             status, note, _now()),
         )
 
 

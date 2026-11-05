@@ -75,11 +75,13 @@ class ScriptedAdapter:
                 try:
                     args = json.loads(args or "{}")
                 except json.JSONDecodeError:
-                    args = {"__invalid_json__": args}
+                    args = {"__invalid_json__": args}   # 保留原文,下面打标记
+            invalid = isinstance(args, dict) and "__invalid_json__" in args
             out.append({"id": c.get("id") or f"call_{len(out)}",
                         "name": c.get("name") or fn.get("name") or "",
                         "args": c.get("args") or args or {},
-                        "args_raw": None})
+                        "args_raw": None,
+                        "args_invalid": invalid})
         return Reply(content=raw.get("content") or "", tool_calls=out,
                      reasoning=raw.get("reasoning_content") or "")
 

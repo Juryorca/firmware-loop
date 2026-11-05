@@ -115,6 +115,15 @@ class Runner:
             from .watchdog import Watchdog
             Watchdog(self.con, self.root)._kill_pgids(rid)
 
+    def _exec_tool_call(self, ctx, call: dict, rid: str) -> dict:
+        """执行一次工具调用;参数截断/非法 JSON 时**不执行**,显式失败并留痕。"""
+        if call.get("args_invalid"):
+            err = "tool arguments 截断或非法 JSON ⇒ 未执行(请重发完整参数)"
+            _record_tool(ctx, call.get("name") or "?", call.get("args") or {}, "error", err, call.get("id"))
+            return {"status": "error", "error": err, "not_executed": True}
+        return self.registry.call(ctx, call.get("name") or "", call.get("args") or {},
+                                  call_key=call.get("id"), run_id=rid)
+
     def _external_stop(self, rid: str) -> str | None:
         """外部是否要求停(取消/别的进程置 paused)。"""
         row = self.con.execute("SELECT state, handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
@@ -253,8 +262,7 @@ class Runner:
                         seen[sig] = seen.get(sig, 0) + 1
                         if seen[sig] >= self.stall_repeats:
                             stalled = True
-                        out = self.registry.call(ctx, call["name"], call.get("args") or {},
-                                                 call_key=call.get("id"), run_id=rid)
+                        out = self._exec_tool_call(ctx, call, rid)
                         history.append({"role": "tool", "tool_call_id": call.get("id"),
                                         "name": call["name"],
                                         "content": json.dumps(out, ensure_ascii=False)[:8000]})
@@ -432,6 +440,12 @@ class Runner:
                        {"age_s": round(age, 1), "pid_alive": alive, "host": r["host"]})
             fixed.append(r["id"])
         return fixed
+
+
+def _record_tool(ctx, name: str, args: dict, status: str, note: str, call_key: str | None) -> None:
+    from .tools import _record as _rec
+
+    _rec(ctx, name, args, status, note=note, call_key=call_key)
 
 
 def _coerce_reply(r) -> Reply:

@@ -40,3 +40,10 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
 - 增量:`Runner.cancel()`(置 paused + handback=user_stop + 杀工具进程组;循环每步检查外部停止)
 - 证据:`tests/test_cancel.py` 2 passed in 0.38s(安全点停止且不写结论;取消后零步)
 - 下一项:轮前准备钩子(可取消/有超时)或工具参数截断显式失败
+
+### Iteration 3(Pi 对齐:工具参数截断显式失败)
+- 增量:对齐 Pi 的 `failToolCallsFromTruncatedMessage` —— 模型给的 tool arguments 若**截断/非法 JSON**:
+  ① **不执行**该工具;② `tool_calls` 记 `error` 并写明"截断或非法 JSON ⇒ 未执行";
+  ③ 历史里回填 tool 消息(不静默吞掉)
+- 证据:`tests/test_tool_args_invalid.py` 1 passed in 0.19s(断言:无假设产生 / 记录为 error / 回填含"未执行")
+- 下一项:轮前准备钩子(`prepareNextTurn` 语义:可取消 + 有超时)或只读工具并行(按需)
