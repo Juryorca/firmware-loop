@@ -362,8 +362,8 @@ class Domain:
         ver = version if version is not None else (t.version or "unknown")
         verified = 1
         if tool_call_id:
-            tc = self.con.execute("SELECT status, provider, capability FROM tool_calls WHERE id=?",
-                                  (tool_call_id,)).fetchone()
+            tc = self.con.execute("SELECT status, provider, capability, result_path FROM tool_calls"
+                                  " WHERE id=?", (tool_call_id,)).fetchone()
             if not tc:
                 raise NotFound(f"工具调用不存在: {tool_call_id}")
             if tc["status"] != "ok":
@@ -372,6 +372,10 @@ class Domain:
                     "(失败/超时/取消都只是执行事实,不是研究证据)")
             source = source or "tool:" + (tc["provider"] or tc["capability"] or "unknown")
             verified = 0          # 原始工具输出:必须复核后提升
+            if path is None and capture is None and tc["result_path"]:
+                # 证据默认锚定该次调用的原始产物(路径相对 root 存,便于跨机复核)
+                rp = tc["result_path"]
+                path = os.path.relpath(rp, self.root) if os.path.isabs(rp) else rp
         sha = None
         if path:
             full = path if os.path.isabs(path) else os.path.join(self.root, path)

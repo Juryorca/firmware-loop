@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -241,6 +241,18 @@ def _step2(con: sqlite3.Connection) -> None:
     _add_col(con, "surfaces", "judged_by", "TEXT")
 
 
+def _step6(con: sqlite3.Connection) -> None:
+    """工具结果的原始产物与结构化观测。
+
+    - `result_path/result_sha256`:工具返回的文本结果也落盘并算哈希(证据可直接引用)
+    - `observation`:**解析后的观测**(JSON,来自 toolkit 的 OBSERVERS / MCP)——
+      它是"工具说了什么",不是"漏洞成立";要成为证据仍必须 `add_evidence` + 复核
+    """
+    _add_col(con, "tool_calls", "result_path", "TEXT")
+    _add_col(con, "tool_calls", "result_sha256", "TEXT")
+    _add_col(con, "tool_calls", "observation", "TEXT")
+
+
 def _step5(con: sqlite3.Connection) -> None:
     """记录 pid 的启动时间:跨主机/重启后靠它识别 **pid 复用**(否则复活进程会被误当原 run)。"""
     _add_col(con, "runs", "pid_starttime", "INTEGER")
@@ -275,7 +287,7 @@ def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "hypotheses", "surface_key", "TEXT")
 
 
-STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5}
+STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6}
 
 
 def _migrate(con: sqlite3.Connection) -> None:

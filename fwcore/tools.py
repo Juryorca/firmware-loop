@@ -131,14 +131,33 @@ class Registry:
                 status = "cancelled"
                 out["error"] = "运行已取消:工具执行被中断"
         dur = int((time.time() - t0) * 1000)
+        # 文本类工具(MCP/IDA/Ghidra 等)没有 stdout 文件 ⇒ 把结果本身落盘 + 算哈希,
+        # 这样"证据引用某次工具调用"时总有可校验的原始产物,而不是只留在对话里。
+        result_path = out.get("result_path")
+        result_sha = out.get("result_sha256")
+        if not result_path and isinstance(out.get("text"), str) and out["text"]:
+            art = ctx.artifacts_dir or os.path.join(ctx.root, "state", "artifacts", ctx.run_id or "local")
+            try:
+                os.makedirs(art, exist_ok=True)
+                result_path = os.path.join(art, f"{cid}.result.txt")
+                with open(result_path, "wb") as f:
+                    f.write(out["text"].encode("utf-8", errors="replace"))
+                result_sha = _sha256(result_path)
+            except OSError:
+                result_path, result_sha = None, None      # 落盘失败不改工具结论,但如实留空
+        observation = out.get("observation")
         with _db.Tx(ctx.domain.con) as c:
             meta = out.get("meta") or {}
             c.execute(
                 "UPDATE tool_calls SET status=?, exit_code=?, duration_ms=?, stdout_path=?, stderr_path=?,"
-                " provider=?, capability=?, arch=?, env_json=? WHERE id=?",
+                " provider=?, capability=?, arch=?, env_json=?, result_path=?, result_sha256=?, observation=?"
+                " WHERE id=?",
                 (status, out.get("exit_code"), dur, out.get("stdout_path"), out.get("stderr_path"),
                  meta.get("provider"), meta.get("capability"), meta.get("arch"),
-                 json.dumps(meta, ensure_ascii=False) if meta else None, cid),
+                 json.dumps(meta, ensure_ascii=False) if meta else None,
+                 result_path, result_sha,
+                 json.dumps(observation, ensure_ascii=False)[:20000] if observation else None,
+                 cid),
             )
         out["status"] = status
         out["tool_call_id"] = cid
@@ -370,10 +389,14 @@ def _caps(ctx: ToolContext, args: dict) -> dict:
 
 
 def _sha256(path: str) -> str:
+    """算文件哈希;读不了就返回空串(**不**让哈希失败变成工具失败),调用方据此判"无产物"。"""
     h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
     return h.hexdigest()
 
 

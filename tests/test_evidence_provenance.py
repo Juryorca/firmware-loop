@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 
@@ -123,3 +124,48 @@ def test_migration_from_v3_preserves_existing_rows(tmp_path):
     row = con.execute("SELECT * FROM evidence WHERE id='E1'").fetchone()
     assert row["capture"] == "old fact" and row["verified"] == 1
     assert con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"] == str(_db.SCHEMA_VERSION)
+
+
+# ---------------- 文本类工具(MCP/IDA/Ghidra):结果落盘 + 观测入库 ----------------
+
+def _text_registry():
+    from fwcore.tools import Registry, ToolSpec
+
+    reg = Registry()
+
+    def handler(ctx, args):
+        return {"status": "ok", "text": "decompile: strcpy(dst, src)",
+                "observation": {"status": "ok", "kind": "decompiled", "lines": 1},
+                "meta": {"provider": "idb", "capability": "ida.decompile"}}
+
+    reg.register(ToolSpec(name="fake_decompile", description="假反编译",
+                          input_schema={"type": "object", "properties": {}}, handler=handler,
+                          risk="low", external=False))
+    return reg
+
+
+def test_text_tool_result_is_persisted_with_hash_and_observation(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    out = _text_registry().call(_ctx(dom, root), "fake_decompile", {})
+    assert out["status"] == "ok"
+    row = con.execute("SELECT result_path, result_sha256, observation FROM tool_calls WHERE id=?",
+                      (out["tool_call_id"],)).fetchone()
+    assert row["result_path"] and os.path.isfile(row["result_path"])
+    with open(row["result_path"], encoding="utf-8") as f:
+        assert "strcpy" in f.read()
+    with open(row["result_path"], "rb") as f:
+        assert row["result_sha256"] == hashlib.sha256(f.read()).hexdigest()
+    assert json.loads(row["observation"])["kind"] == "decompiled"
+
+
+def test_evidence_from_text_tool_defaults_to_its_artifact(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    out = _text_registry().call(_ctx(dom, root), "fake_decompile", {})
+    tc = con.execute("SELECT result_path, result_sha256 FROM tool_calls WHERE id=?",
+                     (out["tool_call_id"],)).fetchone()
+    ev = dom.add_evidence("t1", "tool_output", tool_call_id=out["tool_call_id"])
+    row = con.execute("SELECT path, sha256, verified, source FROM evidence WHERE id=?", (ev,)).fetchone()
+    assert row["path"] and row["path"].endswith(".result.txt")
+    assert row["sha256"] == tc["result_sha256"]
+    assert row["verified"] == 0
+    assert row["source"] in ("tool:idb", "tool:ida.decompile"), row["source"]
