@@ -96,6 +96,11 @@ def main() -> int:
     phase2 = runner.resume(rid, goal=GOAL + "\n(恢复:继续没做完的部分)")
     print(f"[phase2] state={phase2['state']} steps={phase2['steps']} ready={phase2['ready']}")
 
+    # 第三阶段:自动继续(advance)—— 真实模型下的跨轮协议(含"FINAL 但还有未收口项"的续轮)
+    phase3 = runner.advance("e2e", goal=GOAL + "\n(自动继续:推进未收口项)", max_rounds=2, run_id=rid)
+    print(f"[phase3/advance] state={phase3['state']} rounds={phase3['rounds']} "
+          f"steps={phase3['steps']} handback={phase3['handback']}")
+
     # 必做断言:机制层面成立(不评价研究质量)
     calls = con.execute("SELECT tool,status FROM tool_calls").fetchall()
     hyps = con.execute("SELECT id,title,state FROM hypotheses").fetchall()

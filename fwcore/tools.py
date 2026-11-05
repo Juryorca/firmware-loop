@@ -345,8 +345,20 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
         args["target"], args["kind"], path=args.get("path"), capture=args.get("capture"),
         attempt_id=args.get("attempt_id"), hypothesis_id=args.get("hypothesis_id"),
         version=args.get("version"),
+        # 绑定到具体工具调用 ⇒ 自动继承 provider/原始产物,并标为"未复核"
+        tool_call_id=args.get("tool_call_id"), source=args.get("source"),
     )
     return {"status": "ok", "evidence_id": eid}
+
+
+def state_verify_evidence(ctx: ToolContext, args: dict) -> dict:
+    """给证据留下可检查的复核记录(自主、可审计):哈希复核/关联复现/交叉验证。"""
+    cid = ctx.domain.verify_evidence(args["evidence_id"], args["method"],
+                                     artifact=args.get("artifact"),
+                                     attempt_id=args.get("attempt_id"),
+                                     detail=args.get("detail", ""))
+    return {"status": "ok", "check_id": cid, "method": args["method"],
+            "evidence": ctx.domain.evidence_status(args["evidence_id"])}
 
 
 def state_start_attempt(ctx: ToolContext, args: dict) -> dict:
@@ -443,8 +455,19 @@ def default_registry() -> Registry:
             "target": {"type": "string"}, "kind": {"type": "string"},
             "path": {"type": "string"}, "capture": {"type": "string"},
             "attempt_id": {"type": "string"}, "hypothesis_id": {"type": "string"},
-            "version": {"type": "string"}}, "required": ["target", "kind"]},
+            "version": {"type": "string"}, "tool_call_id": {"type": "string"},
+            "source": {"type": "string"}}, "required": ["target", "kind"]},
         state_add_evidence))
+    r.register(ToolSpec(
+        "state_verify_evidence",
+        "复核证据(留下可检查记录后 verified=1):recheck-sha256 重算产物哈希 / "
+        "reproduce-attempt 关联 supported 尝试 / cross-check 需 artifact+detail",
+        {"type": "object", "properties": {
+            "evidence_id": {"type": "string"},
+            "method": {"type": "string", "enum": ["recheck-sha256", "reproduce-attempt", "cross-check"]},
+            "artifact": {"type": "string"}, "attempt_id": {"type": "string"},
+            "detail": {"type": "string"}}, "required": ["evidence_id", "method"]},
+        state_verify_evidence))
     r.register(ToolSpec(
         "state_start_attempt", "开始一次尝试(方法自由文本)",
         {"type": "object", "properties": {
