@@ -123,7 +123,8 @@ class Watchdog:
                             "limit": self.limits.max_db_bytes})
 
         rows = con.execute(
-            "SELECT r.id, r.heartbeat_at, r.updated_at, r.state, r.pid FROM runs r WHERE r.state='running'"
+            "SELECT r.id, r.heartbeat_at, r.updated_at, r.state, r.pid, r.pid_starttime, r.host"
+            " FROM runs r WHERE r.state='running'"
         ).fetchall()
         for r in rows:
             hb = _epoch(r["heartbeat_at"] or r["updated_at"])
@@ -131,8 +132,38 @@ class Watchdog:
             n_ck = con.execute(
                 "SELECT COUNT(*) n FROM checkpoints WHERE run_id=?", (r["id"],)).fetchone()["n"]
             too_many = n_ck > max(self.limits.checkpoints_keep * 2, 10)
-            if stale:
-                # 长工具在飞 ≠ 研究停滞:工具在跑时不能暂停/杀进程组
+            over_db = size > self.limits.max_db_bytes
+            # 主运行进程已死(或 pid 被复用)⇒ 这个 run 不可能再推进:
+            # 看护作为**独立进程**必须能发现它(否则看护与主进程同生共死 = 没有保护)
+            owner_dead = False
+            if (r["host"] or "") == _host() and r["pid"]:
+                if not _pid_alive(r["pid"]):
+                    owner_dead = True
+                elif r["pid_starttime"]:
+                    cur = _proc_starttime(r["pid"])
+                    owner_dead = cur is not None and cur != r["pid_starttime"]
+
+            # 硬保护优先:磁盘/检查点超限与"心跳停滞"是两类事 ——
+            # 长工具只能豁免"停滞",**不得**豁免磁盘与检查点硬顶(否则 fuzz 期间库爆盘无人管)
+            hard = [name for name, hit in (("max_db_bytes", over_db),
+                                           ("checkpoints", too_many),
+                                           ("owner_dead", owner_dead)) if hit]
+            if hard:
+                killed = self._kill_pgids(r["id"])
+                with _db.Tx(con) as c:
+                    c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
+                    c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                              (_now(), "watchdog.paused", r["id"],
+                               json.dumps({"hard": hard, "checkpoints": n_ck, "db_bytes": size,
+                                           "stale_s": round(now - hb, 1) if hb else None,
+                                           "killed_pgids": killed}, ensure_ascii=False)))
+                actions.append({"run": r["id"], "paused": True, "hard": hard,
+                                "killed_pgids": killed, "checkpoints": n_ck, "db_bytes": size})
+                continue
+
+            if stale and not owner_dead:
+                # 长工具在飞 ≠ 研究停滞:只豁免"停滞",不豁免上面的硬保护
+                # (主进程已死的 run 不适用宽限:没人等它了)
                 inflight = con.execute(
                     "SELECT tool, created_at FROM tool_calls WHERE run_id=? AND status='running'"
                     " ORDER BY created_at DESC LIMIT 1", (r["id"],)).fetchone()
@@ -150,7 +181,6 @@ class Watchdog:
                         actions.append({"run": r["id"], "kept_alive_by": "tool_inflight",
                                         "tool": inflight["tool"]})
                         continue
-            if stale or too_many or size > self.limits.max_db_bytes:
                 killed = self._kill_pgids(r["id"])
                 with _db.Tx(con) as c:
                     c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
@@ -186,6 +216,22 @@ class Watchdog:
         th = threading.Thread(target=_loop, name="fwcore-watchdog", daemon=True)
         th.start()
         return th
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, TypeError, ValueError):
+        return True
+    return True
+
+
+def _host() -> str:
+    import socket
+
+    return socket.gethostname()
 
 
 def _proc_starttime(pid: int) -> int | None:

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -83,6 +84,10 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--no-shell", action="store_true"); g.add_argument("--no-high-risk", action="store_true")
     rv = sp.add_parser("revoke"); rv.add_argument("target"); rv.add_argument("--reason", default="")
     sh = sp.add_parser("show"); sh.add_argument("target")
+    p = sub.add_parser("watchdog", help="独立看护进程(主进程崩了也能兜住)")
+    p.add_argument("--once", action="store_true", help="只扫一轮后退出(测试/定时任务用)")
+    p.add_argument("--poll", type=float, default=5.0)
+    p.add_argument("--heartbeat-timeout", type=float, default=900.0)
     p = sub.add_parser("recover", help="收敛确实失联的 run(活跃/长工具不误伤)")
     p.add_argument("--older-than", type=float, default=300.0)
     p.add_argument("--include-remote", action="store_true")
@@ -179,6 +184,27 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(d, ensure_ascii=False, indent=2))
             else:
                 print(json.dumps(_authz.describe(args.root, args.target), ensure_ascii=False, indent=2))
+        elif args.cmd == "watchdog":
+            import signal as _signal
+            import threading as _th
+
+            from .limits import Limits
+            from .watchdog import Watchdog
+
+            wd = Watchdog(con=None, root=args.root, limits=Limits(),
+                          db_path=con.execute("PRAGMA database_list").fetchone()[2],
+                          heartbeat_timeout_s=args.heartbeat_timeout, poll_s=args.poll)
+            if args.once:
+                acts = wd.scan_once()
+                print(json.dumps({"actions": acts, "health": wd.health()}, ensure_ascii=False))
+            else:
+                stop = _th.Event()
+                for sig in (_signal.SIGTERM, _signal.SIGINT):
+                    with contextlib.suppress(Exception):
+                        _signal.signal(sig, lambda *_: stop.set())
+                th = wd.start_daemon(stop)
+                th.join()
+                print(json.dumps({"actions": [], "health": wd.health()}, ensure_ascii=False))
         elif args.cmd == "recover":
             from .models import ScriptedAdapter
             rec = Runner(con, args.root, ScriptedAdapter(script=[]))
