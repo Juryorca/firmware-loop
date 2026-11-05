@@ -165,15 +165,6 @@ class Research:
         return self.domain.con.execute(
             "SELECT COUNT(*) n FROM observations WHERE target_id=?", (t.id,)).fetchone()["n"]
 
-    def dual_output_blockers(self, target: str) -> list[str]:
-        """已废弃的目标级规则(保留函数以兼容调用方,永远返回空)。
-
-        为什么删:领域层已按 **Attempt** 要求 `obs_outcome=new|none(+理由)`。
-        再叠加"目标级没有任何 observation 就算缺失"会造成冲突:当所有 Attempt 都
-        合法声明了 `none` 时,旧规则仍会阻止收尾,并逼模型伪造 observation。
-        """
-        return []
-
     # ---------- 研究进度(给模型看的"当前手头有什么没做完") ----------
     def progress_brief(self, target: str) -> list[str]:
         """把**未完成的动作**摆到模型面前:它是数据,不是脚本步骤。
@@ -289,6 +280,7 @@ class Research:
         return out
 
     # ---------- 系统提示 ----------
+    # ---------- 系统提示 ----------
     def system_prompt(self, target: str, goal: str | None = None) -> str:
         d = self.domain.derived(target)
         pool = self.pool(target)
@@ -321,10 +313,6 @@ class Research:
         if self.mirror_due(target):
             parts += ["", f"## 三镜刷新(due:{self.rounds_since_mirror(target)} 轮未做)",
                       "面/格收口时用 state.record_mirror 记一行:机制=… / 作者=… / 状态=… / 新面=…"]
-        blocks = self.dual_output_blockers(target)
-        if blocks:
-            parts += ["", "## 双输出提醒", *[f"- {b}" for b in blocks],
-                      "任何观察(尤其是与预期不符的)用 state.add_observation 登记,并考虑升成新假设。"]
         if cards:
             parts += ["", "## 可选方法/判据(开放清单,来自 knowledge/,不是封闭技术表)", ""]
             parts += [f"- {c}" for c in cards[:40]]

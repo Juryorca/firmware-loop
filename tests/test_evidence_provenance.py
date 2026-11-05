@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 
 import pytest
 
@@ -110,30 +112,41 @@ def test_evidence_missing_artifact_is_rejected(tmp_path):
         dom.add_evidence("t1", "tool_output", path="state/artifacts/nope.bin")
 
 
-def test_migration_from_v3_preserves_existing_rows(tmp_path):
-    """v3 库(无新列)升级后:旧证据仍可用且默认视为已复核(不能凭空降级历史事实)。"""
+def test_old_schema_is_rejected_with_actionable_error(tmp_path):
+    """开发期不做逐版本升级:旧库必须报错并指向一次性 rebaseline 脚本。"""
+    path = os.path.join(str(tmp_path), "old.sqlite3")
+    con = sqlite3.connect(path, isolation_level=None)
+    con.executescript(_db.SCHEMA)
+    con.execute("INSERT INTO meta(key,value) VALUES('schema_version','3')")
+    con.close()
+    with pytest.raises(RuntimeError) as e:
+        _db.connect(path)
+    assert "db_rebaseline" in str(e.value)
+
+
+def test_rebaseline_tool_preserves_rows(tmp_path):
+    """一次性迁移:先备份、补基线列、行数不变、版本到位。"""
     path = os.path.join(str(tmp_path), "old.sqlite3")
     con = sqlite3.connect(path, isolation_level=None)
     con.row_factory = sqlite3.Row
     con.executescript(_db.SCHEMA)
     con.execute("INSERT INTO meta(key,value) VALUES('schema_version','3')")
     con.execute("INSERT INTO targets(id,name,created_at) VALUES('T1','t','2026-01-01')")
-    con.execute("INSERT INTO evidence(id,target_id,kind,capture,created_at) VALUES"
-                "('E1','T1','decompiled','old fact','2026-01-01')")
+    con.execute("INSERT INTO evidence(id,target_id,kind,capture,created_at)"
+                " VALUES('E1','T1','log','old fact','2026-01-01')")
     con.close()
 
-    con = _db.connect(path)
-    cols = {r[1] for r in con.execute("PRAGMA table_info(evidence)")}
-    assert {"source", "tool_call_id", "verified", "notes"} <= cols
-    row = con.execute("SELECT * FROM evidence WHERE id='E1'").fetchone()
+    r = subprocess.run([sys.executable, "tools/db_rebaseline.py", path],
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert "备份" in r.stdout or "backup" in r.stdout
+
+    con = _db.connect(path)          # 版本已到基线,能正常打开
+    row = con.execute("SELECT capture, tool_call_id FROM evidence WHERE id='E1'").fetchone()
     assert row["capture"] == "old fact"
-    # 迁移**不能**凭历史标志位推断"已独立复现":一律清零并留说明
-    assert row["verified"] == 0
-    assert "legacy" in (row["notes"] or "")
-    assert con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"] == str(_db.SCHEMA_VERSION)
-
-
-# ---------------- 文本类工具(MCP/IDA/Ghidra):结果落盘 + 观测入库 ----------------
+    assert con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"] \
+        == str(_db.SCHEMA_VERSION)
+    assert any(f.startswith("old.sqlite3.bak-") for f in os.listdir(str(tmp_path)))
 
 def _text_registry():
     from fwcore.tools import Registry, ToolSpec

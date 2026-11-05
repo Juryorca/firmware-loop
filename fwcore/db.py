@@ -13,7 +13,7 @@ import json
 import os
 import sqlite3
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11   # 开发期**基线**:不再逐版本迁移(见 _migrate)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -102,6 +102,22 @@ CREATE TABLE IF NOT EXISTS evidence (
   path        TEXT,
   sha256      TEXT,
   capture     TEXT,
+  source      TEXT,
+  tool_call_id TEXT,
+  verified    INTEGER NOT NULL DEFAULT 1,
+  notes       TEXT,
+  link_relation TEXT,
+  created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS evidence_checks (
+  id          TEXT PRIMARY KEY,
+  evidence_id TEXT NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
+  method      TEXT NOT NULL,
+  artifact_path TEXT,
+  artifact_sha256 TEXT,
+  attempt_id  TEXT,
+  detail      TEXT,
   created_at  TEXT NOT NULL
 );
 
@@ -133,6 +149,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   capability TEXT,
   arch       TEXT,
   env_json   TEXT,
+  result_path TEXT,
+  result_sha256 TEXT,
+  observation TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -149,6 +168,12 @@ CREATE TABLE IF NOT EXISTS runs (
   host       TEXT,
   heartbeat_at TEXT,
   handback_reason TEXT,
+  pid_starttime INTEGER,
+  model      TEXT,
+  model_calls INTEGER NOT NULL DEFAULT 0,
+  tool_calls INTEGER NOT NULL DEFAULT 0,
+  elapsed_s  REAL NOT NULL DEFAULT 0,
+  budget_note TEXT,
   started_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -250,138 +275,34 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")  # nosemgrep: python.lang.security.audit.formatted-sql-query
 
 
-def _step2(con: sqlite3.Connection) -> None:
-    _add_col(con, "surfaces", "judged_by", "TEXT")
-
-
-def _step10(con: sqlite3.Connection) -> None:
-    """证据来源关系 + 预算口径说明。
-
-    - `evidence.link_relation`:`direct-stdout` / `direct-result` / `command-write`
-      (只有前两者算"直接产出";command-write 是"命令里写了这个路径",证明力较弱)
-    - `runs.budget_note`:老 run 的 model_calls 是 v9 起才有记账,必须如实标注
-    """
-    _add_col(con, "evidence", "link_relation", "TEXT")
-    _add_col(con, "runs", "budget_note", "TEXT")
-    con.execute("UPDATE runs SET budget_note='legacy: model_calls 自 v9 起计(更早的调用未记账)'"
-                " WHERE model_calls = 0 AND tool_calls > 0")
-    # 已存在 tool_call_id 的证据:按当时规则视为直接产出(历史数据,不改判定口径)
-    con.execute("UPDATE evidence SET link_relation='direct-result'"
-                " WHERE tool_call_id IS NOT NULL AND link_relation IS NULL")
-
-
-def _step9(con: sqlite3.Connection) -> None:
-    """run 级预算计数(跨 turn / resume 累积)。
-
-    - `model_calls` / `tool_calls`:整个 run 的累计次数(不是每轮重置)
-    - `elapsed_s`:累计墙钟(每轮结束后累加)
-    这样"预算"才是 run 的属性:暂停后恢复继续消耗同一份预算,不会重新给一份。
-    """
-    _add_col(con, "runs", "model_calls", "INTEGER NOT NULL DEFAULT 0")
-    _add_col(con, "runs", "tool_calls", "INTEGER NOT NULL DEFAULT 0")
-    _add_col(con, "runs", "elapsed_s", "REAL NOT NULL DEFAULT 0")
-    # 老 run 的 tool_calls 可从表里精确回填;model_calls/elapsed_s 历史上没记,
-    # **不猜**:标记为 legacy_unknown(恢复时预算从头算,这是已知偏差)
-    con.execute("UPDATE runs SET tool_calls = (SELECT COUNT(*) FROM tool_calls"
-                "   WHERE tool_calls.run_id = runs.id) WHERE tool_calls = 0")
-    legacy = con.execute("SELECT COUNT(*) n FROM runs WHERE model_calls = 0 AND tool_calls > 0"
-                         ).fetchone()
-    if legacy and legacy["n"]:
-        con.execute(
-            "INSERT INTO events(ts,kind,ref,payload) VALUES"
-            "(strftime('%Y-%m-%dT%H:%M:%S+00:00','now'),'budget.legacy_unknown',NULL,?)",
-            (json.dumps({"runs": legacy["n"],
-                         "note": "v9 之前的 run 没有 model_calls/elapsed_s 记录"},
-                        ensure_ascii=False),),
-        )
-
-
-def _step8(con: sqlite3.Connection) -> None:
-    """记录 run 用的模型名(报告/审计要能说清"这次是哪个模型跑的")。"""
-    _add_col(con, "runs", "model", "TEXT")
-
-
-def _step7(con: sqlite3.Connection) -> None:
-    """证据"复核"必须是**可检查的记录**,不是一个自称的标志位。
-
-    - 新表 `evidence_checks`:每条复核动作(方法/产物/哈希/关联尝试/说明)都留痕;
-    - `evidence.verified` 只由这些记录派生(没有 check 行 = 未复核);
-    - 历史行(迁移前 `verified=1`)**一律清零**:当时没有检查记录,不能推断它被独立复现过。
-    """
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS evidence_checks (
-      id          TEXT PRIMARY KEY,
-      evidence_id TEXT NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
-      method      TEXT NOT NULL,
-      artifact_path TEXT,
-      artifact_sha256 TEXT,
-      attempt_id  TEXT,
-      detail      TEXT,
-      created_at  TEXT NOT NULL
-    )""")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_evidence_checks_ev ON evidence_checks(evidence_id)")
-    con.execute("UPDATE evidence SET verified=0 WHERE verified!=0")
-    con.execute("UPDATE evidence SET notes = COALESCE(notes || ' | ','') || "
-                "'legacy: 迁移前的 verified 无检查记录,不算已验证'")
-
-
-def _step6(con: sqlite3.Connection) -> None:
-    """工具结果的原始产物与结构化观测。
-
-    - `result_path/result_sha256`:工具返回的文本结果也落盘并算哈希(证据可直接引用)
-    - `observation`:**解析后的观测**(JSON,来自 toolkit 的 OBSERVERS / MCP)——
-      它是"工具说了什么",不是"漏洞成立";要成为证据仍必须 `add_evidence` + 复核
-    """
-    _add_col(con, "tool_calls", "result_path", "TEXT")
-    _add_col(con, "tool_calls", "result_sha256", "TEXT")
-    _add_col(con, "tool_calls", "observation", "TEXT")
-
-
-def _step5(con: sqlite3.Connection) -> None:
-    """记录 pid 的启动时间:跨主机/重启后靠它识别 **pid 复用**(否则复活进程会被误当原 run)。"""
-    _add_col(con, "runs", "pid_starttime", "INTEGER")
-
-
-def _step4(con: sqlite3.Connection) -> None:
-    """证据溯源:来源(哪个工具/哪次调用)、是否经研究复核。
-
-    `verified` 的语义(硬):
-    - 0 = **原始工具输出/未复核**(工具跑成功 ≠ 漏洞成立)
-    - 1 = 研究复核过的证据(复现/交叉验证后才提升)
-    """
-    _add_col(con, "evidence", "source", "TEXT")
-    _add_col(con, "evidence", "tool_call_id", "TEXT")
-    _add_col(con, "evidence", "verified", "INTEGER NOT NULL DEFAULT 1")
-    _add_col(con, "evidence", "notes", "TEXT")
-
-
-def _step3(con: sqlite3.Connection) -> None:
-    _add_col(con, "attempts", "obs_outcome", "TEXT NOT NULL DEFAULT 'pending'")
-    _add_col(con, "attempts", "obs_reason", "TEXT")
-    _add_col(con, "tool_calls", "call_key", "TEXT")
-    _add_col(con, "tool_calls", "provider", "TEXT")
-    _add_col(con, "tool_calls", "capability", "TEXT")
-    _add_col(con, "tool_calls", "arch", "TEXT")
-    _add_col(con, "tool_calls", "env_json", "TEXT")
-    _add_col(con, "runs", "rounds", "INTEGER NOT NULL DEFAULT 0")
-    _add_col(con, "runs", "pid", "INTEGER")
-    _add_col(con, "runs", "host", "TEXT")
-    _add_col(con, "runs", "heartbeat_at", "TEXT")
-    _add_col(con, "runs", "handback_reason", "TEXT")
-    _add_col(con, "hypotheses", "surface_key", "TEXT")
-
-
-STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7, 8: _step8,
-         9: _step9, 10: _step10}
+# 开发期基线:历史上通过 _stepN 加过的列,一次性列在这里。
+# 新库直接由 SCHEMA 建出全部列;旧库用 `tools/db_rebaseline.py`(先备份)一次性补齐。
+BASELINE_COLUMNS: dict[str, list[tuple[str, str]]] = {
+    "surfaces": [("judged_by", "TEXT")],
+    "attempts": [("obs_outcome", "TEXT NOT NULL DEFAULT 'pending'"), ("obs_reason", "TEXT")],
+    "tool_calls": [("call_key", "TEXT"), ("provider", "TEXT"), ("capability", "TEXT"),
+                   ("arch", "TEXT"), ("env_json", "TEXT"), ("result_path", "TEXT"),
+                   ("result_sha256", "TEXT"), ("observation", "TEXT")],
+    "runs": [("rounds", "INTEGER NOT NULL DEFAULT 0"), ("pid", "INTEGER"), ("host", "TEXT"),
+             ("heartbeat_at", "TEXT"), ("handback_reason", "TEXT"),
+             ("pid_starttime", "INTEGER"), ("model", "TEXT"),
+             ("model_calls", "INTEGER NOT NULL DEFAULT 0"),
+             ("tool_calls", "INTEGER NOT NULL DEFAULT 0"),
+             ("elapsed_s", "REAL NOT NULL DEFAULT 0"), ("budget_note", "TEXT")],
+    "hypotheses": [("surface_key", "TEXT")],
+    "evidence": [("source", "TEXT"), ("tool_call_id", "TEXT"),
+                 ("verified", "INTEGER NOT NULL DEFAULT 1"), ("notes", "TEXT"),
+                 ("link_relation", "TEXT")],
+}
 
 
 def _migrate(con: sqlite3.Connection) -> None:
-    """版本化迁移。
+    """开发期 schema:只认**当前基线**。
 
-    顺序很关键(2026-11-04 修复):
-    - 先建表(不含索引);
-    - 逐版本执行 ALTER(每步一个事务;失败回滚**且不改 schema_version**);
-    - **最后**才建索引 —— 否则旧库还没有 `call_key` 就去建唯一索引,升级直接失败。
+    - 新库:建表 + 直接写版本号(没有任何"逐版本升级"链);
+    - 旧库:版本不等于基线 ⇒ 明确报错并指向一次性迁移脚本(先备份)。
+      测试库/临时库直接重建;研究工作区用 `python3 tools/db_rebaseline.py <db>`。
+    研发期不为历史格式积累升级分支;只有正式发布、出现持久用户数据后才需要版本兼容策略。
     """
     con.executescript(SCHEMA)
     row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
@@ -389,21 +310,15 @@ def _migrate(con: sqlite3.Connection) -> None:
         have = int(row["value"]) if row else 0
     except (TypeError, ValueError):
         raise RuntimeError(f"meta.schema_version 不是整数: {row['value']!r}") from None
-    if have > SCHEMA_VERSION:
-        raise RuntimeError(f"数据库 schema 版本 {have} 高于代码支持 {SCHEMA_VERSION}")
-    if row is None:
-        con.execute("INSERT INTO meta(key,value) VALUES('schema_version','0')")
-    for v in range(have + 1, SCHEMA_VERSION + 1):
-        step = STEPS.get(v)
-        con.execute("BEGIN IMMEDIATE")
-        try:
-            if step:
-                step(con)
-            con.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(v),))
-            con.execute("COMMIT")
-        except Exception:
-            con.execute("ROLLBACK")
-            raise
+    if have == 0:
+        con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
+                    (str(SCHEMA_VERSION),))
+    elif have != SCHEMA_VERSION:
+        raise RuntimeError(
+            f"数据库 schema 版本 {have} ≠ 当前基线 {SCHEMA_VERSION}(开发期不做逐版本升级)。\n"
+            f"  测试/临时库:直接重建;研究工作区:先备份,再运行\n"
+            f"    python3 tools/db_rebaseline.py {con.execute('PRAGMA database_list').fetchone()[2]}\n"
+            f"  该脚本会复制 .bak 备份、补齐基线列、保留全部数据。")
     con.executescript(INDEXES)
 
 

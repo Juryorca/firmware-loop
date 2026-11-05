@@ -12,7 +12,7 @@
 | `IDA_WIN_STAGE` | Windows 侧暂存目录(传给 `idb_open` 的路径前缀) |
 | `IDA_STAGE` | 同一暂存目录的 WSL 路径 |
 | `IDA_WIN_PYTHON` | Windows 侧 python(仅用于提示激活命令) |
-| `IDA_URL` / `IDA_MCP_URL` | Supervisor 地址(端口来自它,不再写死 8745) |
+| `IDA_URL` | Supervisor 地址(端口来自它,不再写死 8745) |
 | `IDA_LOG` | Supervisor 日志(默认 `<root>/state/ida/supervisor.log`) |
 | `IDA_WIN_INSTANCES` | worker 注册表目录(默认用 `%APPDATA%` 探测) |
 | `IDA_START_TIMEOUT` / `IDA_PROBE_TIMEOUT` | 启动/探测超时(秒) |

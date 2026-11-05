@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import tempfile
@@ -30,18 +29,13 @@ from fwcore.runtime import Runner  # noqa: E402
 
 
 def load_credentials() -> tuple[str, str, str]:
-    path = os.path.expanduser("~/.pi/agent/models.json")
-    try:
-        with open(path, encoding="utf-8") as f:
-            d = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        raise SystemExit(f"读不到模型配置 {path}: {e}") from e
-    prov = d.get("providers", {}).get("deepseek", {})
-    key = prov.get("apiKey") or os.environ.get("FW_API_KEY", "")
-    base = prov.get("baseUrl") or "https://api.deepseek.com"
-    model = (prov.get("models") or [{}])[0].get("id") or "deepseek-chat"
-    if not key:
-        raise SystemExit("没有可用的 DeepSeek API key(~/.pi/agent/models.json)")
+    """模型配置走 fwcore 的契约(环境变量 > state/model.json),不读 Pi 配置。"""
+    from fwcore.models import load_model_config
+
+    key, base, model = load_model_config(ROOT)
+    if not (key and base and model):
+        raise SystemExit("没有模型配置:设置 FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME,"
+                         "或写 state/model.json(api_key/base_url/model)")
     return key, base, model
 
 

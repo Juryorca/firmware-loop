@@ -8,7 +8,7 @@
 - 这里做**单一来源**:所有键集中定义、集中解析、集中导出给 shell(`ida-env --sh`)。
 
 优先级(高 → 低)
-  1. 显式环境变量 `FW_IDA_*`(以及旧的 `IDA_MCP_URL`)
+  1. 显式环境变量 `FW_IDA_*`
   2. 工作区配置文件 `<root>/state/ida.json`(或 `$FW_IDA_CONFIG` 指定)
   3. 兼容默认值(本项目开发机上的实际路径;**可以被完全覆盖**,不是唯一实现)
 
@@ -252,9 +252,6 @@ def load(root: str | None = None, *, env: dict[str, str] | None = None) -> IdaCo
                 cfg[k] = str(v)
         mounts.update({str(k).rstrip(":").upper(): str(v) for k, v in (data.get("mounts") or {}).items()})
         source = cfg_path
-
-    if env.get("IDA_MCP_URL"):                # 旧接口:只覆盖 URL
-        cfg["IDA_URL"] = env["IDA_MCP_URL"]
 
     for key in DEFAULTS:
         v = env.get(_env_key(key))

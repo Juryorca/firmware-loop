@@ -315,10 +315,8 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
         "debug.ida": Capability("debug.ida", "Windows IDA 无头(经 WSL,复用 tools/ida_*)",
                                 [windows_ida_provider(root)]),
         "mcp.chrome": Capability("mcp.chrome", "浏览器自动化(取件/提交)", [
-            mcp_provider("chrome-devtools", [os.path.join(home, ".pi/agent/mcp.json"),
-                                             os.path.join(root, "state/mcp.json")]),
-            mcp_provider("chrome-live", [os.path.join(home, ".pi/agent/mcp.json"),
-                                         os.path.join(root, "state/mcp.json")]),
+            mcp_provider("chrome-devtools", [os.path.join(root, "state", "mcp.json")]),
+            mcp_provider("chrome-live", [os.path.join(root, "state", "mcp.json")]),
         ]),
     }
     return caps

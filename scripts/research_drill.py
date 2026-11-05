@@ -93,7 +93,7 @@ def load_credentials() -> tuple[str, str, str]:
 
     1. 环境变量:FW_MODEL_API_KEY / FW_MODEL_BASE_URL / FW_MODEL_NAME(以及旧 FW_API_KEY/FW_BASE_URL)
     2. `<root>/state/model.json`(或 FW_MODEL_CONFIG 指定):{"api_key","base_url","model"}
-    3. Pi 的 ~/.pi/agent/models.json(仅当上面都没有;不让 Pi 成为硬依赖)
+    fwcore 不读 Pi 的配置;Pi 只是开发期的历史来源,不是契约。
     """
     key = os.environ.get("FW_MODEL_API_KEY") or os.environ.get("FW_API_KEY", "")
     base = os.environ.get("FW_MODEL_BASE_URL") or os.environ.get("FW_BASE_URL", "")
@@ -114,21 +114,10 @@ def load_credentials() -> tuple[str, str, str]:
         if key and base and model:
             return key, base, model
 
-    pi_cfg = os.path.expanduser("~/.pi/agent/models.json")
-    if os.path.isfile(pi_cfg):
-        try:
-            with open(pi_cfg, encoding="utf-8") as f:
-                d = json.load(f)
-            prov = d.get("providers", {}).get("deepseek", {})
-            key = key or prov.get("apiKey", "")
-            base = base or prov.get("baseUrl", "https://api.deepseek.com")
-            model = model or (prov.get("models") or [{}])[0].get("id", "deepseek-chat")
-        except (OSError, json.JSONDecodeError):
-            pass
     if key and base and model:
         return key, base, model
     raise SystemExit("没有模型配置:设置 FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME,"
-                     "或写 state/model.json,或(兼容)提供 ~/.pi/agent/models.json")
+                     "或写 state/model.json(字段 api_key/base_url/model)")
 
 
 def trace(con) -> dict:

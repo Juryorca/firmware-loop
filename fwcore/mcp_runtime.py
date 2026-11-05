@@ -171,13 +171,14 @@ class MCPBridge:
 
 def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | None = None,
                        *, timeout: float = 20.0, call_timeout: float = 120.0) -> MCPBridge:
-    """从配置建桥:`state/mcp.json`(本框架)优先,其次 `~/.pi/agent/mcp.json`(过渡兼容)。"""
+    """从 fwcore 自己的配置建桥:`FW_MCP_CONFIG` 或 `state/mcp.json`。"""
     import os
 
     if config_paths is None:
-        local = os.path.join(root, "state", "mcp.json")
-        # 本地配置是权威:有就只用它(合并用户 Pi 配置会把无关服务器拉进来、还会拖慢启动)
-        paths = [local] if os.path.isfile(local) else [os.path.expanduser("~/.pi/agent/mcp.json")]
+        # 只认 fwcore 自己的配置(显式 FW_MCP_CONFIG 或 state/mcp.json);
+        # 不隐式读 Pi 的 ~/.pi/agent/mcp.json —— 那是开发期遗产,不是 fwcore 的契约
+        env_cfg = os.environ.get("FW_MCP_CONFIG")
+        paths = [env_cfg] if env_cfg else [os.path.join(root, "state", "mcp.json")]
     else:
         paths = list(config_paths)
     specs = list(load_servers(paths).values())

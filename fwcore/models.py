@@ -129,13 +129,25 @@ def build_adapter(kind: str = "scripted", **kw) -> Adapter:
     raise ValueError(f"未知 adapter: {kind}")
 
 
-def credentials_from_pi_config(path: str | None = None) -> tuple[str, str, str]:
-    """从 pi 的用户配置里取 DeepSeek 凭据(独立 Runtime 不依赖 pi 运行时,只读这一份配置)。"""
-    p = path or os.path.expanduser("~/.pi/agent/models.json")
-    with open(p, encoding="utf-8") as f:
-        d = json.load(f)
-    prov = (d.get("providers") or {}).get("deepseek") or {}
-    key = prov.get("apiKey") or os.environ.get("FW_API_KEY", "")
-    base = prov.get("baseUrl") or "https://api.deepseek.com"
-    model = ((prov.get("models") or [{}])[0] or {}).get("id") or "deepseek-chat"
+def load_model_config(root: str | None = None) -> tuple[str, str, str]:
+    """模型配置(fwcore 自己的契约,不是 Pi 的附属)。
+
+    优先级:环境变量 `FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME`
+            > `state/model.json`(或 `FW_MODEL_CONFIG`)
+    返回 (api_key, base_url, model);缺项返回空串,由调用方决定是否报错。
+    """
+    key = os.environ.get("FW_MODEL_API_KEY") or os.environ.get("FW_API_KEY", "")
+    base = os.environ.get("FW_MODEL_BASE_URL") or os.environ.get("FW_BASE_URL", "")
+    model = os.environ.get("FW_MODEL_NAME", "")
+    path = os.environ.get("FW_MODEL_CONFIG") or (
+        os.path.join(root, "state", "model.json") if root else "")
+    if path and os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                cfg = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"读不到模型配置 {path}: {e}") from e
+        key = key or cfg.get("api_key", "")
+        base = base or cfg.get("base_url", "")
+        model = model or cfg.get("model", "")
     return key, base, model

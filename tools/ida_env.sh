@@ -21,4 +21,3 @@ fi
 : "${FW_IDA_WIN_STAGE:?缺少 FW_IDA_WIN_STAGE(暂存目录,Windows 路径)}"
 : "${FW_IDA_URL:?缺少 FW_IDA_URL(Supervisor 地址)}"
 
-export IDA_MCP_URL="${IDA_MCP_URL:-$FW_IDA_URL}"

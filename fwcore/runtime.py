@@ -512,7 +512,7 @@ class Runner:
                       final: str, history: list[dict]) -> RunResult:
         # 注意:MCP 桥**不在这里关** —— `advance()` 一轮结束后还要继续下一轮,
         # 关掉会让第 2 轮起所有 MCP 工具失效(实测过)。真正关闭在 `Runner.close()`。
-        blockers = self.domain.closure_blockers(target) + self.research.dual_output_blockers(target)
+        blockers = self.domain.closure_blockers(target)
         if self.research.mirror_due(target):
             blockers.append(f"三镜刷新超期({self.research.rounds_since_mirror(target)} 轮未做,"
                             f"下限 {self.research.mirror_every})")
@@ -662,7 +662,7 @@ class Runner:
             # 模型说 FINAL 但还有未收口项 ⇒ 带阻塞清单开下一轮(自动继续)
             rounds_before = res.rounds
             res2 = self.turn(rid, target,
-                             "继续推进未收口项:\n" + "\n".join(f"- {b}" for b in res2_blockers(res)),
+                             "继续推进未收口项:\n" + "\n".join(f"- {b}" for b in _blockers_of(res)),
                              res.history)
             # 空闲轮:既没推进研究(轮次没涨)也没产生新的执行动作 ⇒ 连续 2 次就停(不是结论)
             idle = idle + 1 if res2.rounds == rounds_before else 0
@@ -786,7 +786,7 @@ def _event(con, kind: str, ref: str | None, payload: dict | None) -> None:
                 (_now(), kind, ref, json.dumps(payload or {}, ensure_ascii=False)))
 
 
-def res2_blockers(res) -> list[str]:
+def _blockers_of(res) -> list[str]:
     """取本轮阻塞清单(供下一轮的提示文本用)。"""
     return list(getattr(res, "blockers", []) or [])
 

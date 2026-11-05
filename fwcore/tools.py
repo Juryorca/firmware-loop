@@ -254,8 +254,6 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
     if not cmd:
         return {"status": "error", "error": "command 必填"}
     mode = str(args.get("mode") or "auto").lower()
-    if args.get("shell") is True:          # 兼容旧参数:等价 mode=shell
-        mode = "shell"
     if isinstance(cmd, list):
         mode = "argv"                      # 已是 argv 形式
     if mode not in ("auto", "shell", "argv"):

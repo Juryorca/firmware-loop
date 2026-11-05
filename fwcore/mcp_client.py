@@ -1,7 +1,7 @@
 """独立 MCP 客户端(stdio):让 fwcore 不依赖 Pi 也能发现/调用 MCP 工具。
 
 设计
-- **配置来自多处,优先级明确**:`state/mcp.json`(本框架自己的)→ 用户级 `~/.pi/agent/mcp.json`(过渡期兼容)。
+- **配置来自 fwcore 自己的文件**:`state/mcp.json`(或 `FW_MCP_CONFIG`)→ 用户级 `~/.pi/agent/mcp.json`(过渡期兼容)。
 - 传输 = stdio + 换行分隔 JSON-RPC;子进程用独立进程组,出错/关闭时整组杀掉(不留孤儿)。
 - 只实现三个必要动作:`initialize` / `tools/list` / `tools/call`;失败要**如实**返回(unreachable ≠ 有工具)。
 - 探针语义:`probe()` 只有在完成 initialize + tools/list 后才算 `reachable`,否则 `unreachable`。

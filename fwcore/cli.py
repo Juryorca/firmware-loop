@@ -27,7 +27,7 @@ import sys
 from . import db as _db
 from .domain import Domain, DomainError
 from .migrate import import_notes, verify
-from .models import build_adapter, credentials_from_pi_config
+from .models import build_adapter, load_model_config
 from .runtime import Runner
 
 
@@ -245,8 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(r.progress(args.run_id), ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":
             from .mcp_client import MCPClient, load_servers, probe as mcp_probe
-            cfgs = [os.path.join(args.root, "state", "mcp.json"),
-                    os.path.expanduser("~/.pi/agent/mcp.json")]
+            cfgs = [os.environ.get("FW_MCP_CONFIG") or
+                    os.path.join(args.root, "state", "mcp.json")]
             servers = load_servers(cfgs)
             if args.action == "list":
                 print(json.dumps({k: {"transport": v.transport, "enabled": v.enabled}
@@ -317,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
 def _model(name: str, script_path: str | None = None):
     if name in ("openai", "deepseek", "openai-compat"):
         try:
-            key, base, model = credentials_from_pi_config()
+            key, base, model = load_model_config(args.root)
         except Exception:
             key, base, model = os.environ.get("FW_API_KEY", ""), os.environ.get("FW_BASE_URL", ""), "deepseek-chat"
         return build_adapter("openai", api_key=key, base_url=base, model=model)

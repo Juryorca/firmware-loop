@@ -23,11 +23,11 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcore import db as _db                          # noqa: E402
-from fwcore.domain import Domain                      # noqa: E402
-from fwcore.models import build_adapter, credentials_from_pi_config  # noqa: E402
-from fwcore.policy import Authz, Policy                # noqa: E402
-from fwcore.runtime import Runner                      # noqa: E402
+from fwcore import db as _db  # noqa: E402
+from fwcore.domain import Domain  # noqa: E402
+from fwcore.models import build_adapter, load_model_config  # noqa: E402
+from fwcore.policy import Authz, Policy  # noqa: E402
+from fwcore.runtime import Runner  # noqa: E402
 
 TASKS = os.path.join(ROOT, "eval", "tasks")
 
@@ -142,7 +142,7 @@ def main() -> int:
     if args.model == "scripted":
         adapter = build_adapter("scripted", script=[{"content": "FINAL: (scripted 不做研究)", "tool_calls": []}])
     else:
-        key, base, model = credentials_from_pi_config()
+        key, base, model = load_model_config(ROOT)
         os.environ.setdefault("FW_REASONING_CONTENT", "1")
         adapter = build_adapter("openai", api_key=key, base_url=base, model=model)
 
