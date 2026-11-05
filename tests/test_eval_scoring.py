@@ -62,7 +62,11 @@ def test_found_task_requires_evidence_linked_to_conclusion(tmp_path):
     answers = {"task": "x", "expected": {"found": {"scope_must_mention": ["parse"]}}}
     hid = dom.add_hypothesis("t", "h")
     aid = dom.start_attempt(hid, "m")
-    dom.add_evidence("t", "log", capture="parse 崩溃栈", attempt_id=aid, hypothesis_id=hid)
+    art = os.path.join(root, "state", "artifacts", "crash.log")
+    os.makedirs(os.path.dirname(art), exist_ok=True)
+    with open(art, "w", encoding="utf-8") as f:
+        f.write("parse 崩溃栈")
+    dom.add_evidence("t", "log", path=os.path.relpath(art, root), attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "ok", obs_outcome="none",
                        obs_reason="行为与预期一致,无新观察")
     dom.conclude(hid, "vulnerable", "仅 parse() 处")
@@ -74,7 +78,9 @@ def test_found_task_requires_evidence_linked_to_conclusion(tmp_path):
     # 把证据重新挂回该结论 ⇒ 因果链恢复 ⇒ 应通过(不需要编新结论)
     con.execute("UPDATE evidence SET hypothesis_id=?", (hid,))
     out2 = scoring.score(answers, con, dom.target("t").id)
-    assert out2["checks"]["evidence_linked_to_conclusion"] is True and out2["passed"] is True
+    assert out2["checks"]["evidence_linked_to_conclusion"] is True
+    assert out2["checks"]["evidence_verified_reproducible"] is True
+    assert out2["passed"] is True
 
 
 def test_decoy_task_punishes_trusting_comments(tmp_path):
@@ -125,3 +131,36 @@ def test_decoy_log_punishes_stale_evidence(tmp_path):
                         obs_reason="与预期一致:日志已过期")
     dom2.conclude(h2, "no_finding", "仅 bundle/service.py 的 parse() 入口")
     assert scoring.score(answers, con2, dom2.target("t").id)["passed"] is True
+
+
+def test_capture_only_evidence_is_not_reproducible(tmp_path):
+    """只有文字摘录(capture)、没有原始产物 ⇒ 不算可复现依据(即使已复核)。"""
+    con, dom, root = _mk(tmp_path)
+    answers = {"task": "x", "expected": {"found": {"scope_must_mention": ["parse"]}}}
+    hid = dom.add_hypothesis("t", "h")
+    aid = dom.start_attempt(hid, "m")
+    ev = dom.add_evidence("t", "log", capture="parse 崩溃栈", attempt_id=aid, hypothesis_id=hid)
+    dom.finish_attempt(aid, "supported", "ok")
+    dom.conclude(hid, "vulnerable", "仅 parse() 处")
+    dom.promote_evidence(ev, "复现三次,崩溃点一致")
+    out = scoring.score(answers, con, dom.target("t").id)
+    assert out["checks"]["evidence_verified_reproducible"] is False and out["passed"] is False
+
+
+def test_conclusion_from_failed_tools_is_rejected(tmp_path):
+    """尝试全是环境失败 ⇒ 不可能支撑结论(scoring 对导入数据再核一次)。"""
+    con, dom, root = _mk(tmp_path)
+    answers = {"task": "x", "expected": {"found": {"scope_must_mention": ["parse"]}}}
+    hid = dom.add_hypothesis("t", "h")
+    aid = dom.start_attempt(hid, "m")
+    art = os.path.join(root, "state", "artifacts", "log.txt")
+    os.makedirs(os.path.dirname(art), exist_ok=True)
+    with open(art, "w", encoding="utf-8") as f:
+        f.write("env broken")
+    ev = dom.add_evidence("t", "log", path=os.path.relpath(art, root), attempt_id=aid, hypothesis_id=hid)
+    dom.finish_attempt(aid, "environment_failure", "工具缺依赖")
+    dom.promote_evidence(ev, "复核:确认是环境问题,不是漏洞")
+    # 绕过 domain 直接写结论,模拟外部导入的脏数据
+    con.execute("UPDATE hypotheses SET state='concluded', verdict='vulnerable', scope_note='仅 parse()' WHERE id=?", (hid,))
+    out = scoring.score(answers, con, dom.target("t").id)
+    assert out["checks"]["no_conclusion_from_failed_tools"] is False and out["passed"] is False

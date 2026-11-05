@@ -18,6 +18,25 @@ def _evidence_linked(con, hypothesis_id: str) -> int:
         "SELECT COUNT(*) n FROM evidence WHERE hypothesis_id=?", (hypothesis_id,)).fetchone()["n"]
 
 
+def _verified_with_artifact(con, hypothesis_id: str) -> int:
+    """既经研究复核(verified=1)又带可复现产物(path+sha256)的证据数。
+
+    判据:工具跑成功 ≠ 漏洞成立;只有"复核过 + 有原始产物"的证据才算可复现依据。
+    """
+    return con.execute(
+        "SELECT COUNT(*) n FROM evidence WHERE hypothesis_id=? AND verified=1"
+        "   AND path IS NOT NULL AND sha256 IS NOT NULL", (hypothesis_id,)).fetchone()["n"]
+
+
+def _only_nondecisive_attempts(con, hypothesis_id: str) -> bool:
+    """该假设的所有尝试都是"不具判定力"的(环境失败/信号不足/取消)⇒ 不可能支撑结论。"""
+    results = [r["result"] for r in con.execute(
+        "SELECT result FROM attempts WHERE hypothesis_id=? AND result != 'running'", (hypothesis_id,))]
+    if not results:
+        return True
+    return not any(r in ("supported", "refuted", "inconclusive") for r in results)
+
+
 def score(answers: dict, con, target_id: str) -> dict:
     exp = answers.get("expected") or {}
     rows = con.execute(
@@ -38,6 +57,15 @@ def score(answers: dict, con, target_id: str) -> dict:
         "has_evidence": ev_total >= 1,
         "has_decisive_attempt": decisive >= 1,
         "obs_outcome_recorded": obs_pending == 0,
+        # 工具失败/无信号不得变成结论(领域不变量在 domain 层已强制,这里对导入数据再核一遍)
+        "no_conclusion_from_failed_tools": not any(
+            _only_nondecisive_attempts(con, r["id"]) for r in vulns),
+        # 证据强度:复核过 + 有原始产物(可复现)
+        "evidence_verified_reproducible": all(
+            _verified_with_artifact(con, r["id"]) >= 1 for r in vulns) if vulns else True,
+        # 结论必须写适用范围(研究里"这条结论管到哪")
+        "scope_present": all((r["scope_note"] or "").strip() for r in rows
+                             if r["state"] == "concluded"),
     }
 
     if answers.get("control"):

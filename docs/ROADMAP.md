@@ -74,6 +74,7 @@
 | 未知工具调用留痕(审计) | ✅ | 模型幻觉/`--no-mcp` 时的调用不再静默丢弃:`_exec_tool_call` 记 `status=error` + `note`,可审计;`test_cli_no_mcp_control_fails_the_call` 断言到行 |
 | scripted 工具调用 id 唯一 | ✅ | `ScriptedAdapter` 之前每轮都从 `call_0` 开始 ⇒ `call_key` 幂等把第 2 轮当成重复而吞掉(测试假象也会掩盖真问题);改全局自增 |
 | 本地 `state/mcp.json` 为权威 | ✅ | 有本地配置就**不再合并**用户 `~/.pi/agent/mcp.json`(合并会把无关服务器拉进来、拖慢启动,测试里实测撞到重名) |
+| 评测覆盖(发现/负对照/误报/证据因果/范围/工具失败/可复现) | ✅ | `eval/scoring.py` 新增三条判据:`no_conclusion_from_failed_tools`(尝试全是环境失败/无信号/取消 ⇒ 不可能支撑结论)、`evidence_verified_reproducible`(vulnerable 结论必须有 **verified=1 + path + sha256** 的证据)、`scope_present`(已结论的假设必须写适用范围);原有:过概括检测、因果关联、obs_outcome、对照假阳性;`tests/test_eval_scoring.py` 7 passed(新增"只有 capture 不算可复现"与"环境失败不得支撑结论"两条反例) |
 | 评测隔离(`eval/run.py` 从答案读 goal) | ✅ | 5 个任务都拆成 `task.json`(**公开 goal**)与 `answers/expected.json`(**私有判据**,已移除 goal);`load_task()` 两文件分离且**拒绝**私有侧带 goal;`prepare_workspace()` 只拷 `bundle/`(工作区无 answers/、无 task.json);`tests/test_eval_isolation.py` **13 passed**(含"goal 不得泄漏答案文本") |
 
 ## 阻塞 / 推迟(需授权或外部条件)
