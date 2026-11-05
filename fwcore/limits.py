@@ -24,6 +24,9 @@ class Limits:
     max_tool_seconds: float = 120.0
     # 单轮最多执行多少个工具调用(模型可能一次发很多;这是执行边界,不是研究规则)
     max_tool_calls_per_turn: int = 8
+    # 单次请求携带的历史上限(字符,不是 token):超了就把**较老**的工具输出收窄,
+    # 保留结构/ID/最近若干条全文;完整产物在磁盘与 DB,不因省上下文丢事实
+    max_context_chars: int = 160_000
     # 硬边界:**永远生效**,不受 unbounded 影响
     checkpoints_keep: int = 120
     max_db_bytes: int = 256 * MB
@@ -45,6 +48,7 @@ class Limits:
             "max_seconds": self.max_seconds or "unbounded",
             "max_tool_seconds": self.max_tool_seconds,
             "max_tool_calls_per_turn": self.max_tool_calls_per_turn,
+            "max_context_chars": self.max_context_chars,
             "checkpoints_keep": self.checkpoints_keep,
             "max_db_bytes": self.max_db_bytes,
         }

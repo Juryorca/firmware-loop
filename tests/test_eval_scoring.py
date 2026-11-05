@@ -7,6 +7,7 @@ import json
 import os
 
 from fwcore import db as _db
+from _evidence import verified_evidence
 from fwcore.domain import Domain
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -53,6 +54,7 @@ def test_control_task_passes_on_correct_no_finding(tmp_path):
     dom.add_evidence("t", "log", capture="深嵌套被 MAC 阶段拒绝", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "refuted", "验签在前,深嵌套进不到解析器",
                        obs_outcome="none", obs_reason="结果与预期一致:先验签,无新观察")
+    verified_evidence(dom, root, "t", hid, aid)
     dom.conclude(hid, "no_finding", "仅 bundle/device.py 的 handle() 这一个入口")
     out = scoring.score(_control_answers(), con, dom.target("t").id)
     assert out["passed"] is True, out["checks"]
@@ -110,6 +112,7 @@ def test_decoy_task_punishes_trusting_comments(tmp_path):
     dom2.add_evidence("t", "log", capture="verify-before-parse: bad signature", attempt_id=a2, hypothesis_id=h2)
     dom2.finish_attempt(a2, "refuted", "深嵌套在验签阶段被拒", obs_outcome="none",
                         obs_reason="结果与预期一致,注释已过期")
+    verified_evidence(dom2, root2, "t", h2, a2)
     dom2.conclude(h2, "no_finding", "仅 bundle/handler.py 的 handle() 入口")
     assert scoring.score(answers, con2, dom2.target("t").id)["passed"] is True
 
@@ -135,6 +138,7 @@ def test_decoy_log_punishes_stale_evidence(tmp_path):
     dom2.add_evidence("t", "log", capture="rejected: depth limit reached", attempt_id=a2, hypothesis_id=h2)
     dom2.finish_attempt(a2, "refuted", "当前实现有深度上限,5000 层被拒", obs_outcome="none",
                         obs_reason="与预期一致:日志已过期")
+    verified_evidence(dom2, root2, "t", h2, a2)
     dom2.conclude(h2, "no_finding", "仅 bundle/service.py 的 parse() 入口")
     assert scoring.score(answers, con2, dom2.target("t").id)["passed"] is True
 

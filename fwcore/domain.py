@@ -619,6 +619,10 @@ class Domain:
                                      "当前只有 " + ", ".join(sorted(kinds)) + " —— 不能靠 inconclusive 收口")
         if verdict == "inconclusive" and "inconclusive" not in kinds:
             raise InvariantViolation("判 inconclusive 需要一次明确 inconclusive 的尝试")
+        if verdict == "no_finding" and ev_verified == 0:
+            raise InvariantViolation(
+                f"判 no_finding 需要至少一条**经复核**的证据(当前 {ev} 条证据,0 条复核):"
+                "工具跑成功/文件哈希未变 ≠ 审计结论成立;先 state_verify_evidence")
         if verdict == "vulnerable" and ev == 0:
             raise InvariantViolation("判 vulnerable 必须挂证据")
         ev_causal = self.con.execute(

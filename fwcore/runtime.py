@@ -403,6 +403,8 @@ class Runner:
                 _note = self._prepare_state.get("context_note")
                 if _note:
                     _sys += "\n\n## 轮前准备(程序注入)\n" + _note
+                # 历史收敛必须在**每次请求前**生效:只在检查点裁剪 = 每次调用仍带全量旧输出
+                history = _bound_history(history, self.limits.max_context_chars)
                 msgs = [{"role": "system", "content": _sys}] + history
                 # 预算判定必须在**计数之前**:被挡住的调用不该记账(时间/次数都一样)
                 if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
@@ -419,7 +421,25 @@ class Runner:
                                     {"calls": run_calls, "limit": self.limits.max_model_calls})
                     break
                 run_calls += 1
+                _ctx = _context_stats(_sys, history)
                 reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
+                # **每一次**真实调用都记账(含 tool_calls / FINAL / 推理-only / 截断);
+                # 服务端没给 usage ⇒ usage_known=false,不猜 token 数
+                _u = dict(reply.usage or {})
+                _event(self.con, "model.call", rid, {
+                    "step": step, "n_messages": len(msgs),
+                    "system_chars": _ctx["system"], "history_chars": _ctx["total"],
+                    "tool_chars": _ctx["tool"], "assistant_chars": _ctx["assistant"],
+                    "usage_known": bool(_u), "usage": _u,
+                    "prompt_tokens": _u.get("prompt_tokens"),
+                    "completion_tokens": _u.get("completion_tokens"),
+                    "cached_tokens": (_u.get("prompt_tokens_details") or {}).get(
+                        "cached_tokens", _u.get("prompt_cache_hit_tokens")),
+                    "reasoning_tokens": (_u.get("completion_tokens_details") or {}).get(
+                        "reasoning_tokens"),
+                    "finish_reason": reply.finish_reason or "",
+                    "tool_calls": len(reply.tool_calls),
+                })
                 # 推理-only 的回复(content 空但 reasoning 非空)也要按 assistant 记录,
                 # 否则历史里只剩一条空白回复,既丢诊断信息也会让 thinking 模式协议不完整
                 if reply.content or reply.tool_calls or reply.reasoning:
@@ -837,6 +857,57 @@ def _event(con, kind: str, ref: str | None, payload: dict | None) -> None:
 def _blockers_of(res) -> list[str]:
     """取本轮阻塞清单(供下一轮的提示文本用)。"""
     return list(getattr(res, "blockers", []) or [])
+
+
+def _context_stats(system: str, history: list[dict]) -> dict:
+    """请求体积分解(字符,不是 token):只用于定位"谁在撑大上下文"。"""
+    tool = assistant = other = 0
+    for m in history:
+        c = m.get("content")
+        n = len(c) if isinstance(c, str) else 0
+        if m.get("role") == "tool":
+            tool += n
+        elif m.get("role") == "assistant":
+            assistant += n + len(m.get("reasoning_content") or "")
+        else:
+            other += n
+    return {"system": len(system), "tool": tool, "assistant": assistant,
+            "other": other, "total": tool + assistant + other}
+
+
+def _bound_history(history: list[dict], budget_chars: int, *, keep_full: int = 12) -> list[dict]:
+    """把历史压到预算内:**从最老的开始**收窄工具输出,最近 keep_full 条保持全文。
+
+    只改内容长度,不动 role/tool_call_id 结构(协议与审计需要);完整产物在磁盘/DB。
+    """
+    if budget_chars <= 0:
+        return history
+    total = sum(len(m.get("content") or "") for m in history if isinstance(m.get("content"), str))
+    if total <= budget_chars:
+        return history
+    tool_idx = [i for i, m in enumerate(history) if m.get("role") == "tool"]
+    shrinkable = tool_idx[:-keep_full] if len(tool_idx) > keep_full else []
+    for i in shrinkable:
+        if total <= budget_chars:
+            break
+        c = history[i].get("content")
+        if not isinstance(c, str) or len(c) <= 600:
+            continue
+        new = f"{c[:400]}\n…(上下文收敛:原 {len(c)} 字符,全文见工具产物文件)…\n{c[-200:]}"
+        total -= len(c) - len(new)
+        history[i] = {**history[i], "content": new}
+    # 第二轮:仍超预算 ⇒ 最老的直接压成占位(只留长度提示),不动结构
+    if total > budget_chars:
+        for i in tool_idx:      # 仍从最老开始;keep_full 那批是最后才动(尽量保住近期全文)
+            if total <= budget_chars:
+                break
+            c = history[i].get("content")
+            if not isinstance(c, str) or len(c) <= 200:
+                continue
+            new = f"…(已收敛:原 {len(c)} 字符,全文见工具产物文件)…"
+            total -= len(c) - len(new)
+            history[i] = {**history[i], "content": new}
+    return history
 
 
 def _shrink_history(history: list[dict], keep_full: int = 20) -> list[dict]:

@@ -41,7 +41,15 @@ def test_refuted_requires_evidence(dom):
     aid = dom.start_attempt(hid, "payload")
     with pytest.raises(InvariantViolation):
         dom.finish_attempt(aid, "refuted", "打不进去")   # 没有证据 ⇒ 拒
-    dom.add_evidence("t1", "log", capture="拒绝了所有元字符", attempt_id=aid)
+    import os as _os
+
+    art = _os.path.join(dom.root, "report", "artifacts", "metachars.txt")
+    _os.makedirs(_os.path.dirname(art), exist_ok=True)
+    with open(art, "w", encoding="utf-8") as f:
+        f.write("所有元字符被拒绝\n")
+    eid = dom.add_evidence("t1", "log", path="report/artifacts/metachars.txt",
+                           attempt_id=aid)
+    dom.verify_evidence(eid, method="recheck-sha256")      # no_finding 要求 ≥1 条复核
     dom.finish_attempt(aid, "refuted", "打不进去")
     assert dom.conclude(hid, "no_finding", "仅该入口的参数 a") is not None
 

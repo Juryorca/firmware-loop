@@ -76,6 +76,7 @@ def test_load_model_config_reads_pi_free_file(tmp_path):
 def test_duplicate_conclude_is_rejected(tmp_path):
     from fwcore import db as _db
     from fwcore.domain import Domain, InvariantViolation
+    from tests._evidence import verified_evidence
 
     root = str(tmp_path)
     con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
@@ -86,6 +87,7 @@ def test_duplicate_conclude_is_rejected(tmp_path):
     ev = dom.add_evidence("t1", "log", capture="x", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "refuted", "打不进去", evidence=[ev],
                        obs_outcome="none", obs_reason="与预期一致,无新观察")
+    verified_evidence(dom, root, "t1", hid, aid)
     dom.conclude(hid, "no_finding", "仅 authLogin.cgi 的 func 分支入口")
     with pytest.raises(InvariantViolation) as e:
         dom.conclude(hid, "no_finding", "仅 authLogin.cgi 的 func 分支入口")
