@@ -48,3 +48,17 @@ def test_gates_on_synthetic_target_reports_blockers(tmp_path):
     assert r.returncode == 1, "有未收口假设时 gates 必须非零退出"
     rep = json.loads(r.stdout)
     assert rep["blockers"] and rep["coverage"] == "0/0"
+
+
+def test_gates_legacy_bridge_through_cli(tmp_path):
+    """`gates --legacy` 必须调到**仓库里真实的** derived_check.sh。
+
+    做法:root=仓库根(脚本在那里),DB 放临时目录(不污染 state/)。
+    """
+    db = str(tmp_path / "lg.sqlite3")
+    assert _run("--root", ROOT, "--db", db, "init", "lg", "--version", "t").returncode == 0
+    r = _run("--root", ROOT, "--db", db, "gates", "lg", "--legacy", timeout=240)
+    assert r.returncode == 1, "有阻塞时退出码应为 1"
+    rep = json.loads(r.stdout)
+    assert rep["legacy"]["available"] is True, rep.get("legacy")
+    assert rep["legacy"]["summary"].startswith("=== derived_check:")

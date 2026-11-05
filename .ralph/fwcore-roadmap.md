@@ -117,3 +117,9 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   - 输出摘要:`pytest(8 文件) 87 passed in 30.40s` / `capabilities 10 项` / `gates 如实报阻塞` /
     `评测答案隔离 PASS` / `ROADMAP 一致性 PASS` / `git status clean` / 退出码 0
 - 状态:除两项阻塞(Pi hook 启用待授权、与 Pi 线对比待外部条件)外,ROADMAP 全部 ✅
+
+### Iteration 13(Gate legacy 桥接的 CLI 层验证)
+- 增量:`tests/test_cli_smoke.py` 增加 `gates --legacy` 用例 —— 用 `--root 仓库` + `--db 临时库`,
+  断言 CLI 层能调到**真实** `tools/derived_check.sh`(`legacy.available=True`、`summary` 前缀正确、有阻塞时 rc=1)
+- 证据:`tests/test_cli_smoke.py` **5 passed in 12.99s**
+- 先例修正:第一版用 `--root <tmp>` 导致脚本不存在(available=False)—— 已改为 root=仓库、DB=临时(不污染 state/)
