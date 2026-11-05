@@ -71,3 +71,9 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   - 输出摘要:`pytest(8 文件) 74 passed in 17.75s` / `capabilities 10 项` / `gates 如实报阻塞` /
     `评测答案隔离 PASS` / `ROADMAP 一致性 PASS` / `git status clean` / 退出码 0
 - 仍未完成(阻塞,不影响本轮增量):Pi hook 接线(待授权)、与 Pi 线对比(待外部条件)
+
+### Iteration 7(Gate 迁移:legacy 桥接真脚本验证)
+- 增量:新增集成用例 —— 用**仓库里真实的** `tools/derived_check.sh` 跑 `legacy_compare`,
+  断言 `available=True`、`returncode∈{0,1}`、`summary` 以 `=== derived_check:` 开头(桥接不是空壳)
+- 证据:`tests/test_gates_db.py` **9 passed in 1.24s**(9 条含 legacy 集成)
+- 下一项:无未阻塞项剩余 —— Pi hook 接线(待授权)、与 Pi 线对比(待外部条件)⇒ 按硬约束暂停等用户
