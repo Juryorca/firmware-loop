@@ -24,3 +24,13 @@
 ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
 `python3 -m pytest tests/ -q`(受保护运行)通过 + `python3 -m fwcore capabilities` / `gates` 可跑 + `git status` 干净
 时才输出 `<promise>COMPLETE</promise>`。
+## 进度日志
+
+### Iteration 1(Pi Core 对齐任务的第 0 步:先修看护)
+- 增量:**Watchdog 三处真实缺陷**修复(用户点名复核项)
+  1. **跨线程 SQLite**:守护线程不再复用主线程 Connection ⇒ 传 `db_path`,每次扫描自开连接、用完即关
+  2. **错误空转**:连续失败退避(2^n,上限 60s),连续 5 次失败 ⇒ 守护线程自行停止并记 `stopped_reason`
+  3. 测试补:线程内自连接可暂停失联 run(errors==0)、持续失败会停止
+- 证据:`tests/test_watchdog.py` **6 passed in 1.63s**
+- 已读 Pi 源码基线:`earendil-works/pi` @ **d57c2d2**(agent-loop.ts 959 行已通读结构:runLoop / executeToolCallsSequential|Parallel / shouldTerminateToolBatch / failToolCallsFromTruncatedMessage / prepareToolCallArguments)
+- 下一项:**写源码级对照表**(Pi 怎么做 → fwcore 怎么做 → 差距 → 是否改 → 反例测试),再按差距逐项实施

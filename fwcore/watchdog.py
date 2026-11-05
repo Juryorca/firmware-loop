@@ -32,15 +32,34 @@ log = logging.getLogger("fwcore.watchdog")
 
 @dataclass
 class Watchdog:
-    con: sqlite3.Connection
+    con: sqlite3.Connection | None
     root: str
     limits: Limits = field(default_factory=Limits)
     heartbeat_timeout_s: float = 900.0     # 心跳多久没更新算"卡死"
     poll_s: float = 5.0
+    # 守护线程里**不能**复用主线程的 sqlite Connection(same-thread check)⇒ 传 db_path 让它自己开连接
+    db_path: str | None = None
+    max_consecutive_errors: int = 5
+    errors: int = 0
+    stopped_reason: str | None = None
 
-    def _db_bytes(self) -> int:
+    @contextlib.contextmanager
+    def _conn(self):
+        """每次扫描用**自己的**连接(可在任意线程使用),用完即关。"""
+        if self.db_path:
+            con = _db.connect(self.db_path, timeout=2.0)
+            try:
+                yield con
+            finally:
+                con.close()
+        else:
+            if self.con is None:
+                raise sqlite3.ProgrammingError("Watchdog 需要 con 或 db_path 之一")
+            yield self.con
+
+    def _db_bytes(self, con: sqlite3.Connection | None = None) -> int:
         with contextlib.suppress(sqlite3.Error):
-            p = self.con.execute("PRAGMA database_list").fetchone()[2]
+            p = (con or self.con).execute("PRAGMA database_list").fetchone()[2]
             return sum(os.path.getsize(p + s) for s in ("", "-wal", "-shm") if os.path.exists(p + s))
         return 0
 
@@ -67,25 +86,28 @@ class Watchdog:
         """检查一轮:返回触发的动作列表(空 = 一切正常)。"""
         actions: list[dict] = []
         now = time.time()
+        with self._conn() as con:
+            return self._scan(con, now, actions)
 
+    def _scan(self, con: sqlite3.Connection, now: float, actions: list[dict]) -> list[dict]:
         # ① 磁盘:库体积超过硬顶 ⇒ 所有 running 的 run 暂停
-        size = self._db_bytes()
+        size = self._db_bytes(con)
         if size > self.limits.max_db_bytes:
             actions.append({"reason": "max_db_bytes", "db_bytes": size,
                             "limit": self.limits.max_db_bytes})
 
-        rows = self.con.execute(
+        rows = con.execute(
             "SELECT r.id, r.heartbeat_at, r.updated_at, r.state, r.pid FROM runs r WHERE r.state='running'"
         ).fetchall()
         for r in rows:
             hb = _epoch(r["heartbeat_at"] or r["updated_at"])
             stale = (now - hb) > self.heartbeat_timeout_s if hb else True
-            n_ck = self.con.execute(
+            n_ck = con.execute(
                 "SELECT COUNT(*) n FROM checkpoints WHERE run_id=?", (r["id"],)).fetchone()["n"]
             too_many = n_ck > max(self.limits.checkpoints_keep * 2, 10)
             if stale or too_many or size > self.limits.max_db_bytes:
                 killed = self._kill_pgids(r["id"])
-                with _db.Tx(self.con) as c:
+                with _db.Tx(con) as c:
                     c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
@@ -100,12 +122,21 @@ class Watchdog:
         stop = stop or threading.Event()
 
         def _loop():
+            backoff = self.poll_s
             while not stop.is_set():
                 try:
                     self.scan_once()
-                except Exception:                      # 看护自己不能死,但必须留痕
-                    log.exception("watchdog scan failed")
-                stop.wait(self.poll_s)
+                    self.errors = 0
+                    backoff = self.poll_s
+                except Exception:                      # 看护自己不能死,但必须留痕 + 退避
+                    self.errors += 1
+                    log.exception("watchdog scan failed (%d/%d)", self.errors, self.max_consecutive_errors)
+                    if self.errors >= self.max_consecutive_errors:
+                        self.stopped_reason = f"连续 {self.errors} 次扫描失败,守护线程停止"
+                        log.error(self.stopped_reason)
+                        return
+                    backoff = min(self.poll_s * (2 ** self.errors), 60.0)
+                stop.wait(backoff)
 
         th = threading.Thread(target=_loop, name="fwcore-watchdog", daemon=True)
         th.start()

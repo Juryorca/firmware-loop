@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.limits import Limits
-from fwcore.runtime import Runner
 from fwcore.models import ScriptedAdapter
+from fwcore.runtime import Runner
 from fwcore.watchdog import Watchdog
 
 
@@ -81,3 +82,41 @@ def test_watchdog_daemon_is_independent_and_stoppable(tmp_path):
     assert not th.is_alive()
     # 健康 run 未被误伤
     assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "running"
+
+
+# ---------- 守护线程的真实缺陷(2026-11-04 复核) ----------
+
+def test_daemon_uses_own_connection_from_thread(tmp_path):
+    """sqlite Connection 不能跨线程使用 ⇒ 守护线程必须用**自己的**连接(db_path)。"""
+    con, dom, root, rid, hid = _mk(tmp_path)
+    # 把心跳做旧,让看护该动手
+    con.execute("UPDATE runs SET heartbeat_at='2000-01-01T00:00:00+00:00', pid=999999 WHERE id=?", (rid,))
+    db_path = os.path.join(root, "state", "fwcore.sqlite3")
+    wd = Watchdog(con=None, root=root, limits=Limits(), db_path=db_path,
+                  heartbeat_timeout_s=1, poll_s=0.05)
+    stop = threading.Event()
+    th = wd.start_daemon(stop)
+    ok = False
+    for _ in range(40):
+        state = con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"]
+        if state == "paused":
+            ok = True
+            break
+        time.sleep(0.05)
+    stop.set()
+    th.join(timeout=2)
+    assert ok, "守护线程应能把失联 run 暂停(且不能因跨线程使用 Connection 报错)"
+    assert wd.errors == 0
+
+
+def test_daemon_stops_after_consecutive_errors(tmp_path):
+    """看护自身持续失败时不能空转:连续 N 次失败后自行停止并记录原因。"""
+    con, dom, root, rid, hid = _mk(tmp_path)
+    bogus = os.path.join(root, "state")          # 一个**目录**:sqlite 打不开 ⇒ 每次扫描都抛错
+    wd = Watchdog(con=None, root=root, limits=Limits(), db_path=bogus,
+                  poll_s=0.01, max_consecutive_errors=3)
+    stop = threading.Event()
+    th = wd.start_daemon(stop)
+    th.join(timeout=5)
+    assert not th.is_alive() and wd.stopped_reason is not None
+    stop.set()
