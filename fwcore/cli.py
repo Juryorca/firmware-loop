@@ -132,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(az.describe(), ensure_ascii=False, indent=2))
         elif args.cmd == "progress":
             from .models import ScriptedAdapter
-            from .runtime import Runner
+
             r = Runner(con, args.root, ScriptedAdapter(script=[]))
             print(json.dumps(r.progress(args.run_id), ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":

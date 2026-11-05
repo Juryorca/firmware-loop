@@ -148,7 +148,7 @@ def assistant_message(content: str, calls: list[dict], reasoning: str = "") -> d
     `reasoning_content` 是 DeepSeek thinking 模式的**必需回传字段**(不回传 ⇒ 400),
     这类 provider 私有字段必须原样往返,不能在我们的规范化里丢掉。
     """
-    base = {"role": "assistant", "content": content}
+    base: dict[str, object] = {"role": "assistant", "content": content}
     # thinking 模式(如 DeepSeek reasoner/flash)要求**每个** assistant 消息都回传该字段;
     # 非 thinking provider 多带未知字段会被拒 ⇒ 用 FW_REASONING_CONTENT=1 显式开启。
     if reasoning or _emit_reasoning():

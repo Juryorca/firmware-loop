@@ -138,3 +138,14 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   → `pytest(8 文件) 90 passed in 30.76s` / `capabilities 10 项` / `gates 如实报阻塞` /
   `评测答案隔离 PASS` / `ROADMAP 一致性 PASS` / 退出码 0
 - 状态:除两项阻塞外全部 ✅
+
+### Iteration 16(真 bug:`fw-core run` 的 UnboundLocalError)
+- **复现**:`python3 -m fwcore --root <tmp> run t` ⇒ `UnboundLocalError: cannot access local variable 'Runner'`
+- 根因:`main()` 里 progress 分支有一句 **局部** `from .runtime import Runner`,
+  让 `Runner` 在整个函数里变成局部变量 ⇒ run/resume/advance 分支(line 190)引用时未绑定 ✗
+  (Pyright 早就报了 `"Runner" is unbound`,我之前只当它是缓存假报)
+- 修复:删掉那句局部 import(模块级已有);顺手修 `model_client.assistant_message` 的 `base` 类型标注
+- 反例回归:`tests/test_cli_smoke.py::test_run_command_works_end_to_end`(跑真实 `fw-core run` 脚本模型,
+  断言 rc=0、输出 state、stderr 无 UnboundLocalError)
+- 证据:**`tests/test_cli_smoke.py` 6 passed in 12.86s**
+- 教训:编译器/Pyright 报的 "unbound" 不要一律当缓存假报 —— 这条是真的会挂 CLI 的

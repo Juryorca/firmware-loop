@@ -62,3 +62,21 @@ def test_gates_legacy_bridge_through_cli(tmp_path):
     rep = json.loads(r.stdout)
     assert rep["legacy"]["available"] is True, rep.get("legacy")
     assert rep["legacy"]["summary"].startswith("=== derived_check:")
+
+
+def test_run_command_works_end_to_end(tmp_path):
+    """反例回归:`fw-core run` 曾因 main() 内局部 import 遮蔽模块级 Runner ⇒ UnboundLocalError。
+
+    这条用例直接跑 CLI 的 run(脚本模型),确保"CLI 能真正驱动一次运行"。
+    """
+    root = str(tmp_path)
+    db = str(tmp_path / "run.sqlite3")
+    assert _run("--root", root, "--db", db, "init", "t", "--version", "1").returncode == 0
+    env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t")
+    r = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
+                        "run", "t", "--model", "scripted"],
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr[-800:]
+    out = json.loads(r.stdout)
+    assert out["state"] in ("finished", "paused")
+    assert "UnboundLocalError" not in r.stderr
