@@ -14,19 +14,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcore import db as _db                      # noqa: E402
-from fwcore.domain import Domain                  # noqa: E402
+from fwcore import db as _db  # noqa: E402
+from fwcore.domain import Domain  # noqa: E402
 from fwcore.model_client import to_api_messages  # noqa: E402
 from fwcore.models import build_adapter  # noqa: E402
-from fwcore.policy import Authz, Policy            # noqa: E402
-from fwcore.runtime import Runner                 # noqa: E402
+from fwcore.policy import Authz, Policy  # noqa: E402
+from fwcore.runtime import Runner  # noqa: E402
 
 
 def load_credentials() -> tuple[str, str, str]:
@@ -35,7 +34,7 @@ def load_credentials() -> tuple[str, str, str]:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
-        raise SystemExit(f"读不到模型配置 {path}: {e}")
+        raise SystemExit(f"读不到模型配置 {path}: {e}") from e
     prov = d.get("providers", {}).get("deepseek", {})
     key = prov.get("apiKey") or os.environ.get("FW_API_KEY", "")
     base = prov.get("baseUrl") or "https://api.deepseek.com"
@@ -69,13 +68,13 @@ def main() -> int:
         root = tempfile.mkdtemp(prefix="fw-e2e-", dir=scratch)
         os.makedirs(os.path.join(root, "state"), exist_ok=True)
     except OSError as e:
-        raise SystemExit(f"准备临时工作区失败: {e}")
+        raise SystemExit(f"准备临时工作区失败: {e}") from e
     try:
         for name, body in (("a.txt", "hello-a\n"), ("b.txt", "hello-b\n")):
             with open(os.path.join(root, name), "w", encoding="utf-8") as f:
                 f.write(body)
     except OSError as e:
-        raise SystemExit(f"准备测试文件失败: {e}")
+        raise SystemExit(f"准备测试文件失败: {e}") from e
 
     con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
     dom = Domain(con, root)
@@ -116,7 +115,7 @@ def main() -> int:
     try:
         os.makedirs(os.path.dirname(os.path.join(ROOT, args.out)), exist_ok=True)
     except OSError as e:
-        raise SystemExit(f"创建输出目录失败: {e}")
+        raise SystemExit(f"创建输出目录失败: {e}") from e
     lines = [
         "# 真实模型端到端记录(自动生成)",
         "",
