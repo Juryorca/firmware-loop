@@ -99,3 +99,10 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
 - 证据:`tests/test_rule_selection.py` **4 passed in 0.01s**
   (关键段在文末也能保留 / 省略有标注 / 短文档不动 / 真实 AGENTS.md 压到 6000 仍保留停·不停或 Exit Criteria)
 - 下一项:仍只剩阻塞项(Pi hook 待授权 / Pi 线对比待外部条件)
+
+### Iteration 11(Pi hook:默认惰性的代码就位)
+- 背景:启用 Pi hook 会改变**研究会话**的 live 行为 ⇒ 必须用户授权。代码可以先就位,但默认必须无害。
+- 增量:`fwcore/pi_hook.py` —— 开关是**显式文件** `state/pi_bridge.enabled`(用户手动建/删);
+  关闭时 `handle()` 纯 no-op(不写任何状态、不导重资源),打开时委派 `pi_bridge.handle_event`
+- 证据:`tests/test_pi_hook_gate.py` **2 passed in 0.27s**(默认关闭且零写入;启用后写入;再关闭又零写入)
+- 状态:代码就绪;**启用仍待用户授权**(创建那个文件即生效)
