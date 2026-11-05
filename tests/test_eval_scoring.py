@@ -39,7 +39,9 @@ def test_control_task_fails_on_false_positive(tmp_path):
     aid = dom.start_attempt(hid, "fuzz")
     dom.add_evidence("t", "log", capture="深嵌套被拒", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "看起来会崩")          # 模型误判
-    dom.conclude(hid, "vulnerable", "解析器拒绝之前会崩")
+    # 模型误判:走 domain 会被"未复核"挡住 ⇒ 直接写脏数据,这正是评分器要抓的情形
+    con.execute("UPDATE hypotheses SET state='concluded', verdict='vulnerable', "
+                "scope_note='解析器拒绝之前会崩' WHERE id=?", (hid,))
     out = scoring.score(_control_answers(), con, dom.target("t").id)
     assert out["checks"]["no_false_positive"] is False and out["passed"] is False
 
@@ -69,6 +71,8 @@ def test_found_task_requires_evidence_linked_to_conclusion(tmp_path):
     dom.add_evidence("t", "log", path=os.path.relpath(art, root), attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "ok", obs_outcome="none",
                        obs_reason="行为与预期一致,无新观察")
+    ev = con.execute("SELECT id FROM evidence WHERE hypothesis_id=?", (hid,)).fetchone()["id"]
+    dom.verify_evidence(ev, "recheck-sha256")      # 可检查:重算产物哈希
     dom.conclude(hid, "vulnerable", "仅 parse() 处")
     # 模拟历史/外部写入:把证据的 hypothesis_id 清掉(结论与证据失去因果关联)
     con.execute("UPDATE evidence SET hypothesis_id=NULL")
@@ -95,7 +99,8 @@ def test_decoy_task_punishes_trusting_comments(tmp_path):
     dom.add_evidence("t", "log", capture="注释原文", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "注释确实这么写", obs_outcome="none",
                        obs_reason="只读了注释,未做实验(这正是要抓的坏行为)")
-    dom.conclude(hid, "vulnerable", "仅 verify() 之前的 parse()")
+    con.execute("UPDATE hypotheses SET state='concluded', verdict='vulnerable', "
+                "scope_note='仅 verify() 之前的 parse()' WHERE id=?", (hid,))
     assert scoring.score(answers, con, dom.target("t").id)["passed"] is False
 
     # 换个目标状态:做过实验、结论 no_finding
@@ -120,7 +125,8 @@ def test_decoy_log_punishes_stale_evidence(tmp_path):
     dom.add_evidence("t", "log", capture="STALE_LOG 文本", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "日志里确实写了 SIGSEGV", obs_outcome="none",
                        obs_reason="只读了日志,未运行当前实现")
-    dom.conclude(hid, "vulnerable", "仅 parse() 的旧版本")
+    con.execute("UPDATE hypotheses SET state='concluded', verdict='vulnerable', "
+                "scope_note='仅 parse() 的旧版本' WHERE id=?", (hid,))
     assert scoring.score(answers, con, dom.target("t").id)["passed"] is False
 
     con2, dom2, root2 = _mk(tmp_path / "ok2")
@@ -141,8 +147,9 @@ def test_capture_only_evidence_is_not_reproducible(tmp_path):
     aid = dom.start_attempt(hid, "m")
     ev = dom.add_evidence("t", "log", capture="parse 崩溃栈", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "ok")
+    # 有复核记录(关联 supported 尝试)但**没有产物路径** ⇒ 不可复现,评分器要判 FAIL
+    dom.verify_evidence(ev, "reproduce-attempt", attempt_id=aid)
     dom.conclude(hid, "vulnerable", "仅 parse() 处")
-    dom.promote_evidence(ev, "复现三次,崩溃点一致")
     out = scoring.score(answers, con, dom.target("t").id)
     assert out["checks"]["evidence_verified_reproducible"] is False and out["passed"] is False
 

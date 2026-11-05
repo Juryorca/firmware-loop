@@ -243,7 +243,12 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
     op = os.path.join(art, f"{oid}.stdout")
     ep = os.path.join(art, f"{oid}.stderr")
     started = _now()
-    with open(op, "wb") as fo, open(ep, "wb") as fe:
+    try:
+        fo = open(op, "wb")
+        fe = open(ep, "wb")
+    except OSError as e:
+        return {"status": "error", "error": f"无法创建输出文件: {e}"}
+    with fo, fe:
         try:
             proc = subprocess.Popen(
                 shlex.split(cmd) if isinstance(cmd, str) else cmd,

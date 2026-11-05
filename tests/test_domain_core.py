@@ -7,7 +7,7 @@ import os
 import pytest
 
 from fwcore import db as _db
-from fwcore.domain import Domain, InvariantViolation, NotFound
+from fwcore.domain import Domain, InvariantViolation
 
 
 @pytest.fixture()
@@ -54,7 +54,15 @@ def test_conclude_requires_scope_and_evidence(dom):
         dom.conclude(hid, "vulnerable", "  ")          # 没有 scope
     with pytest.raises(InvariantViolation):
         dom.conclude(hid, "vulnerable", "仅 /api/x 未认证")   # 没有证据
-    dom.add_evidence("t1", "http", capture="200 + 管理内容", attempt_id=aid, hypothesis_id=hid)
+    ev = dom.add_evidence("t1", "http", capture="200 + 管理内容", attempt_id=aid, hypothesis_id=hid)
+    # 新语义:手工证据也**不算**已验证;只有留下可检查的复核记录才作数
+    with pytest.raises(InvariantViolation) as e2:
+        dom.conclude(hid, "vulnerable", "仅 /api/x 未认证")
+    assert "复核" in str(e2.value)
+    with pytest.raises(InvariantViolation):
+        dom.promote_evidence(ev, "我确认过了,确实未认证")     # 只写文字 ⇒ 不给
+    from tests.helpers import verify
+    verify(dom, ev, str(dom.root))
     assert dom.conclude(hid, "vulnerable", "仅 /api/x 未认证")
 
 

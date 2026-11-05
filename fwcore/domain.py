@@ -50,6 +50,14 @@ class InvariantViolation(DomainError):
     pass
 
 
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -360,7 +368,8 @@ class Domain:
             if h["target_id"] != t.id:
                 raise InvariantViolation("hypothesis 不属于该目标")
         ver = version if version is not None else (t.version or "unknown")
-        verified = 1
+        # 证据创建时**永远**未复核:复核是另一条独立动作(verify_evidence),要留可检查的记录
+        verified = 0
         if tool_call_id:
             tc = self.con.execute("SELECT status, provider, capability, result_path FROM tool_calls"
                                   " WHERE id=?", (tool_call_id,)).fetchone()
@@ -371,7 +380,6 @@ class Domain:
                     f"工具调用状态是 {tc['status']}(不是 ok)⇒ 不能作为证据来源"
                     "(失败/超时/取消都只是执行事实,不是研究证据)")
             source = source or "tool:" + (tc["provider"] or tc["capability"] or "unknown")
-            verified = 0          # 原始工具输出:必须复核后提升
             if path is None and capture is None and tc["result_path"]:
                 # 证据默认锚定该次调用的原始产物(路径相对 root 存,便于跨机复核)
                 rp = tc["result_path"]
@@ -404,16 +412,96 @@ class Domain:
                                               "source": source, "verified": verified})
         return eid
 
-    def promote_evidence(self, ev_id: str, note: str) -> None:
-        """研究复核后把证据提升为"可用作结论依据"(必须写复核说明)。"""
-        if not note or len(note.strip()) < 8:
-            raise InvariantViolation("提升证据必须写复核说明:怎么复核的(复现/交叉验证/反编译对照)")
-        row = self.con.execute("SELECT verified FROM evidence WHERE id=?", (ev_id,)).fetchone()
-        if not row:
+    METHODS = ("recheck-sha256", "reproduce-attempt", "cross-check")
+
+    def verify_evidence(self, ev_id: str, method: str, *, artifact: str | None = None,
+                        attempt_id: str | None = None, detail: str = "") -> str:
+        """给证据留下**可检查的复核记录**,并据此把它标为 verified。
+
+        三种方法(都能由 agent 自主执行,但都要有机器可核的一面):
+        - `recheck-sha256`:重算证据文件哈希并与记录比对(纯机器检查;证明"产物没变过")
+        - `reproduce-attempt`:关联一次 **supported** 的尝试(有过程记录,不是一句声明)
+        - `cross-check`:交叉验证 —— 必须给 `artifact`(可检查的产物)且写明比对对象(detail)
+
+        只靠文字声称"我验证过了"**不成立**:没有 check 行就没有 verified。
+        """
+        if method not in self.METHODS:
+            raise InvariantViolation(f"复核方法非法: {method}(允许: {', '.join(self.METHODS)})")
+        ev = self.con.execute("SELECT * FROM evidence WHERE id=?", (ev_id,)).fetchone()
+        if not ev:
             raise NotFound(f"证据不存在: {ev_id}")
+
+        art_path = art_sha = None
+        if method == "recheck-sha256":
+            if not ev["path"]:
+                raise InvariantViolation("recheck-sha256 需要证据本身是文件(path);纯文字摘录给不出哈希")
+            full = ev["path"] if os.path.isabs(ev["path"]) else os.path.join(self.root, ev["path"])
+            if not os.path.isfile(full):
+                raise NotFound(f"证据文件不存在: {ev['path']}")
+            art_sha = _sha256_file(full)
+            if not ev["sha256"]:
+                raise InvariantViolation("证据没有记录哈希 ⇒ 无法复核(先按文件重新登记证据)")
+            if art_sha != ev["sha256"]:
+                raise InvariantViolation(
+                    f"哈希不匹配:记录 {ev['sha256'][:12]}… 实际 {art_sha[:12]}… "
+                    "⇒ 产物已变,旧结论不能沿用")
+            art_path = ev["path"]
+        elif method == "reproduce-attempt":
+            if not attempt_id:
+                raise InvariantViolation("reproduce-attempt 必须给出 attempt_id(哪次复现)")
+            row = self.con.execute("SELECT result, hypothesis_id FROM attempts WHERE id=?",
+                                   (attempt_id,)).fetchone()
+            if not row:
+                raise NotFound(f"尝试不存在: {attempt_id}")
+            if row["result"] != "supported":
+                raise InvariantViolation(
+                    f"该尝试结论是 {row['result']} ⇒ 不能作为复现依据(需要 supported)")
+            if ev["hypothesis_id"] and row["hypothesis_id"] != ev["hypothesis_id"]:
+                raise InvariantViolation("复现尝试与证据不属于同一个假设(不能跨假设凑证据)")
+        else:  # cross-check
+            if not artifact:
+                raise InvariantViolation(
+                    "cross-check 必须给 artifact:可检查的产物(截图/日志/脚本输出),"
+                    "只写文字说明不算复核")
+            full = artifact if os.path.isabs(artifact) else os.path.join(self.root, artifact)
+            if not os.path.isfile(full):
+                raise NotFound(f"交叉验证产物不存在: {artifact}")
+            if len((detail or "").strip()) < 12:
+                raise InvariantViolation("cross-check 要写明比对了什么(≥12 字)")
+            art_path, art_sha = artifact, _sha256_file(full)
+
+        cid = new_id("EC")
         with Tx(self.con) as c:
-            c.execute("UPDATE evidence SET verified=1, notes=? WHERE id=?", (note.strip(), ev_id))
-            _event(c, "evidence.verified", ev_id, {"note": note.strip()[:300]})
+            c.execute("INSERT INTO evidence_checks(id,evidence_id,method,artifact_path,artifact_sha256,"
+                      "attempt_id,detail,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (cid, ev_id, method, art_path, art_sha, attempt_id, detail.strip() or None, _now()))
+            c.execute("UPDATE evidence SET verified=1 WHERE id=?", (ev_id,))
+            _event(c, "evidence.verified", ev_id,
+                   {"method": method, "artifact": art_path, "attempt": attempt_id,
+                    "detail": detail.strip()[:200]})
+        return cid
+
+    def promote_evidence(self, ev_id: str, note: str) -> None:
+        """兼容旧调用:等价于 `cross-check`,但**必须**有可检查的产物(证据文件或显式 artifact)。"""
+        ev = self.con.execute("SELECT path FROM evidence WHERE id=?", (ev_id,)).fetchone()
+        if not ev:
+            raise NotFound(f"证据不存在: {ev_id}")
+        if not ev["path"]:
+            raise InvariantViolation(
+                "只靠文字不能复核:这条证据没有文件产物 ⇒ 用 "
+                "`verify_evidence(method='cross-check', artifact=...)` 给出可检查的产物")
+        self.verify_evidence(ev_id, "cross-check", artifact=ev["path"], detail=note)
+
+    def evidence_status(self, ev_id: str) -> dict:
+        """证据的复核状态与全部检查记录(审计用)。"""
+        ev = self.con.execute("SELECT * FROM evidence WHERE id=?", (ev_id,)).fetchone()
+        if not ev:
+            raise NotFound(f"证据不存在: {ev_id}")
+        checks = [dict(r) for r in self.con.execute(
+            "SELECT method, artifact_path, artifact_sha256, attempt_id, detail, created_at"
+            " FROM evidence_checks WHERE evidence_id=? ORDER BY created_at", (ev_id,))]
+        return {"id": ev_id, "verified": bool(ev["verified"]), "sha256": ev["sha256"],
+                "path": ev["path"], "checks": checks}
 
     # ---------------- 结论 ----------------
     def conclude(self, hid: str, verdict: str, scope_note: str) -> str:

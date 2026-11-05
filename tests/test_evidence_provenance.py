@@ -91,13 +91,17 @@ def test_vulnerable_requires_verified_evidence(tmp_path):
     assert "evidence.verified" in kinds
 
 
-def test_manual_evidence_is_verified_but_records_source(tmp_path):
-    con, dom, _root = _setup(tmp_path)
+def test_manual_evidence_is_unverified_until_checked(tmp_path):
+    """手工写的证据也**不算**已验证:复核是独立动作,要留下可检查的记录。"""
+    con, dom, root = _setup(tmp_path)
     ev = dom.add_evidence("t1", "decompiled", capture="switch(*(a+4)) 无边界检查",
                           source="idb:decompiled:/cgi-bin/x")
     row = con.execute("SELECT source, verified FROM evidence WHERE id=?", (ev,)).fetchone()
     assert row["source"].startswith("idb:")
-    assert row["verified"] == 1
+    assert row["verified"] == 0
+    from tests.helpers import verify
+    verify(dom, ev, root)                       # 交叉验证(要可检查的产物)
+    assert con.execute("SELECT verified FROM evidence WHERE id=?", (ev,)).fetchone()["verified"] == 1
 
 
 def test_evidence_missing_artifact_is_rejected(tmp_path):
@@ -122,7 +126,10 @@ def test_migration_from_v3_preserves_existing_rows(tmp_path):
     cols = {r[1] for r in con.execute("PRAGMA table_info(evidence)")}
     assert {"source", "tool_call_id", "verified", "notes"} <= cols
     row = con.execute("SELECT * FROM evidence WHERE id='E1'").fetchone()
-    assert row["capture"] == "old fact" and row["verified"] == 1
+    assert row["capture"] == "old fact"
+    # 迁移**不能**凭历史标志位推断"已独立复现":一律清零并留说明
+    assert row["verified"] == 0
+    assert "legacy" in (row["notes"] or "")
     assert con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"] == str(_db.SCHEMA_VERSION)
 
 

@@ -70,6 +70,15 @@ def main(argv: list[str] | None = None) -> int:
     pr = sp.add_parser("promote")
     pr.add_argument("evidence_id"); pr.add_argument("--note", required=True,
                                                     help="复核说明:怎么确认它成立(复现/交叉验证)")
+    vf = sp.add_parser("verify", help="留下可检查的复核记录(机器可核的一面)然后标记 verified")
+    vf.add_argument("evidence_id")
+    vf.add_argument("--method", required=True,
+                    choices=["recheck-sha256", "reproduce-attempt", "cross-check"])
+    vf.add_argument("--artifact", default=None)
+    vf.add_argument("--attempt", default=None, dest="attempt_id")
+    vf.add_argument("--detail", default="")
+    st = sp.add_parser("status", help="看证据的复核记录(审计)")
+    st.add_argument("evidence_id")
 
     p = sub.add_parser("observe"); p.add_argument("target"); p.add_argument("--text", required=True)
     p.add_argument("--attempt")
@@ -161,6 +170,13 @@ def main(argv: list[str] | None = None) -> int:
             if args.ev_cmd == "promote":
                 dom.promote_evidence(args.evidence_id, args.note)
                 print(json.dumps({"id": args.evidence_id, "verified": True}, ensure_ascii=False))
+            elif args.ev_cmd == "verify":
+                cid = dom.verify_evidence(args.evidence_id, args.method, artifact=args.artifact,
+                                          attempt_id=args.attempt_id, detail=args.detail)
+                print(json.dumps({"id": args.evidence_id, "check": cid, "method": args.method},
+                                 ensure_ascii=False))
+            elif args.ev_cmd == "status":
+                print(json.dumps(dom.evidence_status(args.evidence_id), ensure_ascii=False, indent=2))
             else:
                 print(dom.add_evidence(args.target, args.kind, path=args.path, capture=args.capture,
                                        attempt_id=args.attempt, hypothesis_id=args.hypothesis,

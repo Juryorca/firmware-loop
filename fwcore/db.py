@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -231,7 +231,14 @@ def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
     return con
 
 
+_IDENT = __import__("re").compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
+    """加列(DDL 不能参数化 ⇒ 标识符走白名单校验,拒绝任何拼进来的怪名字)。"""
+    for ident in (table, col):
+        if not _IDENT.match(ident):
+            raise ValueError(f"非法标识符: {ident!r}")
     cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
     if col not in cols:
         con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
@@ -239,6 +246,30 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
 
 def _step2(con: sqlite3.Connection) -> None:
     _add_col(con, "surfaces", "judged_by", "TEXT")
+
+
+def _step7(con: sqlite3.Connection) -> None:
+    """证据"复核"必须是**可检查的记录**,不是一个自称的标志位。
+
+    - 新表 `evidence_checks`:每条复核动作(方法/产物/哈希/关联尝试/说明)都留痕;
+    - `evidence.verified` 只由这些记录派生(没有 check 行 = 未复核);
+    - 历史行(迁移前 `verified=1`)**一律清零**:当时没有检查记录,不能推断它被独立复现过。
+    """
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS evidence_checks (
+      id          TEXT PRIMARY KEY,
+      evidence_id TEXT NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
+      method      TEXT NOT NULL,
+      artifact_path TEXT,
+      artifact_sha256 TEXT,
+      attempt_id  TEXT,
+      detail      TEXT,
+      created_at  TEXT NOT NULL
+    )""")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_evidence_checks_ev ON evidence_checks(evidence_id)")
+    con.execute("UPDATE evidence SET verified=0 WHERE verified!=0")
+    con.execute("UPDATE evidence SET notes = COALESCE(notes || ' | ','') || "
+                "'legacy: 迁移前的 verified 无检查记录,不算已验证'")
 
 
 def _step6(con: sqlite3.Connection) -> None:
@@ -287,7 +318,7 @@ def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "hypotheses", "surface_key", "TEXT")
 
 
-STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6}
+STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7}
 
 
 def _migrate(con: sqlite3.Connection) -> None:

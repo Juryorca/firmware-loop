@@ -37,8 +37,10 @@ def test_findings_require_evidence(tmp_path):
     con, dom, root = _mk(tmp_path)
     hid = dom.add_hypothesis("t1", "越权")
     aid = dom.start_attempt(hid, "diff")
-    dom.add_evidence("t1", "http", capture="200 + admin", attempt_id=aid, hypothesis_id=hid)
+    ev = dom.add_evidence("t1", "http", capture="200 + admin", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "行为不同")
+    from tests.helpers import verify
+    verify(dom, ev, root)
     dom.conclude(hid, "vulnerable", "仅 /api/x")
     rep = evaluate(con, root, "t1")
     assert rep.findings and rep.findings[0]["ok"] is True and rep.findings[0]["evidence"] >= 1
@@ -106,8 +108,10 @@ def test_vulnerable_without_linked_evidence_is_blocker(tmp_path):
     con, dom, root = _mk(tmp_path)
     hid = dom.add_hypothesis("t1", "越权")
     aid = dom.start_attempt(hid, "diff")
-    dom.add_evidence("t1", "http", capture="200", attempt_id=aid, hypothesis_id=hid)
+    ev = dom.add_evidence("t1", "http", capture="200", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "supported", "ok", obs_outcome="none", obs_reason="与预期一致,无新观察")
+    from tests.helpers import verify
+    verify(dom, ev, root)
     dom.conclude(hid, "vulnerable", "仅 /api/x")
     con.execute("UPDATE evidence SET hypothesis_id=NULL")     # 模拟历史/外部写入导致的失联
     rep = evaluate(con, root, "t1")
