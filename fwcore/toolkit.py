@@ -106,6 +106,18 @@ def _obs_fuzz(text: str) -> dict:
             "crash": crash}
 
 
+@observer("fw_extract")
+def _obs_extract(text: str) -> dict:
+    """固件提取摘要:目录/文件数(解析不出就如实 unparsed)。"""
+    files = re.findall(r"files=(\d+)", text)
+    dirs = [ln.strip() for ln in text.splitlines()
+            if ln.strip().startswith(("/", "state/", "./")) and "=" not in ln]
+    if not files and not dirs:
+        return {"status": "unparsed", "raw_tail": text[-160:]}
+    return {"status": "ok", "files": _int_or_none(files[-1]) if files else None,
+            "dirs": dirs[:10]}
+
+
 @observer("emu_run")
 def _obs_emu(text: str) -> dict:
 

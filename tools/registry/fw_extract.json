@@ -1,0 +1,22 @@
+{
+  "name": "fw_extract",
+  "description": "用已装的 binwalk + unblob 提取固件(两者产出都保留),返回目录/文件数摘要;高风险(起外部提取器)",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "firmware": {"type": "string", "description": "固件路径(相对工作区)"},
+      "outdir": {"type": "string", "description": "输出目录(相对工作区)"},
+      "timeout": {"type": "number"}
+    },
+    "required": ["firmware", "outdir"]
+  },
+  "kind": "script",
+  "argv": ["bash", "tools/fw_extract.sh", "{firmware}", "{outdir}"],
+  "timeout": 900,
+  "timeout_arg": "timeout",
+  "risk": "high",
+  "capability": "extract.binwalk",
+  "provider": "repo:fw_extract.sh",
+  "observer": "fw_extract",
+  "requires_file": "tools/fw_extract.sh"
+}
