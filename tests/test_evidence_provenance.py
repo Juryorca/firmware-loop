@@ -105,7 +105,7 @@ def test_evidence_missing_artifact_is_rejected(tmp_path):
         dom.add_evidence("t1", "tool_output", path="state/artifacts/nope.bin")
 
 
-def test_migration_v3_to_v4_preserves_existing_rows(tmp_path):
+def test_migration_from_v3_preserves_existing_rows(tmp_path):
     """v3 库(无新列)升级后:旧证据仍可用且默认视为已复核(不能凭空降级历史事实)。"""
     path = os.path.join(str(tmp_path), "old.sqlite3")
     con = sqlite3.connect(path, isolation_level=None)
@@ -122,4 +122,4 @@ def test_migration_v3_to_v4_preserves_existing_rows(tmp_path):
     assert {"source", "tool_call_id", "verified", "notes"} <= cols
     row = con.execute("SELECT * FROM evidence WHERE id='E1'").fetchone()
     assert row["capture"] == "old fact" and row["verified"] == 1
-    assert con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"] == "4"
+    assert con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()["value"] == str(_db.SCHEMA_VERSION)

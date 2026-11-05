@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -241,6 +241,11 @@ def _step2(con: sqlite3.Connection) -> None:
     _add_col(con, "surfaces", "judged_by", "TEXT")
 
 
+def _step5(con: sqlite3.Connection) -> None:
+    """记录 pid 的启动时间:跨主机/重启后靠它识别 **pid 复用**(否则复活进程会被误当原 run)。"""
+    _add_col(con, "runs", "pid_starttime", "INTEGER")
+
+
 def _step4(con: sqlite3.Connection) -> None:
     """证据溯源:来源(哪个工具/哪次调用)、是否经研究复核。
 
@@ -270,7 +275,7 @@ def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "hypotheses", "surface_key", "TEXT")
 
 
-STEPS = {2: _step2, 3: _step3, 4: _step4}
+STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5}
 
 
 def _migrate(con: sqlite3.Connection) -> None:

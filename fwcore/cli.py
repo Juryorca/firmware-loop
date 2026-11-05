@@ -83,6 +83,10 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--no-shell", action="store_true"); g.add_argument("--no-high-risk", action="store_true")
     rv = sp.add_parser("revoke"); rv.add_argument("target"); rv.add_argument("--reason", default="")
     sh = sp.add_parser("show"); sh.add_argument("target")
+    p = sub.add_parser("recover", help="收敛确实失联的 run(活跃/长工具不误伤)")
+    p.add_argument("--older-than", type=float, default=300.0)
+    p.add_argument("--include-remote", action="store_true")
+    p.add_argument("--remote-factor", type=float, default=6.0)
     p = sub.add_parser("progress", help="结构化进度快照(只读,给外部监控/Pi 适配器)")
     p.add_argument("run_id")
     p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
@@ -110,8 +114,8 @@ def main(argv: list[str] | None = None) -> int:
                             help="本次不接入 MCP 服务器")
         parser.add_argument("--mcp-call-timeout", type=float, default=120.0)
         parser.set_defaults(mcp=True)
-        p_script = parser.add_argument("--script", default=None,
-                                       help="scripted 模型的脚本 JSON 文件(测试/复现用)")
+        parser.add_argument("--script", default=None,
+                            help="scripted 模型的脚本 JSON 文件(测试/复现用)")
 
     p = sub.add_parser("run"); p.add_argument("target"); p.add_argument("--goal")
     p.add_argument("--model", default="scripted"); p.add_argument("--steps", type=int, default=0,
@@ -175,6 +179,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(d, ensure_ascii=False, indent=2))
             else:
                 print(json.dumps(_authz.describe(args.root, args.target), ensure_ascii=False, indent=2))
+        elif args.cmd == "recover":
+            from .models import ScriptedAdapter
+            rec = Runner(con, args.root, ScriptedAdapter(script=[]))
+            fixed = rec.recover_stale(older_than_s=args.older_than,
+                                      include_remote=args.include_remote,
+                                      remote_factor=args.remote_factor)
+            print(json.dumps({"recovered": fixed}, ensure_ascii=False))
         elif args.cmd == "progress":
             from .models import ScriptedAdapter
 

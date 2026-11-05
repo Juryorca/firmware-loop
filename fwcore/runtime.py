@@ -136,9 +136,10 @@ class Runner:
         rid = new_id("R")
         now = _now()
         with _db.Tx(self.con) as c:
-            c.execute("INSERT INTO runs(id,target_id,state,step,rounds,goal,pid,host,heartbeat_at,started_at,updated_at)"
-                      " VALUES(?,?,'running',0,0,?,?,?,?,?,?)",
-                      (rid, t.id, goal, os.getpid(), _host(), now, now, now))
+            c.execute("INSERT INTO runs(id,target_id,state,step,rounds,goal,pid,pid_starttime,host,"
+                      "heartbeat_at,started_at,updated_at) VALUES(?,?,'running',0,0,?,?,?,?,?,?,?)",
+                      (rid, t.id, goal, os.getpid(), _proc_starttime(os.getpid()), _host(),
+                       now, now, now))
             _event(c, "run.started", rid, {"target": target, "goal": goal})
         return rid
 
@@ -615,7 +616,8 @@ class Runner:
 
         now = time.time()
         fixed: list[str] = []
-        for r in self.con.execute("SELECT id,pid,host,heartbeat_at FROM runs WHERE state='running'").fetchall():
+        for r in self.con.execute("SELECT id,pid,pid_starttime,host,heartbeat_at FROM runs"
+                                  " WHERE state='running'").fetchall():
             hb = r["heartbeat_at"]
             age = now - _epoch(hb) if hb else float("inf")
             same_host = (r["host"] or "") == _host()
@@ -623,20 +625,31 @@ class Runner:
             if same_host:
                 if r["pid"]:
                     alive = _pid_alive(r["pid"])
-                    # 进程活着 ⇒ **绝不**判失联(可能在跑 fuzz/等模型);进程死了 ⇒ 立即算失联
+                    if alive and r["pid_starttime"]:
+                        # 进程活着但启动时间对不上 ⇒ pid 被复用,原 run 其实早没了
+                        cur = _proc_starttime(r["pid"])
+                        if cur is not None and cur != r["pid_starttime"]:
+                            alive = False
+                    # 进程活着 ⇒ 绝不判失联(可能在跑 fuzz/等模型);进程死了 ⇒ 立即算失联
                     stale = not alive
                 else:
                     alive = None
                     stale = age > older_than_s     # 没有 pid 记录(旧库)⇒ 只能靠心跳
             else:
-                # 跨主机无法查 pid ⇒ 默认不动;显式开启时才用更长的阈值兜底
+                # 跨主机查不到 pid ⇒ 默认不动;显式开启时才用更长的阈值兜底
                 stale = include_remote and age > older_than_s * remote_factor
+            if stale and _inflight_tool_grace(self.con, r["id"], now):
+                continue        # 长工具在飞 ≠ 失联(与看护同一条判据)
             if not stale:
                 continue
+            why = ("pid 已消失" if same_host and alive is not True else
+                   f"跨主机心跳 {round(age, 1)}s 未更新")
             with _db.Tx(self.con) as c:
-                c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
+                c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=? WHERE id=?",
+                          (f"recovered_stale: {why}", _now(), r["id"]))
                 _event(c, "run.recovered_stale", r["id"],
-                       {"age_s": round(age, 1), "pid_alive": alive, "host": r["host"]})
+                       {"age_s": round(age, 1), "pid_alive": alive, "host": r["host"],
+                        "pid_starttime": r["pid_starttime"]})
             fixed.append(r["id"])
         return fixed
 
@@ -713,6 +726,26 @@ def _db_bytes(con) -> int:
 
 def _host() -> str:
     return socket.gethostname()
+
+
+def _proc_starttime(pid: int) -> int | None:
+    """读 /proc/<pid>/stat 第 22 字段(启动时刻),用于识别 pid 复用。"""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as f:
+            tail = f.read().rsplit(")", 1)[-1].split()
+        return int(tail[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _inflight_tool_grace(con, rid: str, now: float, grace_s: float = 900.0) -> bool:
+    """该 run 是否有"仍在合理时限内"的在飞工具调用(有 ⇒ 不算失联)。"""
+    row = con.execute("SELECT created_at FROM tool_calls WHERE run_id=? AND status='running'"
+                      " ORDER BY created_at DESC LIMIT 1", (rid,)).fetchone()
+    if not row:
+        return False
+    started = _epoch(row["created_at"])
+    return bool(started and (now - started) < grace_s)
 
 
 def _pid_alive(pid: int | None) -> bool:
