@@ -84,3 +84,9 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   `Watchdog.scans` 计数便于外部验证"确实跑过"
 - 证据:`tests/test_watchdog.py` **8 passed in 1.91s**(含:自动启动且 scans≥1、结束后线程为 None 不泄漏、未开启时不起线程)
 - 下一项:仍只剩阻塞项(Pi hook 待授权 / Pi 线对比待外部条件)
+
+### Iteration 9(CLI 端到端冒烟)
+- 增量:`tests/test_cli_smoke.py` —— 用 subprocess(带超时)验证外部监控真正会跑的入口:
+  `--help` / `authz` / `capabilities` / `gates <合成目标>`(有未收口假设必须非零退出)
+- 证据:**4 passed in 11.59s**;证明 CLI 路径可用,不只有库函数可用
+- 下一项:仍只剩阻塞项(Pi hook 待授权 / Pi 线对比待外部条件)
