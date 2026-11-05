@@ -50,7 +50,8 @@
 |---|---|---|
 | 读真实 Pi 源码(记 SHA) | ✅ | `earendil-works/pi @ d57c2d2`;已取 `agent-loop.ts`(959) / `agent.ts`(623) / `types.ts`(551) / `agent-session.ts`(4532) 到 `.tmp/pi-ref/`(gitignored) |
 | Watchdog 复核(跨线程/自动启动/错误空转) | ✅ | 独立连接 + 退避 + 连续失败停止;`tests/test_watchdog.py` 6 passed 1.63s |
-| 源码级对照表(8 项:循环/事件/流式/取消/Hook/上下文恢复/并发与副作用/资源边界) | 🟡 下一步 | 产出 `docs/PI-CORE-ALIGNMENT.md`(含"是否值得改 + 反例测试") |
+| 源码级对照表(8 项) | ✅ | `docs/PI-CORE-ALIGNMENT.md`(基线 `d57c2d2`;每项含 Pi 依据/fwcore 现状/差距/是否改/反例) |
+| 取消语义(对齐 AbortSignal) | ✅ | `Runner.cancel()` + 安全点检查;`tests/test_cancel.py` 2 passed 0.38s |
 | 按差距逐项实施 | ⬜ | 依赖对照表结论;一次一项,不做大重写 |
 
 ## 阻塞 / 推迟(需授权或外部条件)

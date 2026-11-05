@@ -101,6 +101,31 @@ class Runner:
             _event(c, "run.started", rid, {"target": target, "goal": goal})
         return rid
 
+    def cancel(self, rid: str, reason: str = "用户取消") -> None:
+        """请求取消一次运行(等价 Pi 的 AbortSignal)。
+
+        语义:在**安全点**停下(不打断工具内部),停 = paused + handback=user_stop,
+        并杀掉该 run 的工具进程组;不写任何研究结论。
+        """
+        with _db.Tx(self.con) as c:
+            c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=? WHERE id=?",
+                      (f"user_stop: {reason}", _now(), rid))
+            _event(c, "run.cancelled", rid, {"reason": reason})
+        with contextlib.suppress(Exception):
+            from .watchdog import Watchdog
+            Watchdog(self.con, self.root)._kill_pgids(rid)
+
+    def _external_stop(self, rid: str) -> str | None:
+        """外部是否要求停(取消/别的进程置 paused)。"""
+        row = self.con.execute("SELECT state, handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+        if not row:
+            return "run 不存在"
+        if (row["handback_reason"] or "").startswith("user_stop"):
+            return row["handback_reason"]
+        if row["state"] != "running":
+            return f"run 状态已变为 {row['state']}"
+        return None
+
     def _heartbeat(self, rid: str) -> None:
         with _db.Tx(self.con) as c:
             c.execute("UPDATE runs SET heartbeat_at=?, pid=?, host=?, updated_at=? WHERE id=?",
@@ -173,6 +198,11 @@ class Runner:
             since = _now()
             model_calls = 0
             while budget is None or budget > 0:
+                stopped = self._external_stop(rid)
+                if stopped:
+                    state = "paused"
+                    _event(self.con, "run.stopped_external", rid, {"reason": stopped})
+                    break
                 if budget is not None:
                     budget -= 1
                 if self.limits.time_exhausted(time.time() - t0):

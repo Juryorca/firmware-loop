@@ -34,3 +34,9 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
 - 证据:`tests/test_watchdog.py` **6 passed in 1.63s**
 - 已读 Pi 源码基线:`earendil-works/pi` @ **d57c2d2**(agent-loop.ts 959 行已通读结构:runLoop / executeToolCallsSequential|Parallel / shouldTerminateToolBatch / failToolCallsFromTruncatedMessage / prepareToolCallArguments)
 - 下一项:**写源码级对照表**(Pi 怎么做 → fwcore 怎么做 → 差距 → 是否改 → 反例测试),再按差距逐项实施
+
+### Iteration 2(Pi 对齐:对照表 + 取消语义)
+- 产出:`docs/PI-CORE-ALIGNMENT.md`(8 项对照,基线 `d57c2d2`;明确"现在就改/不改+理由/必须不同")
+- 增量:`Runner.cancel()`(置 paused + handback=user_stop + 杀工具进程组;循环每步检查外部停止)
+- 证据:`tests/test_cancel.py` 2 passed in 0.38s(安全点停止且不写结论;取消后零步)
+- 下一项:轮前准备钩子(可取消/有超时)或工具参数截断显式失败
