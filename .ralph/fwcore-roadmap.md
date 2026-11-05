@@ -131,3 +131,10 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   `load()` 读文件失败会明确报错(不静默返回空)
 - 证据:`tests/test_compare.py` **2 passed in 0.01s**(判定分歧与证据缺口都能抓;同一输入为空差异)
 - 状态:工具就绪;**双跑仍需外部条件**(待用户指定目标与时间窗口)
+
+### Iteration 15(验证覆盖到 90 条)
+- 增量:`tools/fwcore_verify.sh` 纳入 `tests/test_compare.py`(对比工具),pytest 覆盖 88 → **90 条**
+- 最终验证(同命令/同环境,外部可重跑):`bash tools/fwcore_verify.sh`
+  → `pytest(8 文件) 90 passed in 30.76s` / `capabilities 10 项` / `gates 如实报阻塞` /
+  `评测答案隔离 PASS` / `ROADMAP 一致性 PASS` / 退出码 0
+- 状态:除两项阻塞外全部 ✅
