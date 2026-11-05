@@ -1,6 +1,6 @@
 {
   "name": "research_signal",
-  "description": "按仓库信号约定判读工具输出(命令注入/崩溃等);返回 HIT/MISS 与依据",
+  "description": "按仓库信号约定判读 strace/仿真日志(命令注入/崩溃);返回 HIT/MISS 与依据(MISS 退出码 1 = 有意义的负结果)",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -22,5 +22,9 @@
   "observer": "research_signal",
   "capability": "signal.parse",
   "provider": "repo:parse_signal.py",
-  "requires_file": "tools/parse_signal.py"
+  "requires_file": "tools/parse_signal.py",
+  "ok_exit_codes": [
+    0,
+    1
+  ]
 }

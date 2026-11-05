@@ -85,6 +85,9 @@ class Manifest:
     observer: str | None = None           # toolkit.OBSERVERS 的键(结构化观测)
     # 同能力多工具时的选择优先级(数值小优先);仅在选择阶段用,注册本身不选
     priority: int = 100
+    # 可接受的退出码(默认只有 0)。有些工具用非 0 表达**研究结论**(如 parse_signal 的 MISS=1):
+    # 那是"有意义的负结果",不是工具失败 —— 必须按工具声明,而不是全局放宽。
+    ok_exit_codes: list[int] = field(default_factory=lambda: [0])
     cwd: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     requires_file: str | None = None      # 脚本/入口文件不存在 ⇒ 该工具不注册(能力缺失如实报)
@@ -105,6 +108,9 @@ class Manifest:
             raise ManifestError(f"{self.source}: script 工具必须给 argv")
         if self.kind == "feature" and not self.adapter:
             raise ManifestError(f"{self.source}: feature 工具必须给 adapter 名")
+        if not isinstance(self.ok_exit_codes, list) or not all(
+                isinstance(x, int) for x in self.ok_exit_codes):
+            raise ManifestError(f"{self.source}: ok_exit_codes 必须是整数数组")
         if self.risk not in ("low", "high"):
             raise ManifestError(f"{self.source}: risk 非法 {self.risk!r}")
         if self.requires not in (None, "mcp"):
@@ -202,7 +208,8 @@ def _cap_output(path: str, max_bytes: int) -> bool:
 
 def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str | None = None,
                 env: dict[str, str] | None = None, cancel_check: Callable[[], bool] | None = None,
-                max_output_bytes: int = 8 * 1024 * 1024) -> dict:
+                max_output_bytes: int = 8 * 1024 * 1024,
+                ok_exit_codes: tuple[int, ...] = (0,)) -> dict:
     """跑一个外部程序(统一执行语义):独立进程组 + 取消即杀组 + 产物落盘 + sha256。
 
     与 `tools.shell_exec` 的差别:这里接受 **argv 列表**(不经 shell 解析),
@@ -242,7 +249,7 @@ def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str |
                     try:
                         proc.wait(timeout=slice_s)
                         code = proc.returncode
-                        status = "ok" if code == 0 else (
+                        status = "ok" if code in ok_exit_codes else (
                             "cancelled" if (cancel_check and cancel_check()) else "error")
                         break
                     except subprocess.TimeoutExpired:
@@ -414,7 +421,8 @@ class ScriptAdapter(Adapter):
     def call(self, ctx: ToolContext, m: Manifest, args: dict) -> dict:
         timeout = num(args.get(m.timeout_arg), m.timeout) if m.timeout_arg else float(m.timeout)
         return run_process(ctx, self.build_argv(m, args), timeout=timeout, cwd=m.cwd, env=m.env,
-                           cancel_check=lambda: _cancel_requested(ctx))
+                           cancel_check=lambda: _cancel_requested(ctx),
+                           ok_exit_codes=tuple(m.ok_exit_codes or [0]))
 
 
 class FeatureAdapter(Adapter):

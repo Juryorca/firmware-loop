@@ -13,9 +13,17 @@ import pytest
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.policy import Authz, Policy
-from fwcore.toolreg import (Adapter, Manifest, ScriptAdapter, capability_index,
-                            close_feature_adapters, register_feature, register_manifests,
-                            run_process, select_tool)
+from fwcore.toolreg import (
+    Adapter,
+    Manifest,
+    ScriptAdapter,
+    capability_index,
+    close_feature_adapters,
+    register_feature,
+    register_manifests,
+    run_process,
+    select_tool,
+)
 from fwcore.tools import Registry, ToolContext
 from fwcore.watchdog import Watchdog
 
@@ -73,7 +81,6 @@ def test_mixed_part_and_empty_values():
 def test_run_process_registers_pgid_with_starttime(tmp_path):
     con, dom, root = _setup(tmp_path)
     r = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], start_new_session=True)
-    round_ = ({"p": r}, )
     try:
         # 先登记(与 run_process 内部同一条路径),再核对"能按 starttime 找到这个组"
         from fwcore.toolreg import _proc_starttime, _register_pgid
@@ -84,7 +91,6 @@ def test_run_process_registers_pgid_with_starttime(tmp_path):
             line = f.read().strip().split()
         assert int(line[0]) == os.getpgid(r.pid)
         assert int(line[1]) == _proc_starttime(r.pid)
-        assert round_
     finally:
         r.kill()
 
@@ -251,3 +257,25 @@ def test_capability_index_and_selection_are_different(tmp_path):
     assert sel is not None
     assert sel["selected"] == "slow_tool" and sel["provider"] == "p-slow"
     assert [c["tool"] for c in sel["candidates"]].count("fast_tool") == 1
+
+
+def test_ok_exit_codes_declare_meaningful_negative_results(tmp_path):
+    """有些工具用非 0 表达研究结论(如 signal MISS=1):按工具声明,不全局放宽。"""
+    con, dom, root = _setup(tmp_path)
+    script = os.path.join(root, "tools", "miss.sh")
+    os.makedirs(os.path.dirname(script), exist_ok=True)
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("#!/bin/sh\necho MISS\nexit 1\n")
+    d = os.path.join(root, "reg")
+    os.makedirs(d, exist_ok=True)
+    base = {"description": "d", "input_schema": {"type": "object"}, "kind": "script",
+            "argv": ["bash", "tools/miss.sh"], "timeout": 10}
+    with open(os.path.join(d, "declared.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "declared", **base, "ok_exit_codes": [0, 1]}, f)
+    with open(os.path.join(d, "strict.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "strict", **base}, f)
+    reg = Registry()
+    assert register_manifests(reg, root, dirs=[d])["registered"] == ["declared", "strict"]
+    ctx = _ctx(dom, root, rid="R1")
+    assert reg.call(ctx, "declared", {})["status"] == "ok"        # MISS 是有意义的负结果
+    assert reg.call(ctx, "strict", {})["status"] == "error"       # 没声明 ⇒ 非 0 视为失败
