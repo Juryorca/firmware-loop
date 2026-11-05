@@ -54,6 +54,18 @@
 | 取消语义(对齐 AbortSignal) | ✅ | `Runner.cancel()` + 安全点检查;`tests/test_cancel.py` 2 passed 0.38s |
 | 按差距逐项实施 | ✅ | ①取消语义 ✅(`Runner.cancel()`;`tests/test_cancel.py` 2 passed 0.38s);②工具参数截断显式失败 ✅(`_exec_tool_call`;`tests/test_tool_args_invalid.py` 1 passed 0.19s);③轮前准备钩子 ✅(`prepare`/`prepare_timeout`;`tests/test_prepare_hook.py` 4 passed 2.13s);④结构化进度快照 ✅(`Runner.progress`/`fw-core progress`;`tests/test_prepare_hook.py` 5 passed 2.27s);⑤只读工具并行:暂不采纳(固件工具多为独占资源,理由已记录) |
 
+## MCP / 执行可靠性 / 授权 / 评测(按用户优先级)
+
+| 项 | 状态 | 证据 / 下一步 |
+|---|---|---|
+| **MCP 接入 Agent Runtime**(注册→模型选择→执行→记录→清理) | ✅ | `fwcore/mcp_runtime.py`:`MCPBridge.start()` 只注册**可达**服务器的工具(initialize+tools/list 都成功);工具名映射 `mcp_<server>_<tool>`(满足 `^[A-Za-z0-9_-]+$`);`inputSchema` 直通;错误/超时区分(`isError` ⇒ error,per-call timeout ⇒ timeout);`Runner(mcp=True)` 构造即接、结束/取消即关;`tests/test_mcp_runtime.py` 5 条(注册+schema、真实执行且 provider=mcp:fake、不可达不注册也不炸、error/timeout 区分、关闭后无客户端) |
+| verify 脚本文件数不实/漏新测试 | ✅ | 改为**自动发现** `tests/test_*.py` + 真实计数:`pytest(23 个文件) 174 passed in 46.55s` |
+| **`advance()` 跨轮被自己写成"外部停止"** | ✅(真 bug) | 之前 `turn()` 结束时置 `state='finished'`,下一轮 `_external_stop()` 误判 ⇒ **自动继续根本不工作**;修法:turn 开始自标 `running`(外部 cancel 仍靠 `handback=user_stop` 生效);`test_advance_stops_after_idle_rounds` 覆盖 |
+| Watchdog 正式路径默认启用 + 旧 PGID 误杀 | ⬜ 下一步 | CLI `run/resume/advance` 增加 `--watchdog`(默认开);PGID 只认**本 run 记录**且带时间窗,避免 pid 复用误杀 |
+| prepare hook 超时后的线程泄漏 | ⬜ 下一步 | `ThreadPoolExecutor` 退出会等任务 ✗ ⇒ 改为"隔离执行 + 明确不可取消语义",或带 deadline 的可中断实现 |
+| 完整研究授权机制(目标/工作区/时限/撤销/审计) | ⬜ 下一步 | 在 `Authz` 之上加**显式授权文件**(目标名 + roots + 到期 + 撤销)与 `events` 审计;高风险工具不再全局放行 |
+| 评测隔离(`eval/run.py` 从答案读 goal) | ⬜ 下一步 | 任务元数据与私有答案分离:`task.json`(公开 goal)+ `answers/`(私有);评分只读私有侧 |
+
 ## 阻塞 / 推迟(需授权或外部条件)
 
 | 项 | 状态 | 阻塞原因 | 解锁条件 |

@@ -106,7 +106,7 @@ class MCPClient:
         self._proc.stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode())
         self._proc.stdin.flush()
 
-    def _read_message(self, deadline: float) -> dict:
+    def _read_message(self, deadline: float, timeout: float | None = None) -> dict:
         if not self._proc or not self._proc.stdout:
             raise MCPError("连接未建立")
         while time.time() < deadline:
@@ -121,24 +121,26 @@ class MCPClient:
                     continue
             remaining = deadline - time.time()
             if remaining <= 0:
-                raise MCPError(f"{self.spec.name}: 等待响应超时({self.timeout}s)")
+                raise MCPError(
+                    f"{self.spec.name}: 等待响应超时({timeout if timeout is not None else self.timeout}s)")
             fd = self._proc.stdout.fileno()
             ready, _, _ = select.select([fd], [], [], remaining)   # 先等等待,再读 ⇒ 超时可控
             if not ready:
-                raise MCPError(f"{self.spec.name}: 等待响应超时({self.timeout}s)")
+                raise MCPError(
+                    f"{self.spec.name}: 等待响应超时({timeout if timeout is not None else self.timeout}s)")
             chunk = os.read(fd, 4096)
             if not chunk:
                 raise MCPError(f"{self.spec.name}: 服务端已关闭连接")
             self._buf += chunk
         raise MCPError(f"{self.spec.name}: 等待响应超时({self.timeout}s)")
 
-    def request(self, method: str, params: dict | None = None) -> dict:
+    def request(self, method: str, params: dict | None = None, timeout: float | None = None) -> dict:
         self._next_id += 1
         rid = self._next_id
         self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}})
-        deadline = time.time() + self.timeout
+        deadline = time.time() + (timeout if timeout is not None else self.timeout)
         while True:
-            msg = self._read_message(deadline)
+            msg = self._read_message(deadline, timeout)
             if msg.get("id") != rid:
                 continue                      # 忽略通知/其它响应
             if "error" in msg:
@@ -161,8 +163,8 @@ class MCPClient:
         return [{"name": t.get("name"), "description": t.get("description", ""),
                  "input_schema": t.get("inputSchema") or {}} for t in tools]
 
-    def call_tool(self, name: str, args: dict | None = None) -> dict:
-        result = self.request("tools/call", {"name": name, "arguments": args or {}})
+    def call_tool(self, name: str, args: dict | None = None, timeout: float | None = None) -> dict:
+        result = self.request("tools/call", {"name": name, "arguments": args or {}}, timeout=timeout)
         content = result.get("content") or []
         text = "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
         return {"is_error": bool(result.get("isError")), "content": content, "text": text}

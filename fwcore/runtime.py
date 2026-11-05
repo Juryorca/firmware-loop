@@ -73,7 +73,9 @@ class Runner:
                  stall_repeats: int = 3, limits: Limits | None = None,
                  prepare: object = None, prepare_timeout: float = 15.0,
                  watchdog: bool = False, watchdog_poll_s: float = 5.0,
-                 watchdog_heartbeat_timeout: float = 900.0):
+                 watchdog_heartbeat_timeout: float = 900.0,
+                 mcp: bool = False, mcp_config_paths: list[str] | None = None,
+                 mcp_timeout: float = 20.0, mcp_call_timeout: float = 120.0):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -98,6 +100,18 @@ class Runner:
         self._wd_thread = None
         self._wd_stop = None
         self.watchdog = None
+        # MCP:真接入工具注册与执行链路(不可达服务器如实记录,不注册)
+        self._mcp_enabled = mcp
+        self._mcp_config_paths = mcp_config_paths
+        self._mcp_timeout = mcp_timeout
+        self._mcp_call_timeout = mcp_call_timeout
+        self.mcp_bridge = None
+        if mcp:
+            from .mcp_runtime import bridge_from_config
+
+            self.mcp_bridge = bridge_from_config(self.registry, root, mcp_config_paths,
+                                                 timeout=mcp_timeout, call_timeout=mcp_call_timeout)
+            self.mcp_bridge.start()
         self._prepare_state: dict = {}
         self._pending_pause: tuple[str, dict] | None = None
         self.timeout = timeout
@@ -170,6 +184,8 @@ class Runner:
         with contextlib.suppress(Exception):
             from .watchdog import Watchdog
             Watchdog(self.con, self.root)._kill_pgids(rid)
+        if self.mcp_bridge is not None:
+            self.mcp_bridge.close()
 
     def _run_prepare(self, target: str, rid: str, step: int) -> dict:
         """跑轮前准备钩子(带超时)。超时/异常都只记事件并继续,不改变研究结论。"""
@@ -280,6 +296,11 @@ class Runner:
         final = ""
         stopped_by_final = False
         state = "running"
+        with contextlib.suppress(Exception):
+            row = self.con.execute("SELECT handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+            if not (row and (row["handback_reason"] or "").startswith("user_stop")):
+                with _db.Tx(self.con) as c:
+                    c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
         self._watchdog_start()
         self._heartbeat(rid)
         try:
@@ -393,6 +414,8 @@ class Runner:
 
     def _finish_state(self, rid: str, target: str, state: str, step: int, rounds: int,
                       final: str, history: list[dict]) -> RunResult:
+        if self.mcp_bridge is not None:
+            self.mcp_bridge.close()
         blockers = self.domain.closure_blockers(target) + self.research.dual_output_blockers(target)
         if self.research.mirror_due(target):
             blockers.append(f"三镜刷新超期({self.research.rounds_since_mirror(target)} 轮未做,"

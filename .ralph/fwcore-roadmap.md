@@ -162,3 +162,18 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
 - 增量:`fwcore/model_client.py` 强制 http(s) 端点(拒绝 `file://` 等),校验放在 `chat()`
   ⇒ 即使注入 transport 也拦得住(不把请求发出去)
 - 证据:`tests/test_endpoint_scheme.py` **2 passed in 0.01s**(http/https 放行;file:// 抛错且未发请求)
+
+## 用户停用 Ralph 后继续(按用户新任务书)
+
+### 增量 A(MCP → Runtime 全链路)
+- 新增 `fwcore/mcp_runtime.py`(MCPBridge):可达服务器注册工具、命名映射、schema 直通、错误/超时区分、关闭清理
+- `Runner(mcp=True, mcp_config_paths=...)`:构造时连接注册,结束/取消时 `close()`(杀进程组)
+- 修 2 个真 bug:`MCPClient.call_tool` 不认 per-call timeout(一直用客户端级)、`_read_message` 未定义变量
+- 测试:`tests/test_mcp_runtime.py` 5 passed(注册/schema、真实执行 + provider 记录、不可达不炸、error vs timeout、关闭清理)
+
+### 增量 B(verify 脚本)
+- 改为自动发现 `tests/test_*.py` + 真实计数(之前硬编码"8 个文件"、漏 5 个文件)⇒ **23 文件 / 174 passed / 46.55s**
+
+### 增量 C(真 bug:advance 不工作)
+- `turn()` 结束时写 `state='finished'`,下一轮 `_external_stop()` 误判为外部停止 ⇒ 自动继续失效
+- 修:turn 开始自标 `running`;外部 cancel 仍通过 `handback=user_stop` 生效

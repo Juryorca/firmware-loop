@@ -12,19 +12,13 @@ rm -rf "$WORK" && mkdir -p "$WORK/pytest"
 fail=0
 say() { printf '  %-56s %s\n' "$1" "$2"; }
 
-# ① 受保护的相关测试(单次硬上限 300s)
-if timeout 300 "$PY" -m pytest \
-      tests/test_resource_guards.py tests/test_watchdog.py tests/test_mcp_client.py \
-      tests/test_gates_db.py tests/test_pi_bridge.py tests/test_eval_scoring.py \
-      tests/test_toolkit_structured.py tests/test_domain_core.py \
-      tests/test_recovery_idempotency.py tests/test_providers.py \
-      tests/test_cancel.py tests/test_tool_args_invalid.py tests/test_prepare_hook.py \
-      tests/test_cli_smoke.py tests/test_rule_selection.py tests/test_pi_hook_gate.py \
-      tests/test_compare.py \
-      -q --basetemp="$WORK/pytest" > "$WORK/pytest.log" 2>&1; then
-  say "pytest(8 个文件)" "PASS $(tail -1 "$WORK/pytest.log" | tr -d '\n')"
+# ① 受保护的相关测试(**自动发现 tests/test_*.py**,不再手写清单 ⇒ 数量不会失真、不会漏新文件)
+TESTS=$(ls tests/test_*.py 2>/dev/null)
+NTESTS=$(printf '%s\n' "$TESTS" | grep -c . )
+if timeout 900 "$PY" -m pytest $TESTS -q --basetemp="$WORK/pytest" > "$WORK/pytest.log" 2>&1; then
+  say "pytest($NTESTS 个文件)" "PASS $(tail -1 "$WORK/pytest.log" | tr -d '\n')"
 else
-  say "pytest(8 个文件)" "FAIL"; tail -20 "$WORK/pytest.log" | sed 's/^/      /'; fail=1
+  say "pytest($NTESTS 个文件)" "FAIL"; tail -20 "$WORK/pytest.log" | sed 's/^/      /'; fail=1
 fi
 
 # ② 能力/Provider 探针(必须能跑,且输出含 arch_mismatch 之类状态)

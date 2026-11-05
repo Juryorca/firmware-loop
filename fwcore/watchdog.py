@@ -59,8 +59,11 @@ class Watchdog:
             yield self.con
 
     def _db_bytes(self, con: sqlite3.Connection | None = None) -> int:
+        con = con or self.con
+        if con is None:
+            return 0
         with contextlib.suppress(sqlite3.Error):
-            p = (con or self.con).execute("PRAGMA database_list").fetchone()[2]
+            p = con.execute("PRAGMA database_list").fetchone()[2]
             return sum(os.path.getsize(p + s) for s in ("", "-wal", "-shm") if os.path.exists(p + s))
         return 0
 

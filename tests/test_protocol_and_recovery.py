@@ -202,7 +202,7 @@ def test_mirror_due_and_blocker(tmp_path):
     hid = dom.add_hypothesis("t1", "轮推进")
     for _ in range(3):
         aid = dom.start_attempt(hid, "m")
-        dom.finish_attempt(aid, "inconclusive", "已排除外层", obs_outcome="none", obs_reason="预期内")
+        dom.finish_attempt(aid, "inconclusive", "已排除外层", obs_outcome="none", obs_reason="外层路由先拒绝,结果在预期内")
         rid = r.start("t1")
         r.run(rid, "t1")
     assert Research(str(tmp_path), dom).mirror_due("t1") is True
