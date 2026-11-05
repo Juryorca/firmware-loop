@@ -236,11 +236,24 @@ def _cancel_requested(ctx) -> bool:
     return bool(row and (row["handback_reason"] or "").startswith("user_stop"))
 
 
+_SHELL_META = (";", "|", "&&", "||", ">", "<", "$(", "`", "\n", "*", "?", "~")
+
+
+def _needs_shell(cmd: str) -> bool:
+    return any(m in cmd for m in _SHELL_META)
+
+
 def shell_exec(ctx: ToolContext, args: dict) -> dict:
-    """跑一条命令(有超时);stdout/stderr 落盘并算 sha256。"""
+    """跑一条命令(有超时);stdout/stderr 落盘并算 sha256。
+
+    语义:默认按 argv 直接执行(不经过 shell);若命令里含 shell 语法(`; | && $() > *` 等)
+    或显式 `shell=true`,则用 `bash -lc` 执行,并在结果里标注 `shell=true`
+    (实测模型天然按 shell 写命令,静默失败会浪费一整轮上下文)。
+    """
     cmd = args.get("command")
     if not cmd:
         return {"status": "error", "error": "command 必填"}
+    use_shell = bool(args.get("shell")) or _needs_shell(cmd)
     pol = ctx.policy or Policy()
     workdir = pol.resolve_path(ctx.root, args.get("cwd", "."))
     if not os.path.isdir(workdir):
@@ -263,9 +276,10 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
         return {"status": "error", "error": f"无法创建输出文件: {e}"}
     with stack:
         try:
+            argv = (["bash", "-lc", cmd] if use_shell
+                    else (shlex.split(cmd) if isinstance(cmd, str) else cmd))
             proc = subprocess.Popen(
-                shlex.split(cmd) if isinstance(cmd, str) else cmd,
-                cwd=workdir, stdout=fo, stderr=fe,
+                argv, cwd=workdir, stdout=fo, stderr=fe,
                 start_new_session=True,     # 独立进程组 ⇒ 超时可整组杀掉
             )
             try:                        # 记录 pgid + 启动时间:看护杀组前要核对,防 pid 复用误杀
@@ -304,7 +318,7 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
             _kill_group(proc)
             raise
     return {
-        "status": status, "exit_code": code, "started_at": started,
+        "status": status, "exit_code": code, "started_at": started, "shell": use_shell,
         "stdout_path": op, "stderr_path": ep,
         "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep),
     }
@@ -356,15 +370,56 @@ def state_add_observation(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "observation_id": oid}
 
 
+def _auto_link_tool_call(ctx: ToolContext, path: str | None) -> tuple[str | None, str | None]:
+    """按产物路径回溯到产生它的工具调用(只认本 run 内成功的调用)。
+
+    为什么需要:模型经常只给 path,不记得给 tool_call_id ⇒ 证据与执行断链,复核也无从谈起。
+    路径匹配是**可复核**的确定性关联(不是猜):把命中的调用 id 记进证据,并在返回里说明。
+    """
+    if not path:
+        return None, None
+    try:
+        rows = ctx.domain.con.execute(
+            "SELECT id, provider, args, result_path, stdout_path FROM tool_calls"
+            " WHERE run_id=? AND status='ok' ORDER BY created_at DESC LIMIT 50",
+            (ctx.run_id,)).fetchall()
+    except Exception:
+        return None, None
+    target = os.path.abspath(path if os.path.isabs(path) else os.path.join(ctx.root, path))
+    rel = os.path.relpath(target, ctx.root)
+    for r in rows:
+        for cand in (r["result_path"], r["stdout_path"]):
+            if cand and os.path.abspath(cand) == target:
+                return r["id"], "auto-linked-by-path"
+    # 次强证据:该路径出现在某次成功调用的参数里(例如 `echo x > proof.txt` / `cp a b`)
+    # —— 仍然是确定性的文本匹配,但比"产物路径完全相等"弱,所以在 link 里标出来
+    for r in rows:
+        args = r["args"] or ""
+        if rel in args or os.path.basename(target) in args:
+            return r["id"], "auto-linked-by-args(弱关联:路径出现在命令里)"
+    return None, None
+
+
 def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
+    path = args.get("path")
+    tid = args.get("tool_call_id")
+    link_note = None
+    if not tid:
+        tid, link_note = _auto_link_tool_call(ctx, path)
     eid = ctx.domain.add_evidence(
-        args["target"], args["kind"], path=args.get("path"), capture=args.get("capture"),
+        args["target"], args["kind"], path=path, capture=args.get("capture"),
         attempt_id=args.get("attempt_id"), hypothesis_id=args.get("hypothesis_id"),
         version=args.get("version"),
         # 绑定到具体工具调用 ⇒ 自动继承 provider/原始产物,并标为"未复核"
-        tool_call_id=args.get("tool_call_id"), source=args.get("source"),
+        tool_call_id=tid, source=args.get("source"),
     )
-    return {"status": "ok", "evidence_id": eid}
+    out = {"status": "ok", "evidence_id": eid, "linked_tool_call_id": tid,
+           "verified": False,
+           "next": "复核后才算证据:state_verify_evidence(evidence_id, method=recheck-sha256|"
+                   "reproduce-attempt|cross-check)"}
+    if link_note:
+        out["link"] = link_note
+    return out
 
 
 def state_verify_evidence(ctx: ToolContext, args: dict) -> dict:
@@ -373,8 +428,22 @@ def state_verify_evidence(ctx: ToolContext, args: dict) -> dict:
                                      artifact=args.get("artifact"),
                                      attempt_id=args.get("attempt_id"),
                                      detail=args.get("detail", ""))
-    return {"status": "ok", "check_id": cid, "method": args["method"],
-            "evidence": ctx.domain.evidence_status(args["evidence_id"])}
+    st = ctx.domain.evidence_status(args["evidence_id"])
+    out = {"status": "ok", "check_id": cid, "method": args["method"], "evidence": st}
+    # 如果这个证据所属假设的尝试都已结束,就明确说"可以收口了"(数据事实,不替模型选 verdict)
+    rows = ctx.domain.con.execute(
+        "SELECT hypothesis_id FROM evidence WHERE id=?", (args["evidence_id"],)).fetchone()
+    hid = rows["hypothesis_id"] if rows else None
+    if hid:
+        still = ctx.domain.con.execute(
+            "SELECT COUNT(*) n FROM attempts WHERE hypothesis_id=? AND result='running'",
+            (hid,)).fetchone()["n"]
+        if still == 0:
+            out["next"] = (f"该假设的尝试都已结束、证据已复核 ⇒ 可以收口:"
+                           f"state_conclude(hypothesis_id='{hid}', verdict=..., scope_note=...)")
+        else:
+            out["next"] = f"还有 {still} 个实验在 running:先 state_finish_attempt 再收口"
+    return out
 
 
 def state_start_attempt(ctx: ToolContext, args: dict) -> dict:
@@ -466,10 +535,14 @@ def default_registry() -> Registry:
             "attempt_id": {"type": "string"}}, "required": ["target", "text"]},
         state_add_observation))
     r.register(ToolSpec(
-        "state_add_evidence", "登记证据(必须能定位:path 或 capture),自动绑定版本",
+        "state_add_evidence",
+        "登记证据(必须能定位:path 或 capture),自动绑定版本。给 tool_call_id 可把证据"
+        "绑到产生它的工具调用(继承 provider/产物);不给时若 path 正好是某次成功调用的产物,"
+        "会自动回溯关联。登记后仍是**未复核**状态",
         {"type": "object", "properties": {
             "target": {"type": "string"}, "kind": {"type": "string"},
-            "path": {"type": "string"}, "capture": {"type": "string"},
+            "path": {"type": "string", "description": "产物路径(相对工作区或绝对)"},
+            "capture": {"type": "string"},
             "attempt_id": {"type": "string"}, "hypothesis_id": {"type": "string"},
             "version": {"type": "string"}, "tool_call_id": {"type": "string"},
             "source": {"type": "string"}}, "required": ["target", "kind"]},

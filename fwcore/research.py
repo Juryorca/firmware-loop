@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from .domain import Domain, new_id, _event, _now
 from .db import Tx
+from .domain import Domain, _event, _now, new_id
 
 RULES_LIMIT = 12000  # 每个规则文件的字符预算
 # 按段落选而不是盲截:优先保留"决定行为"的段落(用户批评过"截断可能把关键规则切掉")
@@ -120,8 +120,8 @@ class Research:
             r = rank.get(surf[key]["reachability"], 3) if key in surf else 3
             if key is None:  # 未归属既有面的新方向:不惩罚,但排在已归属之后
                 r = 3
-            complex_bonus = 0 if re.search(r"解析|parser|状态机|协议|反序列化|XML|JSON|解压|签名", text, re.I) else 1
-            unknown = 0 if not re.search(r"未理解|unknown|没看懂", text, re.I) else -1
+            complex_bonus = 0 if re.search(r"解析|parser|状态机|协议|反序列化|XML|JSON|解压|签名", text, re.IGNORECASE) else 1
+            unknown = 0 if not re.search(r"未理解|unknown|没看懂", text, re.IGNORECASE) else -1
             return (r, complex_bonus, unknown, h["priority"])
         out.sort(key=score)
         return out[:limit]
@@ -150,12 +150,11 @@ class Research:
         last = self.domain.con.execute(
             "SELECT created_at FROM mirror_checks WHERE target_id=? ORDER BY created_at DESC LIMIT 1", (t.id,)
         ).fetchone()
-        q = "SELECT COUNT(*) n FROM events WHERE kind='round.ended' AND ref=?"
-        args: list = [t.id]
-        if last:
-            q += " AND ts > ?"
-            args.append(last["created_at"])
-        return self.domain.con.execute(q, args).fetchone()["n"]
+        # 单条参数化查询(不拼接 SQL;`? IS NULL` 表示"没有三镜记录时不限时间")
+        since = last["created_at"] if last else None
+        return self.domain.con.execute(
+            "SELECT COUNT(*) n FROM events WHERE kind='round.ended' AND ref=?"
+            " AND (? IS NULL OR ts > ?)", (t.id, since, since)).fetchone()["n"]
 
     def mirror_due(self, target: str) -> bool:
         return self.rounds_since_mirror(target) >= self.mirror_every
@@ -174,6 +173,95 @@ class Research:
         合法声明了 `none` 时,旧规则仍会阻止收尾,并逼模型伪造 observation。
         """
         return []
+
+    # ---------- 研究进度(给模型看的"当前手头有什么没做完") ----------
+    def progress_brief(self, target: str) -> list[str]:
+        """把**未完成的动作**摆到模型面前:它是数据,不是脚本步骤。
+
+        演练复盘发现:模型跑完实验后不知道要结束 attempt / 复核 evidence / 下结论,
+        于是 18 次调用后仍 0 结论。这里只呈现"待办状态 + 对应工具",不替模型做选择。
+        """
+        con = self.domain.con
+        t = self.domain.target(target)
+        out: list[str] = []
+
+        running = con.execute(
+            "SELECT a.id, a.hypothesis_id, a.method, h.title FROM attempts a"
+            " JOIN hypotheses h ON h.id=a.hypothesis_id"
+            " WHERE h.target_id=? AND a.result='running' ORDER BY a.started_at", (t.id,)).fetchall()
+        if running:
+            out.append("### 运行中的实验(需要你结束它,否则假设无法收口)")
+            for r in running:
+                out.append(f"- {r['id']}(属于 {r['hypothesis_id']}: {r['title'][:60]})"
+                           f" 方法: {(r['method'] or '')[:80]}")
+            out.append("  结束方式:`state_finish_attempt(attempt_id, result=supported|refuted|"
+                       "inconclusive|environment_failure|no_signal|cancelled, note=…, obs_outcome=new|none,"
+                       " obs_reason=…)`")
+
+        pending_ev = con.execute(
+            "SELECT id, kind, path FROM evidence WHERE target_id=? AND verified=0"
+            " ORDER BY created_at DESC LIMIT 8", (t.id,)).fetchall()
+        if pending_ev:
+            out.append("### 未复核的证据(不能支撑结论,先复核)")
+            for r in pending_ev:
+                out.append(f"- {r['id']} [{r['kind']}] {os.path.basename(r['path'] or '')}")
+            out.append("  复核方式:`state_verify_evidence(evidence_id, method=recheck-sha256|"
+                       "reproduce-attempt|cross-check, …)`;哈希只证明产物完整性,"
+                       "因果结论要用 reproduce-attempt / cross-check")
+
+        open_h = con.execute(
+            "SELECT id, title, state FROM hypotheses WHERE target_id=?"
+            " AND state IN ('open','investigating') ORDER BY created_at LIMIT 8", (t.id,)).fetchall()
+        if open_h:
+            out.append("### 未收口的假设")
+            for r in open_h:
+                out.append(f"- {r['id']} [{r['state']}] {r['title'][:80]}")
+            out.append("  收口方式:`state_conclude(hypothesis_id, verdict=vulnerable|no_finding|"
+                       "inconclusive, scope_note=…)`(vulnerable 需 supported 尝试 + 已复核的因果证据)")
+
+        # 收口就绪(程序可核):决定性尝试都在,证据都复核过 ⇒ 明确提示可以下结论。
+        # 只提示"条件已满足",不替模型选 verdict。
+        ready = con.execute(
+            "SELECT h.id, h.title,"
+            "  SUM(CASE WHEN a.result='supported' THEN 1 ELSE 0 END) sup,"
+            "  SUM(CASE WHEN a.result='refuted' THEN 1 ELSE 0 END) ref,"
+            "  SUM(CASE WHEN a.result IN ('inconclusive','environment_failure','no_signal',"
+            "                          'cancelled') THEN 1 ELSE 0 END) nondec,"
+            "  (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id) ev,"
+            "  (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1) ev_ok,"
+            "  (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=0) ev_open"
+            " FROM hypotheses h LEFT JOIN attempts a ON a.hypothesis_id=h.id"
+            " WHERE h.target_id=? AND h.state IN ('open','investigating')"
+            " GROUP BY h.id", (t.id,)).fetchall()
+        hints = []
+        for r in ready:
+            if r["sup"] and r["ev_ok"]:
+                hints.append(f"- {r['id']} 有 supported 尝试且证据都已复核 ⇒ 可 `state_conclude("
+                             f"hypothesis_id='{r['id']}', verdict='vulnerable', scope_note=…"
+                             f"`(scope 要写清只管哪个入口/参数/版本)")
+            elif r["ref"] and r["ev_ok"]:
+                hints.append(f"- {r['id']} 有 refuted 尝试且证据已复核 ⇒ 可 `state_conclude("
+                             f"hypothesis_id='{r['id']}', verdict='no_finding', scope_note=…"
+                             f"`(否证也要写清范围)")
+            elif r["sup"] and not r["ev_ok"]:
+                hints.append(f"- {r['id']} 已有 supported 尝试,但还没有已复核的证据 ⇒ "
+                             "先 state_verify_evidence(因果复核)再收口")
+            if r["ev_open"] and r["ev_ok"]:
+                hints.append(f"- {r['id']} 另有 {r['ev_open']} 条证据未复核:不影响收口,"
+                             "但结论不得引用未复核证据")
+        if hints:
+            out = ["### 已具备收口条件(程序按事实判断;verdict 由你定)", *hints,
+                   ""] + out
+
+        fails = con.execute(
+            "SELECT tool, status, note FROM tool_calls WHERE run_id IN"
+            " (SELECT id FROM runs WHERE target_id=?) AND status!='ok'"
+            " ORDER BY created_at DESC LIMIT 3", (t.id,)).fetchall()
+        if fails:
+            out.append("### 最近的工具失败(先换方法,不要把失败当研究结论)")
+            for r in fails:
+                out.append(f"- {r['tool']} → {r['status']}: {(r['note'] or '')[:120]}")
+        return out
 
     # ---------- 系统提示 ----------
     def system_prompt(self, target: str, goal: str | None = None) -> str:
@@ -195,6 +283,10 @@ class Research:
             __import__("json").dumps(d, ensure_ascii=False, indent=1)[:3000],
             "```",
         ]
+        brief = self.progress_brief(target)
+        if brief:
+            parts += ["", "## 研究进度(程序按数据库事实生成;这些是待办,不是必须按顺序执行的脚本)",
+                      *brief]
         if goal:
             parts += ["", f"## 本轮目标\n{goal}"]
         if pool:
