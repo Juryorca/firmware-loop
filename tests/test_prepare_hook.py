@@ -80,3 +80,18 @@ def test_prepare_cancel_pauses_without_conclusion(tmp_path):
     assert res.state == "paused"
     assert con.execute("SELECT COUNT(*) n FROM conclusions").fetchone()["n"] == 0
     assert con.execute("SELECT COUNT(*) n FROM hypotheses WHERE state='concluded'").fetchone()["n"] == 0
+
+
+def test_progress_snapshot_is_structured(tmp_path):
+    """外部监控/Pi 适配器要能拿到结构化进度(不解析日志)。"""
+    con, dom, root = _setup(tmp_path)
+    dom.add_hypothesis("t1", "未收口的东西")
+    r = Runner(con, root, ScriptedAdapter(script=[FINAL]), limits=Limits(max_model_calls=2),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    r.run(rid, "t1")
+    p = r.progress(rid)
+    assert p["run_id"] == rid and p["target"] == "t1"
+    assert p["state"] in ("finished", "paused")
+    assert p["blockers"], "有未收口假设 ⇒ blockers 必须非空"
+    assert p["limits"]["checkpoints_keep"] > 0 and isinstance(p["recent_events"], list)

@@ -108,6 +108,27 @@ class Runner:
             _event(c, "run.started", rid, {"target": target, "goal": goal})
         return rid
 
+    def progress(self, rid: str) -> dict:
+        """结构化进度快照(给外部监控/Pi 适配器用;只读)。"""
+        row = self.con.execute(
+            "SELECT r.id,r.state,r.step,r.rounds,r.handback_reason,r.goal,r.heartbeat_at,"
+            "       t.name AS target FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
+            (rid,)).fetchone()
+        if not row:
+            raise KeyError(f"run 不存在: {rid}")
+        target = row["target"]
+        events = [dict(e) for e in self.con.execute(
+            "SELECT ts,kind,ref FROM events WHERE ref IN (?, (SELECT id FROM targets WHERE name=?))"
+            " ORDER BY id DESC LIMIT 5", (rid, target)).fetchall()]
+        return {"run_id": row["id"], "target": target, "state": row["state"],
+                "steps": row["step"], "rounds": row["rounds"],
+                "handback": row["handback_reason"], "goal": row["goal"],
+                "heartbeat_at": row["heartbeat_at"],
+                "blockers": self.domain.closure_blockers(target),
+                "prepare_timeouts": self.prepare_timeouts,
+                "limits": self.limits.describe(),
+                "recent_events": events}
+
     def cancel(self, rid: str, reason: str = "用户取消") -> None:
         """请求取消一次运行(等价 Pi 的 AbortSignal)。
 

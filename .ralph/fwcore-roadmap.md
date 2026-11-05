@@ -55,3 +55,9 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   钩子异常只记 `run.prepare_error`,不中断研究
 - 证据:`tests/test_prepare_hook.py` **4 passed in 2.13s**(注入生效/超时不阻塞/异常不杀 run/取消不收口)
 - 下一项:只读工具并行(按需,Pi 的 executeToolCallsParallel 语义)或研究评测加难下一批
+
+### Iteration 5(Pi 对齐:结构化进度快照)
+- 增量:`Runner.progress(rid)` + `fw-core progress <run>` —— 给外部监控/Pi 适配器用的只读快照
+  (state/steps/rounds/handback/blockers/prepare_timeouts/limits/recent_events),不解析日志
+- 证据:`tests/test_prepare_hook.py` **5 passed in 2.27s**(含 progress 断言:blockers 非空、limits 可见)
+- 下一项:只读工具并行(按需;若无真实并行需求则标"不采纳+理由");随后 Pi hook 需授权,暂停等用户

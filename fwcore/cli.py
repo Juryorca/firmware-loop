@@ -72,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("authz", help="显示当前授权口径与**真实隔离级别**(不把 cwd 检查说成沙箱)")
     p.add_argument("--roots", nargs="*", default=["."])
     p.add_argument("--isolation", default="none", choices=["none", "chroot", "container", "bwrap"])
+    p = sub.add_parser("progress", help="结构化进度快照(只读,给外部监控/Pi 适配器)")
+    p.add_argument("run_id")
     p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
     p.add_argument("action", choices=["list", "probe", "call"])
     p.add_argument("--server")
@@ -128,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
             from .policy import Authz
             az = Authz(roots=[os.path.abspath(r) for r in args.roots], isolation=args.isolation)
             print(json.dumps(az.describe(), ensure_ascii=False, indent=2))
+        elif args.cmd == "progress":
+            from .models import ScriptedAdapter
+            from .runtime import Runner
+            r = Runner(con, args.root, ScriptedAdapter(script=[]))
+            print(json.dumps(r.progress(args.run_id), ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":
             from .mcp_client import MCPClient, load_servers, probe as mcp_probe
             cfgs = [os.path.join(args.root, "state", "mcp.json"),
