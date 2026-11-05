@@ -7,7 +7,11 @@
 #   FW_EXTRACT_MAX_FILES  文件数上限(默认 200000),超了同样 ABORT
 #   FW_EXTRACT_MAX_DEPTH  递归深度(默认 6),直接传给 binwalk -d / unblob -d
 #   另加 ulimit -f:单个文件不允许超过上限(解压炸弹只会写一个巨文件时也能兜住)
-# 说明: 所有大小/数量判断都是"运行时轮询真实产物",不是估计;abort 一定整组回收子进程。
+# **保护边界(如实说明)**: 这是"运行时轮询 + 收尾复核"的**软上限**,不是内核磁盘配额:
+#   - 大小每 0.5s、文件数每 2s 采样一次 ⇒ 两次采样之间的突发可短暂超过上限;
+#   - 超限发生在采样间隙、且进程已退出 ⇒ 由收尾复核(disk_after/files_after)判定失败;
+#   - 因此崩溃/超限的判定可能比"超限那一刻"晚一个采样周期,但不会把超限报成成功。
+#   abort 一定整组回收子进程。
 set -u
 
 FW_ARG="${1:?用法: fw_extract.sh <firmware> <outdir> [--no-unblob]}"
@@ -110,34 +114,68 @@ run_guarded() {   # $1=tag $2...=命令
   return "$rc"
 }
 
-rc_binwalk=0
+# ---- 提取:缺失/部分/完整/失败 必须分开(binwalk+unblob 都缺 ≠ 成功) ----
+ran_binwalk=0; ran_unblob=0
+rc_binwalk=0; rc_unblob=0
+miss_binwalk=0; miss_unblob=0
+
 if command -v binwalk >/dev/null 2>&1; then
   # binwalk 在 cwd 下产出;FW 已绝对化,cd 到 OUT 不会丢路径。
-  # 注意:**不要**再套一层 `( ... )` 子 shell —— 父 shell 会把它当前台命令阻塞等待,
+  # 注意:不要再套 `( ... )` 前台子 shell —— 父 shell 会把它当前台命令阻塞等待,
   # 于是 INT/TERM 的 trap 要等它结束才执行(实测会挂住)。
   cd "$OUT" || { say "ERROR=无法进入输出目录 $OUT"; exit 3; }
+  ran_binwalk=1
   run_guarded binwalk setsid binwalk -Me -d "$MAX_DEPTH" "$FW" || rc_binwalk=$?
   [ "$rc_binwalk" = "9" ] && exit 9
 else
+  miss_binwalk=1
   say "BINWALK=missing"
 fi
 
-rc_unblob=0
 if [ "$NO_UNBLOB" = "0" ]; then
   UNBLOB="${FW_UNBLOB:-$HOME/venvs/unblob/bin/unblob}"
   if [ -x "$UNBLOB" ]; then
+    ran_unblob=1
     run_guarded unblob setsid "$UNBLOB" -e "$OUT/unblob" -d "$MAX_DEPTH" "$FW" || rc_unblob=$?
     [ "$rc_unblob" = "9" ] && exit 9
   else
+    miss_unblob=1
     say "UNBLOB=missing"
   fi
 fi
 
+# ---- 收尾:最终资源检查(轮询有间隔,快速爆发可能在两次轮询之间冲过线) ----
+final_mb=$(size_mb); final_files=$(count_files)
+if [ "$final_mb" -gt "$MAX_MB" ]; then
+  say "ABORT=disk_after ${final_mb}MB > ${MAX_MB}MB(轮询间隔内的爆发只能事后发现)"; exit 9
+fi
+if [ "$final_files" -gt "$MAX_FILES" ]; then
+  say "ABORT=files_after ${final_files} > ${MAX_FILES}(同上)"; exit 9
+fi
+
 say "== summary =="
 find "$OUT" -maxdepth 2 -type d 2>/dev/null | head -20
-say "files=$(count_files)"
-say "size_mb=$(size_mb)"
+say "files=$final_files"
+say "size_mb=$final_mb"
 depth=$(find "$OUT" -type d 2>/dev/null | awk -F/ '{print NF}' | sort -n | tail -1)
 say "max_dir_depth=$(( ${depth:-0} ))"
-say "rc_binwalk=$rc_binwalk rc_unblob=$rc_unblob"
-[ "$rc_binwalk" = "0" ] && [ "$rc_unblob" = "0" ]
+say "ran_binwalk=$ran_binwalk rc_binwalk=$rc_binwalk missing_binwalk=$miss_binwalk"
+say "ran_unblob=$ran_unblob rc_unblob=$rc_unblob missing_unblob=$miss_unblob"
+
+attempted=$((ran_binwalk + ran_unblob))
+ok_count=0
+[ "$ran_binwalk" = "1" ] && [ "$rc_binwalk" = "0" ] && ok_count=$((ok_count+1))
+[ "$ran_unblob" = "1" ] && [ "$rc_unblob" = "0" ] && ok_count=$((ok_count+1))
+
+if [ "$attempted" = "0" ]; then
+  say "STATUS=no_extractor(没有任何可用提取器,未发生提取)"
+  exit 4
+elif [ "$ok_count" = "0" ]; then
+  say "STATUS=failed(尝试了 $attempted 个提取器,全部失败)"
+  exit 5
+elif [ "$ok_count" -lt "$attempted" ] || [ "$miss_binwalk" = "1" ] || [ "$miss_unblob" = "1" ]; then
+  say "STATUS=partial(成功 $ok_count/$attempted;缺失 binwalk=$miss_binwalk unblob=$miss_unblob)"
+  exit 6
+fi
+say "STATUS=ok(成功 $ok_count/$attempted)"
+exit 0

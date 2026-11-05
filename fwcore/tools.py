@@ -159,16 +159,18 @@ class Registry:
         observation = out.get("observation")
         with _db.Tx(ctx.domain.con) as c:
             meta = out.get("meta") or {}
+            # 失败**原因**要落库:否则事后审计/模型复盘都看不出"是工具坏了、环境不对,还是策略拒绝"
+            err_text = None if status == "ok" else str(out.get("error") or out.get("note") or "")[:1000]
             c.execute(
                 "UPDATE tool_calls SET status=?, exit_code=?, duration_ms=?, stdout_path=?, stderr_path=?,"
-                " provider=?, capability=?, arch=?, env_json=?, result_path=?, result_sha256=?, observation=?"
-                " WHERE id=?",
+                " provider=?, capability=?, arch=?, env_json=?, result_path=?, result_sha256=?, observation=?,"
+                " note=COALESCE(note, ?) WHERE id=?",
                 (status, out.get("exit_code"), dur, out.get("stdout_path"), out.get("stderr_path"),
                  meta.get("provider"), meta.get("capability"), meta.get("arch"),
                  json.dumps(meta, ensure_ascii=False) if meta else None,
                  result_path, result_sha,
                  json.dumps(observation, ensure_ascii=False)[:20000] if observation else None,
-                 cid),
+                 err_text, cid),
             )
         out["status"] = status
         out["tool_call_id"] = cid

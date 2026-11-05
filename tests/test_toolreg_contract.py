@@ -279,3 +279,25 @@ def test_ok_exit_codes_declare_meaningful_negative_results(tmp_path):
     ctx = _ctx(dom, root, rid="R1")
     assert reg.call(ctx, "declared", {})["status"] == "ok"        # MISS 是有意义的负结果
     assert reg.call(ctx, "strict", {})["status"] == "error"       # 没声明 ⇒ 非 0 视为失败
+
+
+def test_failed_tool_call_records_reason(tmp_path):
+    """失败原因必须落库(否则事后审计与模型复盘都看不出为什么失败)。"""
+    con, dom, root = _setup(tmp_path)
+    script = os.path.join(root, "tools", "boom.sh")
+    os.makedirs(os.path.dirname(script), exist_ok=True)
+    with open(script, "w", encoding="utf-8") as f:
+        f.write("#!/bin/sh\necho 'disk exploded' >&2\nexit 3\n")
+    d = os.path.join(root, "reg")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "boom.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": "boom_tool", "description": "d", "input_schema": {"type": "object"},
+                   "kind": "script", "argv": ["bash", "tools/boom.sh"], "timeout": 10}, f)
+    reg = Registry()
+    register_manifests(reg, root, dirs=[d])
+    out = reg.call(_ctx(dom, root, rid="R1"), "boom_tool", {})
+    assert out["status"] == "error"
+    row = con.execute("SELECT status, note FROM tool_calls WHERE tool='boom_tool'").fetchone()
+    assert row["status"] == "error"
+    assert row["note"], "失败原因没落库"
+    assert "3" in row["note"] or "退出码" in row["note"], row["note"]

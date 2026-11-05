@@ -132,3 +132,80 @@ def test_interrupt_kills_child_group(tmp_path):
         time.sleep(0.05)
     else:
         pytest.fail("中断后子进程仍存活")
+
+
+def _run(script_args, tmp_path, bindir=None, **env):
+    envs = dict(os.environ)
+    if bindir:
+        envs["PATH"] = f"{bindir}:/usr/bin:/bin"
+    envs.update({k: str(v) for k, v in env.items()})
+    return subprocess.run(["bash", SCRIPT, *script_args], env=envs,
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_no_extractor_is_not_success(tmp_path):
+    """binwalk 与 unblob 都缺失 ⇒ 不能报成功(未发生提取)。"""
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "fw.bin").write_bytes(b"FW")
+    only = tmp_path / "only"
+    only.mkdir()
+    # 只放脚本需要的核心工具,**不放** binwalk/unblob
+    for tool in ("sh", "bash", "basename", "dirname", "mkdir", "pwd", "du", "df", "find",
+                 "awk", "wc", "sort", "tail", "head", "sleep", "kill", "cat", "printf",
+                 "setsid", "env"):
+        src = subprocess.run(["which", tool], capture_output=True, text=True).stdout.strip()
+        if src and not (only / tool).exists():
+            os.symlink(src, only / tool)
+    r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")], cwd=str(work),
+                       env={**os.environ, "PATH": str(only),
+                            "FW_UNBLOB": str(tmp_path / "nope-unblob")},
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 4, (r.returncode, r.stdout[-400:], r.stderr[-300:])
+    assert "STATUS=no_extractor" in r.stdout
+
+
+def test_partial_when_one_extractor_missing(tmp_path):
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "fw.bin").write_bytes(b"FW")
+    bindir = tmp_path / "bin"
+    _stub(bindir, "binwalk", 'echo ok\n')
+    r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")], cwd=str(work),
+                       env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
+                            "FW_UNBLOB": str(tmp_path / "missing-unblob")},
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 6, (r.returncode, r.stdout[-400:])
+    assert "STATUS=partial" in r.stdout and "missing_unblob=1" in r.stdout
+
+
+def test_all_attempted_failed(tmp_path):
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "fw.bin").write_bytes(b"FW")
+    bindir = tmp_path / "bin"
+    _stub(bindir, "binwalk", 'echo boom >&2\nexit 7\n')
+    stub_ub = tmp_path / "unblob"
+    stub_ub.write_text("#!/bin/sh\nexit 8\n", encoding="utf-8")
+    stub_ub.chmod(0o700)
+    r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")], cwd=str(work),
+                       env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
+                            "FW_UNBLOB": str(stub_ub)},
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 5, (r.returncode, r.stdout[-400:])
+    assert "STATUS=failed" in r.stdout
+
+
+def test_fast_burst_is_caught_by_final_check(tmp_path):
+    """突发写入发生在轮询间隙、进程已退出 ⇒ 收尾复核必须判失败(不能报成功)。"""
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "fw.bin").write_bytes(b"FW")
+    bindir = tmp_path / "bin"
+    _stub(bindir, "binwalk", 'sleep 0.05\nhead -c 3000000 /dev/zero > ./bomb.bin\nexit 0\n')
+    r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out"), "--no-unblob"],
+                       cwd=str(work), env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
+                                           "FW_EXTRACT_MAX_MB": "1"},
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 9, (r.returncode, r.stdout[-500:])
+    assert ("ABORT=disk" in r.stdout) or ("ABORT=disk_after" in r.stdout), r.stdout[-500:]

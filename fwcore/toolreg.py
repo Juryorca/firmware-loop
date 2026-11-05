@@ -272,9 +272,16 @@ def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str |
         return {"status": "error", "error": f"无法写输出文件: {e}"}
     tr_o = _cap_output(op, max_output_bytes)
     tr_e = _cap_output(ep, max_output_bytes)
-    return {"status": status, "exit_code": code, "stdout_path": op, "stderr_path": ep,
-            "stdout_sha256": sha256_file(op), "stderr_sha256": sha256_file(ep),
-            "output_truncated": bool(tr_o or tr_e)}
+    out = {"status": status, "exit_code": code, "stdout_path": op, "stderr_path": ep,
+           "stdout_sha256": sha256_file(op), "stderr_sha256": sha256_file(ep),
+           "output_truncated": bool(tr_o or tr_e)}
+    if status != "ok":
+        # 失败原因要跟着结果走(否则 Registry 只能记一个 status,审计会丢掉"为什么失败")
+        tail = _tail([ep, op], keep=400).strip()
+        out["error"] = {"timeout": f"超时({int(timeout)}s 上限)",
+                        "cancelled": "运行被取消,工具被中断"}.get(status) or \
+                       f"退出码 {code}" + (f": {tail}" if tail else "")
+    return out
 
 
 def num(value: Any, default: float) -> float:
