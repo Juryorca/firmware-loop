@@ -31,6 +31,9 @@ class ServerSpec:
     env: dict = field(default_factory=dict)
     url: str | None = None          # HTTP transport:本实现暂不支持,会在 probe 里如实报
     enabled: bool = True
+    # external: 配置显式声明该服务器是否"会碰外部世界"(网络/登录态/提交)。
+    # None = 没声明 ⇒ 一律按 external=True 处理(默认拒绝,不靠工具名猜)。
+    external: bool | None = None
 
     @property
     def transport(self) -> str:
@@ -58,6 +61,7 @@ def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
                 env=dict(srv.get("env") or {}),
                 url=srv.get("url"),
                 enabled=srv.get("enabled", True) is not False,
+                external=(None if srv.get("external") is None else bool(srv.get("external"))),
             )
     return out
 

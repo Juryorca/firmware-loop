@@ -26,7 +26,8 @@ def path_for(root: str, target: str) -> str:
 
 def grant(root: str, target: str, *, roots: list[str], hours: float = 8.0,
           note: str = "", by: str = "user", allow_shell: bool = True,
-          allow_high_risk: bool = True, allow_mcp: bool = True) -> dict:
+          allow_high_risk: bool = True, allow_mcp: bool = True,
+          allow_external_mcp: bool = False) -> dict:
     """写授权文件。roots 之外的路径一律不允许(即便有授权)。"""
     if not roots:
         raise ValueError("授权必须给出至少一个工作区根(roots)")
@@ -41,6 +42,7 @@ def grant(root: str, target: str, *, roots: list[str], hours: float = 8.0,
         "allow_shell": allow_shell,
         "allow_high_risk": allow_high_risk,
         "allow_mcp": allow_mcp,
+        "allow_external_mcp": allow_external_mcp,
         "revoked": False,
     }
     p = path_for(root, target)
@@ -84,6 +86,8 @@ def load(root: str, target: str) -> Authz | None:
         roots=list(d.get("roots") or []),
         allow_shell=bool(d.get("allow_shell", True)),
         allow_high_risk=bool(d.get("allow_high_risk", True)),
+        allow_mcp=bool(d.get("allow_mcp", True)),
+        allow_external_mcp=bool(d.get("allow_external_mcp", False)),
         expires_at=d.get("expires_at"),
         revoked=bool(d.get("revoked")),
         reason=(d.get("note") or "") + (" [revoked]" if d.get("revoked") else ""),

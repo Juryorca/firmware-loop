@@ -108,12 +108,10 @@ class Runner:
         self._mcp_timeout = mcp_timeout
         self._mcp_call_timeout = mcp_call_timeout
         self.mcp_bridge = None
-        if mcp:
-            from .mcp_runtime import bridge_from_config
-
-            self.mcp_bridge = bridge_from_config(self.registry, root, mcp_config_paths,
-                                                 timeout=mcp_timeout, call_timeout=mcp_call_timeout)
-            self.mcp_bridge.start()
+        self.mcp_skipped_reason: str | None = None
+        # 注意:**构造时不启动 MCP**。MCP 服务器启动本身就有副作用(子进程/外网/登录态),
+        # 而授权是 `start()` 按目标加载的 ⇒ 必须等授权确定后再决定"能不能启动"。
+        self._mcp_config_paths = mcp_config_paths
         self._prepare_state: dict = {}
         self._pending_pause: tuple[str, dict] | None = None
         self.timeout = timeout
@@ -133,6 +131,8 @@ class Runner:
                                      sandbox_roots=self.policy.sandbox_roots)
                 _authz.audit(self.con, "authz.loaded", target, {"roots": len(az.roots),
                                                                "active": az.active()})
+        # 授权已确定 ⇒ 这时才允许启动 MCP(启动有副作用:子进程/外网/登录态)
+        self._ensure_mcp()
         rid = new_id("R")
         now = _now()
         with _db.Tx(self.con) as c:
@@ -183,6 +183,7 @@ class Runner:
                 "prepare_timeouts": self.prepare_timeouts,
                 "prepare_abandoned": self.prepare_abandoned,
                 "watchdog": (self.watchdog.health() if self.watchdog is not None else None),
+                "mcp": self.mcp_health(), "mcp_skipped": self.mcp_skipped_reason,
                 "limits": self.limits.describe(),
                 "recent_events": events}
 
@@ -501,6 +502,16 @@ class Runner:
             return
         from .mcp_runtime import bridge_from_config
 
+        allowed, why = self._mcp_permitted()
+        if not allowed:
+            if self.mcp_skipped_reason != why:
+                self.mcp_skipped_reason = why
+                with contextlib.suppress(Exception):
+                    _event(self.con, "mcp.skipped", None, {"reason": why})
+            if self.mcp_bridge is not None and not getattr(self.mcp_bridge, "closed", False):
+                self.mcp_bridge.close()
+            return
+
         bridge = self.mcp_bridge
         if bridge is not None and not getattr(bridge, "closed", False):
             return
@@ -514,6 +525,20 @@ class Runner:
         with contextlib.suppress(Exception):
             _event(self.con, "mcp.reopened" if reopened else "mcp.started", None,
                    {"servers": bridge.health().get("servers", {})})
+
+    def _mcp_permitted(self) -> tuple[bool, str]:
+        """MCP 能不能启用/启动:**授权**说了算(不是工具名启发式)。"""
+        if not self._mcp_enabled:
+            return False, "未启用(--no-mcp 或 mcp=False)"
+        az = self.policy.authorization
+        if az is None:
+            return False, ("没有研究授权 ⇒ 不启动 MCP 服务器"
+                           "(用 `fw-core authz grant <target> --roots <dir>` 授权后才启动)")
+        if not az.active():
+            return False, f"研究授权已失效/被撤销({az.reason or 'expired'})"
+        if not getattr(az, "allow_mcp", False):
+            return False, "研究授权未允许 MCP(allow_mcp=false)"
+        return True, ""
 
     def mcp_health(self) -> dict | None:
         return self.mcp_bridge.health() if self.mcp_bridge is not None else None

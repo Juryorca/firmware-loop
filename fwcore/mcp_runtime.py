@@ -22,8 +22,20 @@ _SAFE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 def tool_name(server: str, tool: str) -> str:
-    """把 MCP 工具名映射到 OpenAI 兼容的合法工具名。"""
+    """把 MCP 工具名映射到 OpenAI 兼容的合法工具名(单次映射,不去重)。"""
     return _SAFE.sub("_", f"mcp_{server}_{tool}")[:64]
+
+
+def disambiguated_name(server: str, tool: str) -> str:
+    """确定性消歧:规范化后可能撞名(截断/字符替换),用同一输入的哈希后缀区分。
+
+    同一个 (server, tool) 永远得到同一个名字 ⇒ 跨轮/重启稳定;不同输入撞名则不同后缀。
+    """
+    import hashlib
+
+    h = hashlib.sha256(f"{server}\x00{tool}".encode()).hexdigest()[:6]
+    base = tool_name(server, tool)
+    return base[:57] + "_" + h
 
 
 @dataclass
@@ -36,6 +48,8 @@ class MCPBridge:
     timeout: float = 20.0
     call_timeout: float = 120.0
     clients: dict[str, MCPClient] = field(default_factory=dict)
+    # 工具名 -> (server, tool):碰撞时据此判断"同名是不是同一个工具"
+    claimed: dict[str, tuple[str, str]] = field(default_factory=dict)
     status: dict[str, dict] = field(default_factory=dict)
     registered: dict[str, list[str]] = field(default_factory=dict)
     closed: bool = False
@@ -63,24 +77,47 @@ class MCPBridge:
                 continue
             self.clients[spec.name] = client
             names = []
+            external = True if spec.external is None else bool(spec.external)
+            collisions: list[str] = []
             for t in tools:
                 name = tool_name(spec.name, t["name"])
-                if name in self.registry.specs:
-                    # 桥重开(跨轮/恢复)时工具可能已在 Registry:保留既有定义,不重复注册
-                    names.append(name)
+                owner = self.claimed.get(name)
+                if owner is None and name not in self.registry.specs:
+                    final = name
+                elif owner == (spec.name, t["name"]):
+                    final = name                       # 同一个工具重开桥 ⇒ 幂等
+                else:
+                    # 规范化后撞名(不同 server/tool 映射到同一名字):确定性加哈希后缀
+                    final = disambiguated_name(spec.name, t["name"])
+                    if final in self.claimed or final in self.registry.specs:
+                        collisions.append(t["name"])
+                        continue                       # 明确拒绝,不静默绑错工具
+                self.claimed[final] = (spec.name, t["name"])
+                if final in self.registry.specs:
+                    names.append(final)               # 已注册(桥重开)⇒ 保留既有定义
                     continue
                 self.registry.register(ToolSpec(
-                    name=name,
+                    name=final,
                     description=f"[MCP:{spec.name}] {t.get('description', '')}".strip(),
                     input_schema=t.get("input_schema") or {"type": "object", "properties": {}},
                     handler=self._make_handler(spec.name, t["name"]),
-                    risk="high",            # MCP 工具可能触碰外部世界 ⇒ 走确认/授权
-                    external=self._is_external(t),
+                    risk="high",          # MCP 工具走"授权内允许"(requires=mcp 另有一道门)
+                    requires="mcp",       # 真实授权门:没有 allow_mcp 就拒绝
+                    external=external,    # 由配置声明决定;未声明 ⇒ external(默认拒绝)
                 ))
-                names.append(name)
+                names.append(final)
             self.registered[spec.name] = names
-            self.status[spec.name] = {"status": "ready", "tools": names,
-                                      "server": (tools and spec.name) or spec.name}
+            st = {"status": "ready", "tools": names, "server": spec.name,
+                  "external": external, "external_declared": spec.external is not None}
+            hint = [t["name"] for t in tools if self._is_external(t)]
+            if hint:
+                st["external_hint"] = hint        # 仅作审计提示,**不参与**授权判定
+                if not external:
+                    st["note"] = ("配置声明 external=false,但工具名/描述含外部动作关键词:"
+                                  "该声明由运维负责,调用仍受授权与 confirm 约束")
+            if collisions:
+                st["name_collisions"] = collisions
+            self.status[spec.name] = st
         return self.status
 
     @staticmethod

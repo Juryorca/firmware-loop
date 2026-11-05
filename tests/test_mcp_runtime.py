@@ -63,9 +63,12 @@ for line in sys.stdin:
 def _spec(tmp_path, body: str = FAKE, name: str = "fake.py", server: str = "fake") -> tuple[ServerSpec, str]:
     p = tmp_path / name
     p.write_text(body, encoding="utf-8")
-    spec = ServerSpec(name=server, command=sys.executable, args=[str(p)])
+    # 配置里声明 external=False(本地分析服务器);手工构造 ServerSpec 时必须显式带上,
+    # 因为没有声明 = external(默认拒绝)——这条语义就是本轮的授权边界
+    spec = ServerSpec(name=server, command=sys.executable, args=[str(p)], external=False)
     cfg = tmp_path / f"{server}.json"
-    cfg.write_text(json.dumps({"mcpServers": {server: {"command": sys.executable, "args": [str(p)]}}}),
+    cfg.write_text(json.dumps({"mcpServers": {server: {"command": sys.executable, "args": [str(p)],
+                                            "external": False}}}),
                    encoding="utf-8")
     return spec, str(cfg)
 
@@ -122,11 +125,14 @@ def test_unreachable_server_is_reported_but_does_not_break_run(tmp_path):
     dead = tmp_path / "dead.py"
     dead.write_text("import sys; sys.exit(3)\n", encoding="utf-8")
     cfg = tmp_path / "dead.json"
-    cfg.write_text(json.dumps({"mcpServers": {"dead": {"command": sys.executable, "args": [str(dead)]}}}),
+    cfg.write_text(json.dumps({"mcpServers": {"dead": {"command": sys.executable, "args": [str(dead)],
+                                             "external": False}}}),
                    encoding="utf-8")
     con, dom, root = _setup(tmp_path)
     r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: ok", "tool_calls": []}]),
-               limits=Limits(max_model_calls=2), policy=Policy(), mcp=True, mcp_config_paths=[cfg])
+               limits=Limits(max_model_calls=2),
+               policy=Policy(authorization=Authz(roots=[root], reason="test")),
+               mcp=True, mcp_config_paths=[cfg])
     res = r.run(r.start("t1"), "t1")
     assert res.state == "finished"
     assert r.mcp_bridge is not None

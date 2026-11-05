@@ -34,7 +34,9 @@ class ToolSpec:
     description: str
     input_schema: dict
     handler: Callable[["ToolContext", dict], dict]
-    risk: str = "low"  # low | high
+    risk: str = "low"        # low | high
+    # requires: 该类工具需要的授权能力(如 "mcp")。它是**可核的授权门**,不是提示
+    requires: str | None = None
     external: bool = False   # 外网/登录态/公开提交:永远需要人类确认(high 需要人类确认,见 Runner)
 
 
@@ -79,7 +81,8 @@ class Registry:
         if not spec:
             return {"status": "error", "error": f"未知工具: {name}"}
         pol = ctx.policy or Policy(confirm=ctx.confirm)
-        allowed, reason = pol.decide(name, spec.risk, args, external=spec.external)
+        allowed, reason = pol.decide(name, spec.risk, args, external=spec.external,
+                                     requires=spec.requires)
         if not allowed:
             _record(ctx, name, args, "cancelled", note=reason)
             return {"status": "cancelled", "error": reason}

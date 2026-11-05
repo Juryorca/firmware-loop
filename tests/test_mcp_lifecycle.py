@@ -68,7 +68,7 @@ def _write_mcp_cfg(root, srv, name="fake"):
     os.makedirs(os.path.join(root, "state"), exist_ok=True)
     with open(os.path.join(root, "state", "mcp.json"), "w", encoding="utf-8") as f:
         json.dump({"mcpServers": {name: {"command": sys.executable, "args": [str(srv)],
-                                         "enabled": True}}}, f)
+                                         "enabled": True, "external": False}}}, f)
 
 
 def _cli(root, db, *a, env_extra=None, timeout=180):
@@ -200,7 +200,8 @@ def test_exception_path_closes_mcp_and_watchdog(tmp_path):
     con, dom, root = _mk(tmp_path)
     _write_mcp_cfg(root, _fake_server(tmp_path))
     r = Runner(con, root, _Boom(script=[]), limits=Limits(max_model_calls=2),
-               policy=Policy(allow_high_risk=True), mcp=True, watchdog=True, watchdog_poll_s=0.02,
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True),
+               mcp=True, watchdog=True, watchdog_poll_s=0.02,
                mcp_config_paths=[os.path.join(root, "state", "mcp.json")])
     rid = r.start("t1")
     try:
@@ -218,7 +219,12 @@ def test_exception_path_closes_mcp_and_watchdog(tmp_path):
 
 def test_close_is_idempotent(tmp_path):
     con, dom, root = _mk(tmp_path)
-    r = Runner(con, root, ScriptedAdapter(script=[]), mcp=True, mcp_config_paths=[])
-    r.close()
+    _write_mcp_cfg(root, _fake_server(tmp_path))
+    r = Runner(con, root, ScriptedAdapter(script=[]), mcp=True,
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True),
+               mcp_config_paths=[os.path.join(root, "state", "mcp.json")])
+    r.start("t1")                       # 授权确定后才启动 MCP
     r.close()
     assert r.mcp_bridge is not None and r.mcp_bridge.closed is True
+    r.close()                           # 幂等
+    assert r.mcp_bridge.closed is True

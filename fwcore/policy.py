@@ -26,6 +26,11 @@ class Authz:
     roots: list[str] = field(default_factory=list)
     allow_shell: bool = True
     allow_high_risk: bool = True
+    # MCP 会把外部世界接进来 ⇒ 是否允许由授权显式控制(默认允许"授权内",但可关)
+    allow_mcp: bool = True
+    # 外部动作(MCP 服务器未声明 external=false 时)是否在**授权内**自主执行。
+    # 默认 False ⇒ 需要 confirm;显式授权为 True ⇒ 授权窗口内不再逐次打断(仍留审计事件)
+    allow_external_mcp: bool = False
     expires_at: float | None = None
     revoked: bool = False
     reason: str = ""
@@ -62,7 +67,8 @@ class Policy:
     sandbox_roots: list[str] = field(default_factory=list)
     require_path_within: bool = True
 
-    def decide(self, tool: str, risk: str, args: dict, *, external: bool = False) -> tuple[bool, str]:
+    def decide(self, tool: str, risk: str, args: dict, *, external: bool = False,
+               requires: str | None = None) -> tuple[bool, str]:
         """返回 (allowed, reason)。
 
         优先级:授权失效 ⇒ 拒;外部动作 ⇒ 必须 confirm;高风险 ⇒ 授权内允许,否则拒。
@@ -70,7 +76,16 @@ class Policy:
         az = self.authorization
         if az is not None and not az.active():
             return False, f"研究授权已失效/被撤销({az.reason or 'expired'})"
+        if requires == "mcp":
+            # MCP 是"把外部世界接进来":必须在授权里显式允许,不能靠工具名猜
+            if az is None:
+                return False, ("MCP 工具需要研究授权:"
+                               "`fw-core authz grant <target> --roots <dir>`")
+            if not getattr(az, "allow_mcp", False):
+                return False, "研究授权未允许 MCP(allow_mcp=false)⇒ 拒绝调用 MCP 工具"
         if external:
+            if requires == "mcp" and az is not None and az.allow_external_mcp:
+                return True, ""              # 授权里显式允许"授权范围内的外部 MCP 动作"
             if self.confirm is None:
                 return False, "外部动作(网络/登录态/公开提交)需要人类确认"
             try:
