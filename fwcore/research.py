@@ -204,8 +204,9 @@ class Research:
         if orphan_ev:
             out.append("### 已复核但**没有来源关联**的证据(审计会打折)")
             for r in orphan_ev:
-                out.append(f"- {r['id']} {r['p']} ⇒ 用产生该文件的那次调用 id 重新登记"
-                           "(tool_call_id=…),否则只能算弱线索")
+                out.append(f"- {r['id']} {r['p']} ⇒ 用 `state_link_evidence(evidence_id='{r['id']}',"
+                           " tool_call_id=…)` 补来源(**不新建证据**);若只是命令里写了这个路径会是"
+                           " command-write 弱来源")
         pending_ev = con.execute(
             "SELECT id, kind, path FROM evidence WHERE target_id=? AND verified=0"
             " ORDER BY created_at DESC LIMIT 8", (t.id,)).fetchall()

@@ -14,7 +14,7 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from typing import Protocol
 
 
 def _emit_reasoning() -> bool:
@@ -23,7 +23,8 @@ def _emit_reasoning() -> bool:
 
 
 class Transport(Protocol):
-    def __call__(self, url: str, headers: dict, payload: dict) -> dict: ...
+    def __call__(self, url: str, headers: dict, payload: dict) -> dict:
+        raise NotImplementedError
 
 
 class ModelHTTPError(RuntimeError):
@@ -47,9 +48,11 @@ def _check_url(url: str) -> None:
 
 def urllib_transport(url: str, headers: dict, payload: dict) -> dict:
     _check_url(url)
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
+    # 端点已在 _check_url 里做过 http(s) 白名单校验;这里不接受 file:/自定义 scheme
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
     try:
-        with urllib.request.urlopen(req, timeout=180) as r:
+        # _check_url 已限制为 http(s);file:// 等 scheme 会先被拒绝
+        with urllib.request.urlopen(req, timeout=180) as r:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
             return json.load(r)
     except urllib.error.HTTPError as e:   # 把服务端原文带出来(排查协议问题必须有)
         raise ModelHTTPError(e.code, e.read().decode("utf-8", errors="replace")) from e
@@ -68,6 +71,10 @@ def to_api_messages(messages: list[dict]) -> list[dict]:
         role = m.get("role")
         if role == "assistant":
             msg = {"role": "assistant", "content": m.get("content") or ""}
+            # thinking 模式要求**每个** assistant 消息都带 reasoning_content;
+            # 老 checkpoint(开启该模式之前存的)没有这个字段 ⇒ 补空串回传,而不是整条丢弃
+            if _emit_reasoning() and "reasoning_content" not in m:
+                msg["reasoning_content"] = ""
             if "reasoning_content" in m:      # 空串也要保留:thinking 模式要求"每个" assistant 都带
                 msg["reasoning_content"] = m["reasoning_content"] or ""
             calls = m.get("tool_calls") or []

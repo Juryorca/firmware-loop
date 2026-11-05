@@ -356,21 +356,23 @@ class Runner:
         self._watchdog_start()
         self._ensure_mcp()          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
         self._heartbeat(rid)
+        # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
+        # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
+        row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
+                                (rid,)).fetchone()
+        run_calls = int(row0["model_calls"] or 0) if row0 else 0
+        run_tools = int(row0["tool_calls"] or 0) if row0 else 0
+        run_elapsed = float(row0["elapsed_s"] or 0.0) if row0 else 0.0
+        t0 = time.time()
+
+        def _persist() -> None:
+            with _db.Tx(self.con) as c:
+                c.execute("UPDATE runs SET model_calls=?, tool_calls=?, elapsed_s=? WHERE id=?",
+                          (run_calls, run_tools, run_elapsed + (time.time() - t0), rid))
+
         try:
             seen: dict[str, int] = {}
-            t0 = time.time()
             since = _now()
-            # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)
-            row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
-                                    (rid,)).fetchone()
-            run_calls = int(row0["model_calls"] or 0) if row0 else 0
-            run_tools = int(row0["tool_calls"] or 0) if row0 else 0
-            run_elapsed = float(row0["elapsed_s"] or 0.0) if row0 else 0.0
-
-            def _persist() -> None:
-                with _db.Tx(self.con) as c:
-                    c.execute("UPDATE runs SET model_calls=?, tool_calls=?, elapsed_s=? WHERE id=?",
-                              (run_calls, run_tools, run_elapsed + (time.time() - t0), rid))
             while budget is None or budget > 0:
                 stopped = self._external_stop(rid)
                 if stopped:
@@ -396,15 +398,7 @@ class Runner:
                 if _note:
                     _sys += "\n\n## 轮前准备(程序注入)\n" + _note
                 msgs = [{"role": "system", "content": _sys}] + history
-                # 先判"下一次会不会超",再计数:计数 = **实际发生的模型调用**,
-                # 不能把被预算挡住的那一次也算进去(否则 resume 会莫名少一次额度)
-                if self.limits.calls_exhausted(run_calls + 1):
-                    state = "paused"
-                    _persist()
-                    self._limit_hit(rid, "max_model_calls",
-                                    {"calls": run_calls, "limit": self.limits.max_model_calls})
-                    break
-                run_calls += 1
+                # 预算判定必须在**计数之前**:被挡住的调用不该记账(时间/次数都一样)
                 if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
                     state = "paused"
                     _persist()
@@ -412,6 +406,13 @@ class Runner:
                                     {"elapsed_s": round(run_elapsed + (time.time() - t0), 1),
                                      "budget_s": self.limits.max_seconds})
                     break
+                if self.limits.calls_exhausted(run_calls + 1):
+                    state = "paused"
+                    _persist()
+                    self._limit_hit(rid, "max_model_calls",
+                                    {"calls": run_calls, "limit": self.limits.max_model_calls})
+                    break
+                run_calls += 1
                 reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
                 history.append(reply.assistant_message() if (reply.content or reply.tool_calls)
                                else {"role": "assistant", "content": ""})
@@ -488,6 +489,8 @@ class Runner:
                 self._heartbeat(rid)
 
         except BaseException as e:
+            with contextlib.suppress(Exception):
+                _persist()          # 异常/中断也要把本轮计数落库(否则恢复后预算凭空多出)
             with _db.Tx(self.con) as c:
                 c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), rid))
                 _event(c, "run.paused", rid, {"error": f"{type(e).__name__}: {e}"})

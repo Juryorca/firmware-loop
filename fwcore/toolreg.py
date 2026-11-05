@@ -180,10 +180,12 @@ def _register_pgid(ctx: ToolContext, art: str, pgid: int, pid: int) -> None:
     if ctx.run_id:
         targets.add(os.path.join(ctx.root, "state", "artifacts", ctx.run_id))
     for d in targets:
-        with contextlib.suppress(OSError):
+        try:
             os.makedirs(d, exist_ok=True)
             with open(os.path.join(d, ".pgids"), "a", encoding="utf-8") as f:
                 f.write(f"{pgid} {_proc_starttime(pid) or 0}\n")
+        except OSError:
+            continue                              # 登记失败不影响工具本身,但看护会少一条线索
 
 
 def _cap_output(path: str, max_bytes: int) -> bool:
@@ -272,7 +274,13 @@ def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str |
         return {"status": "error", "error": f"无法写输出文件: {e}"}
     tr_o = _cap_output(op, max_output_bytes)
     tr_e = _cap_output(ep, max_output_bytes)
+    out_tail, out_trunc, out_bin = _tail_info(op)
+    err_tail, err_trunc, err_bin = _tail_info(ep)
     out = {"status": status, "exit_code": code, "stdout_path": op, "stderr_path": ep,
+           # 有界摘要(模型不用为了看输出再跑一遍),完整内容仍在产物文件里
+           "stdout_tail": out_tail, "stderr_tail": err_tail,
+           "stdout_truncated": out_trunc or tr_o, "stderr_truncated": err_trunc or tr_e,
+           "stdout_binary": out_bin, "stderr_binary": err_bin,
            "stdout_sha256": sha256_file(op), "stderr_sha256": sha256_file(ep),
            "output_truncated": bool(tr_o or tr_e)}
     if status != "ok":
@@ -303,6 +311,29 @@ def sha256_file(path: str) -> str:
     except OSError:
         return ""
     return h.hexdigest()
+
+
+TAIL_CHARS = 2000
+
+
+def _tail_info(path: str | None, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]:
+    """(尾部文本, 是否截断, 是否二进制);只读尾部,避免把大输出塞进上下文。"""
+    if not path:
+        return "", False, False
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - max_chars * 4))
+            data = f.read()
+    except OSError:
+        return "", False, False
+    binary = b"\x00" in data
+    if binary:
+        # 二进制不塞进上下文:只给占位,让模型用路径/xxd/strings 处理
+        return (f"[binary output: {size} bytes; use stdout_path/xxd/strings]",
+                size > max_chars, True)
+    text = data.decode("utf-8", errors="replace")
+    return text[-max_chars:], (len(text) > max_chars or size > max_chars * 4), False
 
 
 def _tail(paths: list[str | None], keep: int = 3000) -> str:

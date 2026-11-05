@@ -258,12 +258,16 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
 
     # ---- ③ 证据 ↔ 执行:只认**直接产出**关联(stdout/result 路径);弱线索不算
     ev = [dict(r) for r in con.execute(
-        "SELECT id,kind,path,tool_call_id,verified,hypothesis_id,attempt_id,notes FROM evidence")]
+        "SELECT id,kind,path,tool_call_id,verified,hypothesis_id,attempt_id,notes,link_relation"
+        " FROM evidence")]
     by_id = {c["id"]: c for c in calls}
 
     def strong(e) -> bool:
         if not e["tool_call_id"]:
             return False
+        if (e.get("link_relation") or "").startswith("command-write"):
+            return False                       # 只是命令里提到过 ⇒ 弱来源
+
         c = by_id.get(e["tool_call_id"])
         if not c:
             return False
@@ -286,8 +290,17 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
             per_att.setdefault(("hyp", e["hypothesis_id"]), []).append(e["id"])
     missing = [a["id"] for a in decisive_att
                if not per_att.get(("att", a["id"])) and not per_att.get(("hyp", a["hypothesis_id"]))]
+    # 直接产出(stdout/result)是最强来源;真实研究里产物常由命令写出(command-write),
+    # 那也是**可追溯来源**,只是证明力弱一档 ⇒ 分开报,不让"没有 stdout 证据"一票否决研究
+    linked_any = [e for e in ev if e["tool_call_id"]]
+    no_link = [a["id"] for a in decisive_att
+               if not any(e["attempt_id"] == a["id"] or e["hypothesis_id"] == a["hypothesis_id"]
+                          for e in linked_any)]
+    add("decisive_attempts_have_source_links", bool(decisive_att) and not no_link,
+        f"决定性尝试 {len(decisive_att)} 个,无任何来源链接 {len(no_link)} 个 {no_link[:3]}")
     add("decisive_attempts_have_direct_evidence", bool(decisive_att) and not missing,
-        f"决定性尝试 {len(decisive_att)} 个,缺直接证据 {len(missing)} 个 {missing[:3]}")
+        f"直接产出证据(source-link)覆盖 {len(decisive_att) - len(missing)}/{len(decisive_att)}",
+        critical=False)
 
     # ---- ④ 结论覆盖目标范围(每个对象都要有对应结论),而不是"有任意结论"
     concl = [dict(r) for r in con.execute(
@@ -435,6 +448,9 @@ def main() -> int:
     from fwcore.policy import Authz, Policy
     from fwcore.runtime import Runner
 
+    # DeepSeek thinking 模式要求 assistant 消息回传 reasoning_content;
+    # 演练脚本统一开启(恢复旧 checkpoint 时由 to_api_messages 补空串)
+    os.environ.setdefault("FW_REASONING_CONTENT", "1")
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true",
                     help="短程协议冒烟(20 calls / 240s / 2 rounds);**不代表研究质量**")
@@ -492,7 +508,10 @@ def main() -> int:
             except (OSError, json.JSONDecodeError) as e:
                 raise SystemExit(f"读 profile 失败 {args.profile}: {e}") from e
         elif os.path.isdir(os.path.join(root, "fwroot")):
-            files = sorted(os.listdir(os.path.join(root, "fwroot")))[:6]
+            try:
+                files = sorted(os.listdir(os.path.join(root, "fwroot")))[:6]
+            except OSError as e:
+                raise SystemExit(f"读 fwroot 失败 {root}: {e}") from e
             resume_profile = {f"obj{i}": {"object": f, "expect": "any"}
                               for i, f in enumerate(files)}
         else:

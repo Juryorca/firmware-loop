@@ -13,7 +13,7 @@ import json
 import os
 import sqlite3
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -254,6 +254,22 @@ def _step2(con: sqlite3.Connection) -> None:
     _add_col(con, "surfaces", "judged_by", "TEXT")
 
 
+def _step10(con: sqlite3.Connection) -> None:
+    """证据来源关系 + 预算口径说明。
+
+    - `evidence.link_relation`:`direct-stdout` / `direct-result` / `command-write`
+      (只有前两者算"直接产出";command-write 是"命令里写了这个路径",证明力较弱)
+    - `runs.budget_note`:老 run 的 model_calls 是 v9 起才有记账,必须如实标注
+    """
+    _add_col(con, "evidence", "link_relation", "TEXT")
+    _add_col(con, "runs", "budget_note", "TEXT")
+    con.execute("UPDATE runs SET budget_note='legacy: model_calls 自 v9 起计(更早的调用未记账)'"
+                " WHERE model_calls = 0 AND tool_calls > 0")
+    # 已存在 tool_call_id 的证据:按当时规则视为直接产出(历史数据,不改判定口径)
+    con.execute("UPDATE evidence SET link_relation='direct-result'"
+                " WHERE tool_call_id IS NOT NULL AND link_relation IS NULL")
+
+
 def _step9(con: sqlite3.Connection) -> None:
     """run 级预算计数(跨 turn / resume 累积)。
 
@@ -355,7 +371,8 @@ def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "hypotheses", "surface_key", "TEXT")
 
 
-STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7, 8: _step8, 9: _step9}
+STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7, 8: _step8,
+         9: _step9, 10: _step10}
 
 
 def _migrate(con: sqlite3.Connection) -> None:

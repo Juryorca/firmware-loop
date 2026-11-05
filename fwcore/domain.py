@@ -487,6 +487,62 @@ class Domain:
                     "detail": detail.strip()[:200]})
         return cid
 
+    def link_evidence_source(self, ev_id: str, tool_call_id: str, *, note: str = "") -> dict:
+        """给**已有**证据补来源(不新建证据、不改 E-ID/哈希/复核历史)。
+
+        校验(硬):
+        - 证据与工具调用都存在;
+        - 属于**同一个 target**(工具调用所在 run 的 target);
+        - 工具调用状态是 ok(失败/超时/取消不能当来源);
+        - 关系可判定:证据路径 == 该调用 stdout ⇒ `direct-stdout`;== result ⇒ `direct-result`;
+          路径只出现在命令参数里 ⇒ `command-write`(记录为**弱来源**,不产生直接证据资格)。
+        结果写进 `evidence.link_relation` + `tool_call_id`,并记 `evidence.linked` 事件(可审计)。
+        """
+        ev = self.con.execute("SELECT * FROM evidence WHERE id=?", (ev_id,)).fetchone()
+        if not ev:
+            raise NotFound(f"证据不存在: {ev_id}")
+        tc = self.con.execute(
+            "SELECT t.id, t.status, t.args, t.stdout_path, t.result_path, r.target_id"
+            " FROM tool_calls t LEFT JOIN runs r ON r.id=t.run_id WHERE t.id=?",
+            (tool_call_id,)).fetchone()
+        if not tc:
+            raise NotFound(f"工具调用不存在: {tool_call_id}")
+        if tc["target_id"] and tc["target_id"] != ev["target_id"]:
+            raise InvariantViolation("证据与工具调用不属于同一个目标(不能跨目标补来源)")
+        if tc["status"] != "ok":
+            raise InvariantViolation(f"工具调用状态是 {tc['status']} ⇒ 不能作为证据来源")
+
+        path = ev["path"]
+        relation = None
+        if path:
+            target = os.path.abspath(path if os.path.isabs(path) else os.path.join(self.root, path))
+            if tc["stdout_path"] and os.path.abspath(tc["stdout_path"]) == target:
+                relation = "direct-stdout"
+            elif tc["result_path"] and os.path.abspath(tc["result_path"]) == target:
+                relation = "direct-result"
+            else:
+                rel = os.path.relpath(target, self.root)
+                args = tc["args"] or ""
+                if rel in args or os.path.basename(target) in args:
+                    relation = "command-write"
+        if relation is None:
+            raise InvariantViolation(
+                "无法证明来源:证据路径既不是该调用的 stdout/result,也没出现在它的命令里")
+
+        with Tx(self.con) as c:
+            c.execute("UPDATE evidence SET tool_call_id=?, link_relation=?,"
+                      " notes=COALESCE(notes || ' | ','') || ? WHERE id=?",
+                      (tool_call_id, relation,
+                       f"source-linked: {relation} → {tool_call_id}"
+                       + (f"; {note.strip()[:200]}" if note else ""), ev_id))
+            c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                      (_now(), "evidence.linked", ev_id,
+                       json.dumps({"tool_call_id": tool_call_id, "relation": relation,
+                                   "note": note[:200]}, ensure_ascii=False)))
+        return {"evidence_id": ev_id, "tool_call_id": tool_call_id, "relation": relation,
+                "direct": relation.startswith("direct-"),
+                "verified": bool(ev["verified"])}
+
     def promote_evidence(self, ev_id: str, note: str) -> None:
         """兼容旧调用:等价于 `cross-check`,但**必须**有可检查的产物(证据文件或显式 artifact)。"""
         ev = self.con.execute("SELECT path FROM evidence WHERE id=?", (ev_id,)).fetchone()

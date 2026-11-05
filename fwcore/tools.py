@@ -322,9 +322,15 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
                 raise
     except OSError as e:
         return {"status": "error", "error": f"无法写输出文件: {e}"}
+    out_tail, out_trunc, out_bin = _tail_info(op)
+    err_tail, err_trunc, err_bin = _tail_info(ep)
     return {
         "status": status, "exit_code": code, "started_at": started,
         "shell": use_shell, "mode": mode,
+        # 直接给有界摘要,模型不必再为了看输出重复跑同一条命令
+        "stdout_tail": out_tail, "stderr_tail": err_tail,
+        "stdout_truncated": out_trunc, "stderr_truncated": err_trunc,
+        "stdout_binary": out_bin, "stderr_binary": err_bin,
         "stdout_path": op, "stderr_path": ep,
         "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep),
     }
@@ -441,6 +447,10 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
     weak_hint = None
     if not tid:
         tid, relation, weak_hint = _auto_link_tool_call(ctx, path)
+    link_relation = None
+    if tid:
+        # 关系在 Domain 里已按路径判定;这里只记录(建证时是直接产出)
+        link_relation = "direct-stdout" if relation in ("execution",) else "direct-result"
     eid = ctx.domain.add_evidence(
         args["target"], args["kind"], path=path, capture=args.get("capture"),
         attempt_id=args.get("attempt_id"), hypothesis_id=args.get("hypothesis_id"),
@@ -448,8 +458,11 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
         # 绑定到具体工具调用 ⇒ 自动继承 provider/原始产物,并标为"未复核"
         tool_call_id=tid, source=args.get("source"),
     )
+    if tid and link_relation:
+        ctx.domain.con.execute("UPDATE evidence SET link_relation=? WHERE id=?",
+                               (link_relation, eid))
     out = {"status": "ok", "evidence_id": eid, "linked_tool_call_id": tid,
-           "relation": relation, "verified": False,
+           "relation": relation, "link_relation": link_relation, "verified": False,
            "next": "复核后才算证据:state_verify_evidence(evidence_id, method=recheck-sha256|"
                    "reproduce-attempt|cross-check)"}
     if relation:
@@ -460,6 +473,17 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
                        "用产生该文件的那次调用的产物路径")
         out["next"] = ("补来源:state_add_evidence(..., tool_call_id=<产生该文件的那次调用 id>);"
                        "工具结果里带 tool_call_id 字段")
+    return out
+
+
+def state_link_evidence(ctx: ToolContext, args: dict) -> dict:
+    """给**已有**证据补来源(保留 E-ID/哈希/复核历史;不生成重复证据)。"""
+    res = ctx.domain.link_evidence_source(args["evidence_id"], args["tool_call_id"],
+                                          note=args.get("note", ""))
+    out = {"status": "ok", **res}
+    if not res["direct"]:
+        out["note"] = ("弱来源(command-write):路径只出现在命令里,不能当直接产出证据;"
+                       "要强来源请用产生该文件的调用的 stdout 路径重新登记或补充更精确的来源")
     return out
 
 
@@ -535,6 +559,27 @@ def _caps(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "capabilities": inv}
 
 
+TAIL_CHARS = 2000
+
+
+def _tail_info(path: str, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]:
+    """返回 (尾部文本, 是否截断, 是否二进制)。只读文件尾部,不把大输出塞进上下文。"""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - max_chars * 4))     # 多读一点以处理多字节字符
+            data = f.read()
+    except OSError:
+        return "", False, False
+    binary = b"\x00" in data
+    if binary:
+        # 二进制不塞进上下文:只给占位,让模型用路径/xxd/strings 处理
+        return (f"[binary output: {size} bytes; use stdout_path/xxd/strings]",
+                size > max_chars, True)
+    text = data.decode("utf-8", errors="replace")
+    return text[-max_chars:], (len(text) > max_chars or size > max_chars * 4), False
+
+
 def _sha256(path: str) -> str:
     """算文件哈希;读不了就返回空串(**不**让哈希失败变成工具失败),调用方据此判"无产物"。"""
     h = hashlib.sha256()
@@ -596,6 +641,14 @@ def default_registry() -> Registry:
             "version": {"type": "string"}, "tool_call_id": {"type": "string"},
             "source": {"type": "string"}}, "required": ["target", "kind"]},
         state_add_evidence))
+    r.register(ToolSpec(
+        "state_link_evidence",
+        "给已有证据补来源(校验同 target / 调用 ok / 路径关系);不新建证据,保留 E-ID、"
+        "SHA256 与复核历史。direct-stdout/direct-result 是强来源,command-write 是弱来源",
+        {"type": "object", "properties": {
+            "evidence_id": {"type": "string"}, "tool_call_id": {"type": "string"},
+            "note": {"type": "string"}}, "required": ["evidence_id", "tool_call_id"]},
+        state_link_evidence))
     r.register(ToolSpec(
         "state_verify_evidence",
         "复核证据(留下可检查记录后 verified=1):recheck-sha256 重算产物哈希 / "
