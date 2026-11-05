@@ -62,6 +62,13 @@ def main(argv: list[str] | None = None) -> int:
     q = sp.add_parser("add"); q.add_argument("target"); q.add_argument("--kind", required=True)
     q.add_argument("--path"); q.add_argument("--capture"); q.add_argument("--attempt")
     q.add_argument("--hypothesis"); q.add_argument("--version")
+    q.add_argument("--source", default=None, help="证据来源(工具/会话/手工)")
+    q.add_argument("--tool-call", default=None, dest="tool_call",
+                   help="来自某次工具调用:该证据会被标为未复核(verified=0)")
+    q.add_argument("--notes", default=None)
+    pr = sp.add_parser("promote")
+    pr.add_argument("evidence_id"); pr.add_argument("--note", required=True,
+                                                    help="复核说明:怎么确认它成立(复现/交叉验证)")
 
     p = sub.add_parser("observe"); p.add_argument("target"); p.add_argument("--text", required=True)
     p.add_argument("--attempt")
@@ -142,9 +149,14 @@ def main(argv: list[str] | None = None) -> int:
                 dom.finish_attempt(args.attempt, args.result, args.note)
                 print(f"attempt {args.attempt} → {args.result}")
         elif args.cmd == "evidence":
-            print(dom.add_evidence(args.target, args.kind, path=args.path, capture=args.capture,
-                                   attempt_id=args.attempt, hypothesis_id=args.hypothesis,
-                                   version=args.version))
+            if args.ev_cmd == "promote":
+                dom.promote_evidence(args.evidence_id, args.note)
+                print(json.dumps({"id": args.evidence_id, "verified": True}, ensure_ascii=False))
+            else:
+                print(dom.add_evidence(args.target, args.kind, path=args.path, capture=args.capture,
+                                       attempt_id=args.attempt, hypothesis_id=args.hypothesis,
+                                       version=args.version, source=args.source,
+                                       tool_call_id=args.tool_call, notes=args.notes))
         elif args.cmd == "observe":
             print(dom.add_observation(args.target, args.text, attempt_id=args.attempt))
         elif args.cmd == "conclude":

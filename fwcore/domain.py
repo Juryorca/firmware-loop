@@ -335,8 +335,15 @@ class Domain:
 
     def add_evidence(self, target: str, kind: str, *, path: str | None = None,
                      capture: str | None = None, attempt_id: str | None = None,
-                     hypothesis_id: str | None = None, version: str | None = None) -> str:
-        """证据必须绑定目标与版本;文件类证据自动算 sha256。"""
+                     hypothesis_id: str | None = None, version: str | None = None,
+                     source: str | None = None, tool_call_id: str | None = None,
+                     notes: str | None = None) -> str:
+        """证据必须绑定目标与版本;文件类证据自动算 sha256。
+
+        **工具输出 ≠ 漏洞证据**(硬):带 `tool_call_id` 建出来的证据一律 `verified=0`,
+        必须研究复核后用 `promote_evidence()` 提升;`conclude(vulnerable)` 只认 `verified=1`。
+        手工采集(path/capture 由研究自己给出)默认视为已复核(那是研究动作本身),但仍要记来源。
+        """
         t = self.target(target)
         if attempt_id:
             a = self.con.execute(
@@ -353,6 +360,18 @@ class Domain:
             if h["target_id"] != t.id:
                 raise InvariantViolation("hypothesis 不属于该目标")
         ver = version if version is not None else (t.version or "unknown")
+        verified = 1
+        if tool_call_id:
+            tc = self.con.execute("SELECT status, provider, capability FROM tool_calls WHERE id=?",
+                                  (tool_call_id,)).fetchone()
+            if not tc:
+                raise NotFound(f"工具调用不存在: {tool_call_id}")
+            if tc["status"] != "ok":
+                raise InvariantViolation(
+                    f"工具调用状态是 {tc['status']}(不是 ok)⇒ 不能作为证据来源"
+                    "(失败/超时/取消都只是执行事实,不是研究证据)")
+            source = source or "tool:" + (tc["provider"] or tc["capability"] or "unknown")
+            verified = 0          # 原始工具输出:必须复核后提升
         sha = None
         if path:
             full = path if os.path.isabs(path) else os.path.join(self.root, path)
@@ -371,12 +390,26 @@ class Domain:
         eid = new_id("E")
         with Tx(self.con) as c:
             c.execute(
-                "INSERT INTO evidence(id,target_id,attempt_id,hypothesis_id,kind,version,path,sha256,capture,created_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (eid, t.id, attempt_id, hypothesis_id, kind, ver, path, sha, capture, _now()),
+                "INSERT INTO evidence(id,target_id,attempt_id,hypothesis_id,kind,version,path,sha256,capture,"
+                "source,tool_call_id,verified,notes,created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (eid, t.id, attempt_id, hypothesis_id, kind, ver, path, sha, capture,
+                 source, tool_call_id, verified, notes, _now()),
             )
-            _event(c, "evidence.added", eid, {"kind": kind, "attempt": attempt_id, "path": path})
+            _event(c, "evidence.added", eid, {"kind": kind, "attempt": attempt_id, "path": path,
+                                              "source": source, "verified": verified})
         return eid
+
+    def promote_evidence(self, ev_id: str, note: str) -> None:
+        """研究复核后把证据提升为"可用作结论依据"(必须写复核说明)。"""
+        if not note or len(note.strip()) < 8:
+            raise InvariantViolation("提升证据必须写复核说明:怎么复核的(复现/交叉验证/反编译对照)")
+        row = self.con.execute("SELECT verified FROM evidence WHERE id=?", (ev_id,)).fetchone()
+        if not row:
+            raise NotFound(f"证据不存在: {ev_id}")
+        with Tx(self.con) as c:
+            c.execute("UPDATE evidence SET verified=1, notes=? WHERE id=?", (note.strip(), ev_id))
+            _event(c, "evidence.verified", ev_id, {"note": note.strip()[:300]})
 
     # ---------------- 结论 ----------------
     def conclude(self, hid: str, verdict: str, scope_note: str) -> str:
@@ -398,6 +431,9 @@ class Domain:
             )
         ev = self.con.execute("SELECT COUNT(*) n FROM evidence WHERE hypothesis_id=? OR attempt_id IN "
                               "(SELECT id FROM attempts WHERE hypothesis_id=?)", (hid, hid)).fetchone()["n"]
+        ev_verified = self.con.execute(
+            "SELECT COUNT(*) n FROM evidence WHERE verified=1 AND (hypothesis_id=? OR attempt_id IN "
+            "(SELECT id FROM attempts WHERE hypothesis_id=?))", (hid, hid)).fetchone()["n"]
         kinds = set(decisive)
         if verdict == "vulnerable" and "supported" not in kinds:
             raise InvariantViolation("判 vulnerable 需要至少一次 supported 尝试(当前只有 "
@@ -409,6 +445,10 @@ class Domain:
             raise InvariantViolation("判 inconclusive 需要一次明确 inconclusive 的尝试")
         if verdict == "vulnerable" and ev == 0:
             raise InvariantViolation("判 vulnerable 必须挂证据")
+        if verdict == "vulnerable" and ev_verified == 0:
+            raise InvariantViolation(
+                f"证据 {ev} 条但**没有一条经研究复核**(工具跑成功 ≠ 漏洞成立):"
+                "先用 promote_evidence() 写清怎么复核的(复现/交叉验证)")
         cid = new_id("C")
         with Tx(self.con) as c:
             c.execute("INSERT INTO conclusions(id,target_id,hypothesis_id,verdict,scope_note,created_at)"

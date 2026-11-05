@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -198,6 +198,7 @@ INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_hyp_target_state ON hypotheses(target_id, state);
 CREATE INDEX IF NOT EXISTS idx_attempt_hyp ON attempts(hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_target ON evidence(target_id);
+CREATE INDEX IF NOT EXISTS idx_evidence_verified ON evidence(target_id, verified);
 CREATE INDEX IF NOT EXISTS idx_events_ref ON events(ref);
 CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_key ON tool_calls(run_id, call_key)
@@ -238,6 +239,19 @@ def _step2(con: sqlite3.Connection) -> None:
     _add_col(con, "surfaces", "judged_by", "TEXT")
 
 
+def _step4(con: sqlite3.Connection) -> None:
+    """证据溯源:来源(哪个工具/哪次调用)、是否经研究复核。
+
+    `verified` 的语义(硬):
+    - 0 = **原始工具输出/未复核**(工具跑成功 ≠ 漏洞成立)
+    - 1 = 研究复核过的证据(复现/交叉验证后才提升)
+    """
+    _add_col(con, "evidence", "source", "TEXT")
+    _add_col(con, "evidence", "tool_call_id", "TEXT")
+    _add_col(con, "evidence", "verified", "INTEGER NOT NULL DEFAULT 1")
+    _add_col(con, "evidence", "notes", "TEXT")
+
+
 def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "attempts", "obs_outcome", "TEXT NOT NULL DEFAULT 'pending'")
     _add_col(con, "attempts", "obs_reason", "TEXT")
@@ -254,7 +268,7 @@ def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "hypotheses", "surface_key", "TEXT")
 
 
-STEPS = {2: _step2, 3: _step3}
+STEPS = {2: _step2, 3: _step3, 4: _step4}
 
 
 def _migrate(con: sqlite3.Connection) -> None:

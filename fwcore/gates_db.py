@@ -106,15 +106,23 @@ def evaluate(con, root: str, target: str) -> GateReport:
         "   AND (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id)=0", (t.id,))]
     if unlinked:
         rep.blockers.append(f"{len(unlinked)} 条 vulnerable 结论没有挂自己的证据: {unlinked[:3]}")
+    # 工具跑成功 ≠ 漏洞成立:证据必须经研究复核(verified=1)才能支撑结论
+    unverified = [r["id"] for r in con.execute(
+        "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'"
+        "   AND (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1)=0", (t.id,))]
+    if unverified:
+        rep.blockers.append(f"{len(unverified)} 条 vulnerable 结论只有未复核证据(工具输出)"
+                            f"⇒ 先复核再收: {unverified[:3]}")
 
     # ⑤ findings = 判为 vulnerable 且带证据的假设
     for r in con.execute(
         "SELECT h.id, h.title, h.scope_note,"
-        "   (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id) ev"
+        "   (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id) ev,"
+        "   (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1) evv"
         " FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'", (t.id,)):
         rep.findings.append({"id": r["id"], "title": r["title"],
                              "scope": r["scope_note"], "evidence": r["ev"],
-                             "ok": r["ev"] > 0})
+                             "verified": r["evv"], "ok": r["evv"] > 0})
     return rep
 
 
