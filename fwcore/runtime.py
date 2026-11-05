@@ -148,9 +148,10 @@ class Runner:
         now = _now()
         with _db.Tx(self.con) as c:
             c.execute("INSERT INTO runs(id,target_id,state,step,rounds,goal,pid,pid_starttime,host,"
-                      "heartbeat_at,started_at,updated_at) VALUES(?,?,'running',0,0,?,?,?,?,?,?,?)",
+                      "model,heartbeat_at,started_at,updated_at)"
+                      " VALUES(?,?,'running',0,0,?,?,?,?,?,?,?,?)",
                       (rid, t.id, goal, os.getpid(), _proc_starttime(os.getpid()), _host(),
-                       now, now, now))
+                       getattr(self.model, "name", None), now, now, now))
             _event(c, "run.started", rid, {"target": target, "goal": goal})
         return rid
 

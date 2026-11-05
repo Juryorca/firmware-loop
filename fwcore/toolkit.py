@@ -15,6 +15,14 @@ import re
 from .tools import Registry, ToolContext, shell_exec
 
 
+def _int_or_none(value):
+    """把观察值安全转 int(解析失败返回 None,不让解析器把工具结果变成异常)。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 OBSERVERS = {}
 
 
@@ -94,14 +102,15 @@ def _obs_fuzz(text: str) -> dict:
     crash = bool(re.search(r"SIGSEGV|SIGILL|SIGBUS|uncaught signal|crash", text, re.I))
     if not tuples and not crash:
         return {"status": "unparsed", "raw": text[-160:]}
-    return {"status": "ok", "tuples": int(tuples[-1]) if tuples else None, "crash": crash}
+    return {"status": "ok", "tuples": _int_or_none(tuples[-1]) if tuples else None,
+            "crash": crash}
 
 
 @observer("emu_run")
 def _obs_emu(text: str) -> dict:
 
     rc = re.findall(r"(?:rc|exit)[=: ]\s*(\d+)", text)
-    return {"status": "ok", "exit_code": int(rc[-1]) if rc else None,
+    return {"status": "ok", "exit_code": _int_or_none(rc[-1]) if rc else None,
             "raw_tail": text[-160:]}
 
 
@@ -115,12 +124,25 @@ def _obs_ghidra(text: str) -> dict:
 def _obs_ida(text: str) -> dict:
     """IDA 输出结构化:优先 JSON(ida_call 的 --json),否则尝试抽取关键字段,再不行标 unparsed。"""
 
+    # IDA MCP 返回的是 JSON-RPC 信封,真正的结果在 result.content[0].text(通常是内层 JSON 字符串)
+    def _unwrap(d):
+        try:
+            inner = d["result"]["content"][0]["text"]
+            return json.loads(inner) if isinstance(inner, str) else None
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+            return None
+
     for chunk in (text.strip(), text[text.find("{"): text.rfind("}") + 1] if "{" in text else ""):
         if not chunk:
             continue
         try:
             data = json.loads(chunk)
             if isinstance(data, dict):
+                inner = _unwrap(data)
+                if isinstance(inner, dict):
+                    data = inner
+                elif isinstance(inner, list):
+                    data = {"items": inner, "count": len(inner)}
                 return {"status": "ok", "format": "json",
                         "fields": sorted(data.keys())[:20],
                         "preview": {k: str(v)[:120] for k, v in list(data.items())[:8]}}

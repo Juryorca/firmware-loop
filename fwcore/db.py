@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -248,6 +248,11 @@ def _step2(con: sqlite3.Connection) -> None:
     _add_col(con, "surfaces", "judged_by", "TEXT")
 
 
+def _step8(con: sqlite3.Connection) -> None:
+    """记录 run 用的模型名(报告/审计要能说清"这次是哪个模型跑的")。"""
+    _add_col(con, "runs", "model", "TEXT")
+
+
 def _step7(con: sqlite3.Connection) -> None:
     """证据"复核"必须是**可检查的记录**,不是一个自称的标志位。
 
@@ -318,7 +323,7 @@ def _step3(con: sqlite3.Connection) -> None:
     _add_col(con, "hypotheses", "surface_key", "TEXT")
 
 
-STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7}
+STEPS = {2: _step2, 3: _step3, 4: _step4, 5: _step5, 6: _step6, 7: _step7, 8: _step8}
 
 
 def _migrate(con: sqlite3.Connection) -> None:

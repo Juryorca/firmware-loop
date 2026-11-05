@@ -61,3 +61,22 @@ Capability/Provider/Environment 解析 · 异构固件工具适配 · 长研究�
 | 失联判定 | 进程内运行,不存在"失联" | `recover_stale()`:同主机 pid 存活 + `pid_starttime` 比对(pid 复用视为死);跨主机默认不动,`--include-remote` 才按倍数阈值兜底;长工具在飞同样保活 | 固件研究是长时任务、会换会话/换机器继续,所以"谁还活着"必须是可核事实而不是假设 |
 
 仍未采纳(理由同第 2 节):并行工具批次、流式输出、UI 级消息事件。
+
+## 6. 统一工具注册与 Pi 的 tool 生命周期(2026-11-05)
+
+Pi 侧(`agent-loop.ts` L518 `executeToolCalls` → L540 `executeToolCallsSequential` → `prepareToolCall` → 执行 → 结果消息)
+把"工具"当作**loop 内的一次调用**;工具的身份/参数校验/结果消息由 `AgentTool` 与 session 侧提供。
+fwcore 的工具能力更宽(本地脚本、Windows IDA supervisor、MCP server、Python 适配器),所以把它抽成
+**声明 + 适配器 + 生命周期**三层,但**执行语义仍与 Pi 一致**:
+
+| 维度 | Pi | fwcore(`fwcore/toolreg.py`) |
+|---|---|---|
+| 身份/参数 | AgentTool(name, schema) | `Manifest`(name/description/schema/risk/external/requires/capability/provider) |
+| 调用 | `tool.execute(args, ctx)` | 适配器:`python`(函数)/`script`(argv 模板)/`feature`(深度适配,如 IDA) |
+| 结果 | tool result 消息 | `{status, text/output_tail, stdout/stderr 路径 + sha256, observation, meta}` + `tool_calls` 行 |
+| 失败 | error 传播 | `error/timeout/cancelled` 三态,均**不得**推出研究结论;启动失败显式返回 |
+| 生命周期 | session 持有 | `ensure()` 懒启动 / `close()` 收尾 / `health()` 可查(IDA supervisor 用) |
+| 取消 | `signal.aborted` 断点 | 取消写 `handback_reason=user_stop:*`;`run_process` 切片轮询 ⇒ 杀进程组,状态 `cancelled` |
+
+**不采纳**:Pi 的"工具由 loop 内联定义"这一形态 —— 固件研究里工具数量与种类会持续增长,内联会让
+核心代码反复改动;这里用 manifest 把它们挡在核心之外(新增同类型工具 = 一个 JSON)。
