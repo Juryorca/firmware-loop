@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# ida_clean.sh — 清理 IDA 暂存区里的**临时件**(路径来自配置,不写死)
-# 调用时机: fw.sh 会话退出(ida_stop 之后)。中途 stop/start 不调用,暂存件跨 stop 保留。
-# 白名单 = 我们自己的管线工具,禁止清理;IDB/数据库默认**不动**(共享研究数据)。
+# ida_clean.sh — 清空 IDA 暂存区(路径来自配置,不写死)
+# 调用时机: fw.sh **会话退出**(ida_stop 之后)。中途 stop/start 不调用 ⇒ 暂存件跨 stop 保留。
+# 语义(既定语): 会话退出时把**本暂存区里白名单外的一切**清掉,包括 IDB/数据库副本
+#   (它们是本会话拷进暂存区的副本,不是原始研究数据);白名单管线工具保留。
+# 与 ida_stop.sh 的分工: stop 只停进程、默认不删 IDB(可能还有别的会话在用)。
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 ALLOW='start_mcp.py|keepalive.py|idalog.txt'

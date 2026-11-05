@@ -37,6 +37,8 @@ DEFAULTS: dict[str, str] = {
     "IDA_LOG": "",
     # Windows 侧 mcp/instances 目录(worker 注册表);空 = 用 %APPDATA% 探测
     "IDA_WIN_INSTANCES": "",
+    # 直接给 WSL 路径(优先级更高;导出的 FW_IDA_INSTANCES 可回灌,便于脚本/测试覆盖)
+    "IDA_INSTANCES": "",
     # 生命周期参数
     "IDA_START_TIMEOUT": "150",
     "IDA_PROBE_TIMEOUT": "3",
@@ -95,6 +97,9 @@ class IdaConfig:
     @property
     def instances_dir(self) -> str:
         """worker 注册表目录(WSL 路径);探测不到返回空串(收尾时如实跳过)。"""
+        direct = self.get("IDA_INSTANCES")
+        if direct:
+            return direct
         explicit = self.get("IDA_WIN_INSTANCES")
         if explicit:
             return self.windows_to_wsl(explicit)
@@ -102,7 +107,7 @@ class IdaConfig:
             # 中文 Windows 的 cmd 输出可能是 GBK ⇒ 按字节取、逐编码尝试(不猜死一个编码)
             r = subprocess.run(["cmd.exe", "/c", "echo %APPDATA%"], capture_output=True,
                                timeout=3)
-            raw = r.stdout or b""
+            raw = (getattr(r, "stdout", b"") or b"")
             appdata = ""
             for enc in ("utf-8", "gbk", "cp1252"):
                 try:

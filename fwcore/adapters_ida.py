@@ -73,7 +73,8 @@ def _shell_env(cfg: IdaConfig) -> dict[str, str]:
         "FW_IDA_LOG": cfg.log_path,
         "FW_IDA_START_TIMEOUT": str(int(cfg.start_timeout)),
         "FW_IDA_PROBE_TIMEOUT": str(int(cfg.probe_timeout)),
-        "IDA_MCP_URL": cfg.url,          # 旧接口兼容
+        "FW_IDA_INSTANCES": cfg.instances_dir,   # 收尾时 worker 注册表要用
+        "IDA_MCP_URL": cfg.url,                  # 旧接口兼容
     }
 
 

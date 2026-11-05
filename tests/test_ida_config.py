@@ -60,8 +60,8 @@ def test_shell_exports_quote_spaces_and_roundtrip(tmp_path):
     assert stage == "/mnt/e/ida stage"
     assert win_stage == r"E:\ida stage"
     assert url == "http://127.0.0.1:9911/mcp"
-    assert exe == "/mnt/winE/tools dir/idalib-mcp.exe" if False else True
-    # 含空格路径必须整体保留(而不是被 shell 拆开)
+    # 真实断言:Windows 路径必须被转换成默认盘符挂载下的 WSL 路径(含空格不拆)
+    assert exe == "/mnt/e/tools dir/idalib-mcp.exe", exe
     assert " " in stage and " " in win_stage
 
 

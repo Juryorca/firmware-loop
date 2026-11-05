@@ -5,7 +5,9 @@
 set -u
 IDA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [ -z "${FW_IDA_STAGE:-}" ]; then
+# 总是解析一次配置:显式环境变量由 fw-core 自己优先(它读同一批 env),
+# 这样只设置 FW_IDA_STAGE 也不会丢掉 URL/INSTANCES 等其它键。
+if [ "${FW_IDA_NO_CONFIG:-0}" != "1" ]; then
   _cfg="$(cd "$IDA_ROOT" && PYTHONPATH="$IDA_ROOT" python3 -m fwcore ida-env --sh 2>/dev/null)" || _cfg=""
   if [ -z "$_cfg" ]; then
     echo "配置不可用: 无法运行 'fw-core ida-env --sh'(需要 python3 与 fwcore 仓库)" >&2
