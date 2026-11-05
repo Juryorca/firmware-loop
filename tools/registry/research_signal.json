@@ -18,9 +18,6 @@
     "tools/parse_signal.py",
     "{log}"
   ],
-  "split_args": [
-    "log"
-  ],
   "timeout": 60,
   "observer": "research_signal",
   "capability": "signal.parse",

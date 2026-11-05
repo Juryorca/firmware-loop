@@ -343,9 +343,12 @@ def inventory(root: str) -> list[dict]:
     # 工具 manifest 是"能力 → 工具"的单一来源:这里只读,不重复维护清单
     from .toolreg import capability_index
 
+    from .toolreg import select_tool
+
     tools = capability_index(root)
     for row in out:
         own = tools.get(row["capability"]) or []
         if own:
             row["tools"] = own
+            row["selection"] = select_tool(root, row["capability"])
     return out

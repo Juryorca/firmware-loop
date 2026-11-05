@@ -83,6 +83,8 @@ class Manifest:
     capability: str | None = None
     provider: str | None = None
     observer: str | None = None           # toolkit.OBSERVERS 的键(结构化观测)
+    # 同能力多工具时的选择优先级(数值小优先);仅在选择阶段用,注册本身不选
+    priority: int = 100
     cwd: str | None = None
     env: dict[str, str] = field(default_factory=dict)
     requires_file: str | None = None      # 脚本/入口文件不存在 ⇒ 该工具不注册(能力缺失如实报)
@@ -155,9 +157,52 @@ def load_manifests(paths: list[str] | str) -> tuple[list[Manifest], list[dict]]:
 
 # ---------------------------------------------------------------- 进程执行
 
+def _proc_starttime(pid: int) -> int | None:
+    """读 /proc/<pid>/stat 第 22 字段:登记 pgid 时一起记下,杀组前核对可防 pid 复用误杀。"""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as f:
+            tail = f.read().rsplit(")", 1)[-1].split()
+        return int(tail[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+def _register_pgid(ctx: ToolContext, art: str, pgid: int, pid: int) -> None:
+    """把工具进程组登记到 `state/artifacts/<run>/.pgids`(与 shell_exec 同一格式),
+    这样**独立 Watchdog** 在主进程被杀后仍能整组清理。"""
+    targets = {art}
+    if ctx.run_id:
+        targets.add(os.path.join(ctx.root, "state", "artifacts", ctx.run_id))
+    for d in targets:
+        with contextlib.suppress(OSError):
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, ".pgids"), "a", encoding="utf-8") as f:
+                f.write(f"{pgid} {_proc_starttime(pid) or 0}\n")
+
+
+def _cap_output(path: str, max_bytes: int) -> bool:
+    """把超大输出截成"尾部 max_bytes"(带一行标记);返回是否截断。"""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return False
+    if max_bytes <= 0 or size <= max_bytes:
+        return False
+    try:
+        with open(path, "rb") as f:
+            f.seek(size - max_bytes)
+            tail = f.read()
+        with open(path, "wb") as f:
+            f.write(f"[fwcore] 输出超过 {max_bytes} 字节,已截断,仅保留尾部\n".encode())
+            f.write(tail)
+    except OSError:
+        return False
+    return True
+
+
 def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str | None = None,
                 env: dict[str, str] | None = None, cancel_check: Callable[[], bool] | None = None,
-                ) -> dict:
+                max_output_bytes: int = 8 * 1024 * 1024) -> dict:
     """跑一个外部程序(统一执行语义):独立进程组 + 取消即杀组 + 产物落盘 + sha256。
 
     与 `tools.shell_exec` 的差别:这里接受 **argv 列表**(不经 shell 解析),
@@ -188,30 +233,41 @@ def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str |
             except OSError as e:
                 return {"status": "error", "error": f"启动失败: {e}",
                         "stdout_path": op, "stderr_path": ep}
+            with contextlib.suppress(OSError):
+                _register_pgid(ctx, art, os.getpgid(proc.pid), proc.pid)
             deadline = time.time() + float(timeout)
-            while True:
-                slice_s = max(0.02, min(0.2, deadline - time.time()))
-                try:
-                    proc.wait(timeout=slice_s)
-                    code = proc.returncode
-                    status = "ok" if code == 0 else (
-                        "cancelled" if (cancel_check and cancel_check()) else "error")
-                    break
-                except subprocess.TimeoutExpired:
-                    if cancel_check and cancel_check():
-                        _kill_group(proc)
-                        with contextlib.suppress(Exception):
-                            proc.wait(timeout=2)
-                        status = "cancelled"
+            try:
+                while True:
+                    slice_s = max(0.02, min(0.2, deadline - time.time()))
+                    try:
+                        proc.wait(timeout=slice_s)
+                        code = proc.returncode
+                        status = "ok" if code == 0 else (
+                            "cancelled" if (cancel_check and cancel_check()) else "error")
                         break
-                    if time.time() >= deadline:
-                        _kill_group(proc)
-                        status = "timeout"
-                        break
+                    except subprocess.TimeoutExpired:
+                        if cancel_check and cancel_check():
+                            _kill_group(proc)
+                            with contextlib.suppress(Exception):
+                                proc.wait(timeout=2)
+                            status = "cancelled"
+                            break
+                        if time.time() >= deadline:
+                            _kill_group(proc)
+                            status = "timeout"
+                            break
+            except BaseException:                 # 被 Ctrl-C/信号打断:整组杀掉再抛出,不留孤儿
+                _kill_group(proc)
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=2)
+                raise
     except OSError as e:
         return {"status": "error", "error": f"无法写输出文件: {e}"}
+    tr_o = _cap_output(op, max_output_bytes)
+    tr_e = _cap_output(ep, max_output_bytes)
     return {"status": status, "exit_code": code, "stdout_path": op, "stderr_path": ep,
-            "stdout_sha256": sha256_file(op), "stderr_sha256": sha256_file(ep)}
+            "stdout_sha256": sha256_file(op), "stderr_sha256": sha256_file(ep),
+            "output_truncated": bool(tr_o or tr_e)}
 
 
 def num(value: Any, default: float) -> float:
@@ -315,22 +371,44 @@ class ScriptAdapter(Adapter):
     """把参数填进 argv 模板:`{name}` 占位;`split_args` 里的占位符按 shell 规则拆开。"""
 
     def build_argv(self, m: Manifest, args: dict) -> list[str]:
-        def sub(part: str) -> list[str]:
-            out: list[str] = []
-            for name, val in args.items():
-                tok = "{" + name + "}"
-                if tok in part:
-                    val_s = "" if val is None else str(val)
-                    if name in m.split_args:
-                        out.extend(shlex.split(val_s))
-                    else:
-                        part = part.replace(tok, val_s)
-            out.append(part)
-            return out
+        """把参数填进 argv 模板。
 
+        规则(明确,避免"多塞一个原样占位符"):
+        - `{name}` 普通占位:就地替换;整个 part 就是占位符且值为空 ⇒ 保留空参数(与原语义一致)
+        - `split_args` 里的占位符:值按 shell 规则拆成多个 argv;
+          占位符**独占一个 part** ⇒ 直接展开为多个 argv(不再追加 `{name}`);
+          占位符与字面量混在同一 part(`--x={args}`)⇒ 第一个 token 就地替换,其余追加为独立参数
+        - 拆不出 token(值为空)⇒ 该 part 不产生参数
+        """
         argv: list[str] = []
         for part in m.argv or []:
-            argv.extend(sub(part))
+            whole_split = False
+            had_nonsplit = False
+            rest: list[str] = []
+            for name, val in args.items():
+                tok = "{" + name + "}"
+                if tok not in part:
+                    continue
+                val_s = "" if val is None else str(val)
+                if name in m.split_args:
+                    tokens = shlex.split(val_s)
+                    if part == tok:
+                        argv.extend(tokens)
+                        whole_split = True
+                        part = ""
+                    elif tokens:
+                        part = part.replace(tok, tokens[0])
+                        rest.extend(tokens[1:])      # 混合形式:其余 token 排在 part 之后
+                    else:
+                        part = part.replace(tok, "")
+                else:
+                    had_nonsplit = True
+                    part = part.replace(tok, val_s)
+            if whole_split:
+                continue                      # 已展开成多个 argv,不能再追加原模板
+            if part or had_nonsplit:
+                argv.append(part)             # 非 split 的值可以是空串(保留参数位)
+            argv.extend(rest)
         return argv
 
     def call(self, ctx: ToolContext, m: Manifest, args: dict) -> dict:
@@ -454,6 +532,7 @@ def build_spec(reg: Registry, root: str, m: Manifest) -> ToolSpec:
     spec = ToolSpec(name=m.name, description=m.description, input_schema=m.input_schema,
                     handler=handler, risk=m.risk, requires=m.requires, external=m.external)
     spec.manifest = m          # 审计用:这个工具从哪来、依赖什么(运行时不再读)
+    spec.adapter_instance = adapter   # 生命周期由**拥有它的 Registry** 管(见 close_feature_adapters)
     reg.register(spec)
     return spec
 
@@ -500,17 +579,61 @@ def register_manifests(reg: Registry, root: str, *, dirs: list[str] | None = Non
         skipped.extend(bad)
     registered: list[str] = []
     unavailable: list[dict] = []
+    overridden: list[dict] = []
+    seen: dict[str, str] = {}
     for m in manifests:
+        # 同名 manifest:靠前的目录(工作区)优先,后面的只记录被覆盖,**不重复注册**(会抛重名)
+        if m.name in seen:
+            overridden.append({"name": m.name, "kept": seen[m.name], "dropped": m.source})
+            continue
         if m.requires_file and not os.path.isfile(os.path.join(root, m.requires_file)):
-            unavailable.append({"name": m.name, "reason": f"缺少入口 {m.requires_file}"})
+            seen[m.name] = m.source
+            unavailable.append({"name": m.name, "reason": f"缺少入口 {m.requires_file}",
+                                "source": m.source})
             continue
         try:
             build_spec(reg, root, m)
             registered.append(m.name)
-        except (ManifestError, OSError, ImportError) as e:
-            unavailable.append({"name": m.name, "reason": f"{type(e).__name__}: {e}"})
+            seen[m.name] = m.source
+        except (ManifestError, OSError, ImportError, ValueError, TypeError) as e:
+            seen[m.name] = m.source
+            unavailable.append({"name": m.name, "reason": f"{type(e).__name__}: {e}",
+                                "source": m.source})
     return {"registered": registered, "unavailable": unavailable, "skipped": skipped,
-            "dirs": dirs}
+            "overridden": overridden, "dirs": dirs}
+
+
+def select_tool(root: str, capability: str, *, dirs: list[str] | None = None) -> dict | None:
+    """在**同一能力**的多个工具里做确定性选择(索引只是清单,不构成选择)。
+
+    规则:先过滤不可用的(缺入口),再按 manifest `priority`(小者优先),最后按 manifest 名排序
+    (避免依赖文件系统顺序而漂移)。返回被选中的条目(含 reason),没有可用者返回 None。
+    """
+    if dirs is None:
+        dirs = default_registry_dirs(root)
+    manifests: list[Manifest] = []
+    for d in dirs:
+        if os.path.isdir(d):
+            manifests.extend(load_manifests(d)[0])
+    cands = []
+    for m in manifests:
+        if m.capability != capability:
+            continue
+        available = not (m.requires_file and not os.path.isfile(os.path.join(root, m.requires_file)))
+        cands.append((available, int(m.priority), m.name, m))
+    if not cands:
+        return None
+    available = [c for c in cands if c[0]]
+    if not available:
+        return {"capability": capability, "selected": None,
+                "reason": "该能力下没有可用工具(入口缺失)",
+                "candidates": [{"tool": c[2], "available": False, "priority": c[1]} for c in cands]}
+    available.sort(key=lambda c: (c[1], c[2]))
+    chosen = available[0]
+    return {"capability": capability, "selected": chosen[2], "provider": chosen[3].provider,
+            "priority": chosen[1],
+            "reason": f"可用且 priority={chosen[1]} 最小(同优先级按名排序)",
+            "candidates": [{"tool": c[2], "available": c[0], "priority": c[1]} for c in cands]}
 
 
 def capability_index(root: str, *, dirs: list[str] | None = None) -> dict[str, list[dict]]:
@@ -528,21 +651,33 @@ def capability_index(root: str, *, dirs: list[str] | None = None) -> dict[str, l
         available = not (m.requires_file and not os.path.isfile(os.path.join(root, m.requires_file)))
         out.setdefault(m.capability, []).append(
             {"tool": m.name, "provider": m.provider or m.source, "available": available,
-             "kind": m.kind})
+             "kind": m.kind, "priority": int(m.priority)})
     return out
 
 
 def close_feature_adapters(reg: Registry) -> None:
-    """收尾(如停 Windows IDA supervisor):只关 manifest 声明过的特色适配器。"""
+    """收尾:关**注册时创建的**特色适配器实例(绝不新建实例去"关"别的东西)。
+
+    特色适配器可能有共享状态(如 Windows IDA supervisor 被多个研究会话共用),所以:
+    - 只关注册表里真实存在的实例(幂等);
+    - 是否真的停共享资源由适配器自己决定(IdAdapter.close 默认不停);
+    - 重复调用安全。
+    """
+    closed: set[int] = getattr(reg, "closed_adapters", set())
     for spec in list(reg.specs.values()):
         m = getattr(spec, "manifest", None)
         if m is None or m.kind != "feature":
             continue
+        inst = getattr(spec, "adapter_instance", None)
+        if inst is None or id(inst) in closed:
+            continue                       # 没实例/已关过 ⇒ 什么都不做(而不是造一个)
+        closed.add(id(inst))
         with contextlib.suppress(Exception):
-            feature_adapter(m.adapter or "", "").close()
+            inst.close()
+    reg.closed_adapters = closed           # 幂等:重复调用不会重复 close
 
 
-__all__ = ["Manifest", "ManifestError", "load_manifests", "register_manifests",
+__all__ = ["Manifest", "ManifestError", "load_manifests", "register_manifests", "select_tool",
            "build_spec", "run_process", "sha256_file", "capability_index",
            "register_feature", "feature_adapter", "FeatureAdapter", "PythonAdapter",
            "ScriptAdapter", "Adapter", "close_feature_adapters"]

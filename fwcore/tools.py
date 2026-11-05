@@ -41,6 +41,8 @@ class ToolSpec:
     external: bool = False   # 外网/登录态/公开提交:永远需要人类确认(high 需要人类确认,见 Runner)
     # manifest:该工具来自哪个声明(fwcore/toolreg.py);核心工具为 None。仅审计用,运行时不读。
     manifest: object | None = None
+    # adapter_instance:该工具的适配器实例(拥有它的 Registry 负责 close;见 toolreg)
+    adapter_instance: object | None = None
 
 
 @dataclass
@@ -60,6 +62,8 @@ class Registry:
     specs: dict[str, ToolSpec] = field(default_factory=dict)
     # 注册报告(manifest 来源):registered / unavailable / skipped。空 = 还没做过 manifest 装载。
     registration: dict = field(default_factory=dict)
+    # 已 close 过的特色适配器实例 id(close_feature_adapters 幂等用)
+    closed_adapters: set = field(default_factory=set)
 
     NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -183,7 +187,7 @@ def _proc_starttime(pid: int) -> int | None:
         return None
 
 
-def _kill_group(proc: "subprocess.Popen") -> None:
+def _kill_group(proc: subprocess.Popen) -> None:
     """杀整个进程组(含子进程),并等待回收。"""
     import signal
 
