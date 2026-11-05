@@ -126,3 +126,37 @@ def test_cli_verify_and_status_are_real_path(tmp_path):
     assert r.returncode == 0, r.stderr[-400:]
     st = json.loads(cli("evidence", "status", ev).stdout)
     assert st["verified"] is True and st["checks"][0]["method"] == "recheck-sha256"
+
+
+def test_hash_only_verification_cannot_support_vulnerable(tmp_path):
+    """只做 recheck-sha256(产物完整性)⇒ 不能给 vulnerable 结论当证明。"""
+    con, dom, root = _setup(tmp_path)
+    hid, aid, ev, _rel = _evidence_with_file(dom, root)
+    dom.finish_attempt(aid, "supported", "复现成功", obs_outcome="none",
+                       obs_reason="与预期一致,无新观察")
+    dom.verify_evidence(ev, "recheck-sha256")
+    assert dom.evidence_status(ev)["verified"] is True
+    with pytest.raises(InvariantViolation) as e:
+        dom.conclude(hid, "vulnerable", "仅 /cgi-bin/x 的参数 a")
+    assert "完整性" in str(e.value)
+    sup = dom.conclusion_support(hid)
+    assert sup["integrity_only"] is True and sup["integrity"] == ["recheck-sha256"]
+
+    # 用因果复核补上(关联 supported 复现)⇒ 才能下 vulnerable
+    dom.verify_evidence(ev, "reproduce-attempt", attempt_id=aid)
+    assert dom.conclusion_support(hid)["causal"] == ["reproduce-attempt"]
+    assert dom.conclude(hid, "vulnerable", "仅 /cgi-bin/x 的参数 a")
+
+
+def test_gates_flag_integrity_only_vulnerable(tmp_path):
+    from fwcore.gates_db import evaluate
+
+    con, dom, root = _setup(tmp_path)
+    hid, aid, ev, _rel = _evidence_with_file(dom, root)
+    dom.finish_attempt(aid, "supported", "ok", obs_outcome="none", obs_reason="与预期一致,无新观察")
+    dom.verify_evidence(ev, "recheck-sha256")
+    # 绕过 domain 直接写结论,模拟导入/历史数据 ⇒ gates 必须报出来
+    con.execute("UPDATE hypotheses SET state='concluded', verdict='vulnerable', scope_note='仅 parse()'"
+                " WHERE id=?", (hid,))
+    rep = evaluate(con, root, "t1")
+    assert any("完整性" in b for b in rep.blockers), rep.blockers

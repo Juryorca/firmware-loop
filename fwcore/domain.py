@@ -59,7 +59,7 @@ def _sha256_file(path: str) -> str:
 
 
 def _now() -> str:
-    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
 
 
 def new_id(prefix: str) -> str:
@@ -413,6 +413,12 @@ class Domain:
         return eid
 
     METHODS = ("recheck-sha256", "reproduce-attempt", "cross-check")
+    # 复核方法的证明力分级(硬):
+    #   recheck-sha256   = **产物完整性**:只能说明"这份文件没变",不能说明"漏洞成立"
+    #   cross-check      = 与另一来源/产物对照过(有 artifact + 比对说明)
+    #   reproduce-attempt= 关联一次 supported 的复现尝试(最强:有过程记录可重跑)
+    INTEGRITY_METHODS = ("recheck-sha256",)
+    CAUSAL_METHODS = ("reproduce-attempt", "cross-check")
 
     def verify_evidence(self, ev_id: str, method: str, *, artifact: str | None = None,
                         attempt_id: str | None = None, detail: str = "") -> str:
@@ -492,6 +498,20 @@ class Domain:
                 "`verify_evidence(method='cross-check', artifact=...)` 给出可检查的产物")
         self.verify_evidence(ev_id, "cross-check", artifact=ev["path"], detail=note)
 
+    def conclusion_support(self, hid: str) -> dict:
+        """该假设名下证据的证明力摘要(integrity / causal),供 gates/报告如实标注。"""
+        rows = self.con.execute(
+            "SELECT e.id, c.method FROM evidence e LEFT JOIN evidence_checks c ON c.evidence_id=e.id"
+            " WHERE e.hypothesis_id=? OR e.attempt_id IN (SELECT id FROM attempts WHERE hypothesis_id=?)",
+            (hid, hid)).fetchall()
+        methods = {r["method"] for r in rows if r["method"]}
+        return {
+            "evidence": len({r["id"] for r in rows}),
+            "integrity_only": bool(methods) and not (methods & set(self.CAUSAL_METHODS)),
+            "causal": sorted(methods & set(self.CAUSAL_METHODS)),
+            "integrity": sorted(methods & set(self.INTEGRITY_METHODS)),
+        }
+
     def evidence_status(self, ev_id: str) -> dict:
         """证据的复核状态与全部检查记录(审计用)。"""
         ev = self.con.execute("SELECT * FROM evidence WHERE id=?", (ev_id,)).fetchone()
@@ -537,6 +557,16 @@ class Domain:
             raise InvariantViolation("判 inconclusive 需要一次明确 inconclusive 的尝试")
         if verdict == "vulnerable" and ev == 0:
             raise InvariantViolation("判 vulnerable 必须挂证据")
+        ev_causal = self.con.execute(
+            "SELECT COUNT(*) n FROM evidence_checks c JOIN evidence e ON e.id=c.evidence_id"
+            " WHERE c.method IN ('reproduce-attempt','cross-check') AND e.verified=1"
+            "   AND (e.hypothesis_id=? OR e.attempt_id IN"
+            "        (SELECT id FROM attempts WHERE hypothesis_id=?))", (hid, hid)).fetchone()["n"]
+        if verdict == "vulnerable" and ev_verified and not ev_causal:
+            raise InvariantViolation(
+                "证据只做了**产物完整性**复核(recheck-sha256):哈希没变 ≠ 漏洞成立。"
+                "要用 reproduce-attempt(关联 supported 复现)或 cross-check(带可比对产物与说明)"
+                "把证据和观察/复现连起来")
         if verdict == "vulnerable" and ev_verified == 0:
             raise InvariantViolation(
                 f"证据 {ev} 条但**没有一条经研究复核**(工具跑成功 ≠ 漏洞成立):"

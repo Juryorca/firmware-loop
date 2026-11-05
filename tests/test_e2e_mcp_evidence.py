@@ -104,8 +104,10 @@ class ChainModel:
                 "obs_reason": "与预期一致,无新观察"})
         if self.stage == 5 and "evidence_id" in self.ids:
             self.stage += 1
+            # 用"关联复现尝试"复核(causal),不是只做哈希完整性检查
             return self._call("state_verify_evidence", {
-                "evidence_id": self.ids["evidence_id"], "method": "recheck-sha256"})
+                "evidence_id": self.ids["evidence_id"], "method": "reproduce-attempt",
+                "attempt_id": self.ids["attempt_id"]})
         if self.stage == 6:
             self.stage += 1
             return self._call("state_conclude", {
@@ -151,7 +153,7 @@ def test_mcp_to_conclusion_end_to_end(tmp_path):
     # ③ 复核是可检查记录(recheck-sha256),而不是一句声明
     assert ev["verified"] == 1
     chk = con.execute("SELECT * FROM evidence_checks WHERE evidence_id=?", (ev["id"],)).fetchone()
-    assert chk["method"] == "recheck-sha256" and chk["artifact_sha256"] == ev["sha256"]
+    assert chk["method"] == "reproduce-attempt" and chk["attempt_id"]
 
     # ④ 结论成立且 gates 不再因此报阻塞
     hyp = con.execute("SELECT verdict, scope_note FROM hypotheses").fetchone()

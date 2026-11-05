@@ -110,6 +110,16 @@ def evaluate(con, root: str, target: str) -> GateReport:
     unverified = [r["id"] for r in con.execute(
         "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'"
         "   AND (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1)=0", (t.id,))]
+    integrity_only = [r["id"] for r in con.execute(
+        "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'"
+        "   AND EXISTS (SELECT 1 FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1)"
+        "   AND NOT EXISTS (SELECT 1 FROM evidence_checks c JOIN evidence e ON e.id=c.evidence_id"
+        "                   WHERE c.method IN ('reproduce-attempt','cross-check') AND e.verified=1"
+        "                     AND (e.hypothesis_id=h.id OR e.attempt_id IN"
+        "                          (SELECT id FROM attempts WHERE hypothesis_id=h.id)))", (t.id,))]
+    if integrity_only:
+        rep.blockers.append(f"{len(integrity_only)} 条 vulnerable 结论只有**产物完整性**复核"
+                            f"(哈希没变 ≠ 漏洞成立): {integrity_only[:3]}")
     if unverified:
         rep.blockers.append(f"{len(unverified)} 条 vulnerable 结论只有未复核证据(工具输出)"
                             f"⇒ 先复核再收: {unverified[:3]}")

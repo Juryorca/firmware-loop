@@ -72,7 +72,7 @@ def test_found_task_requires_evidence_linked_to_conclusion(tmp_path):
     dom.finish_attempt(aid, "supported", "ok", obs_outcome="none",
                        obs_reason="行为与预期一致,无新观察")
     ev = con.execute("SELECT id FROM evidence WHERE hypothesis_id=?", (hid,)).fetchone()["id"]
-    dom.verify_evidence(ev, "recheck-sha256")      # 可检查:重算产物哈希
+    dom.verify_evidence(ev, "reproduce-attempt", attempt_id=aid)   # causal:关联 supported 复现
     dom.conclude(hid, "vulnerable", "仅 parse() 处")
     # 模拟历史/外部写入:把证据的 hypothesis_id 清掉(结论与证据失去因果关联)
     con.execute("UPDATE evidence SET hypothesis_id=NULL")

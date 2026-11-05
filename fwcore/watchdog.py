@@ -150,8 +150,11 @@ class Watchdog:
                                            ("owner_dead", owner_dead)) if hit]
             if hard:
                 killed = self._kill_pgids(r["id"])
+                why = "owner_dead" if "owner_dead" in hard else ",".join(hard)
                 with _db.Tx(con) as c:
-                    c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
+                    # 交回原因要写下来:下一个进程 resume 时才知道"为什么被停下"
+                    c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=? WHERE id=?",
+                              (f"watchdog_paused: {why}", _now(), r["id"]))
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
                                json.dumps({"hard": hard, "checkpoints": n_ck, "db_bytes": size,
@@ -183,7 +186,9 @@ class Watchdog:
                         continue
                 killed = self._kill_pgids(r["id"])
                 with _db.Tx(con) as c:
-                    c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), r["id"]))
+                    c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=? WHERE id=?",
+                              (f"watchdog_paused: stale {round(now - hb, 1) if hb else 'unknown'}s",
+                               _now(), r["id"]))
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
                                json.dumps({"stale_s": round(now - hb, 1) if hb else None,

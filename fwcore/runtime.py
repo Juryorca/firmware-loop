@@ -72,7 +72,7 @@ class Runner:
                  max_steps: int | None = None, timeout: float = 60.0, policy: Policy | None = None,
                  research: Research | None = None, max_seconds: float | None = None,
                  stall_repeats: int = 3, limits: Limits | None = None,
-                 prepare: "Callable[[dict], dict] | None" = None, prepare_timeout: float = 15.0,
+                 prepare: Callable[[dict], dict] | None = None, prepare_timeout: float = 15.0,
                  watchdog: bool = False, watchdog_poll_s: float = 5.0,
                  watchdog_heartbeat_timeout: float = 900.0,
                  mcp: bool = False, mcp_config_paths: list[str] | None = None,
@@ -119,18 +119,29 @@ class Runner:
         self.research = research or Research(root, self.domain)
 
     # ---------------- 运行生命周期 ----------------
+    def _load_authorization(self, target: str) -> None:
+        """按目标加载研究授权(幂等)。**每个入口**都要做:新进程里没有构造时的那份 policy。
+
+        `start()` 之前只有构造参数;`resume()`/`advance(run_id=...)` 是**新进程**接着跑,
+        如果不在这里加载,新进程会以为"没有授权"⇒ 不启动 MCP/拒绝高风险工具 = 恢复不完整。
+        """
+        if self.policy.authorization is not None:
+            return
+        from . import authz as _authz
+
+        az = _authz.load(self.root, target)
+        if az is None:
+            return
+        self.policy = Policy(authorization=az, confirm=self.policy.confirm,
+                             max_timeout=self.policy.max_timeout,
+                             sandbox_roots=self.policy.sandbox_roots)
+        _authz.audit(self.con, "authz.loaded", target,
+                     {"roots": len(az.roots), "active": az.active(),
+                      "mcp": az.allow_mcp, "external_mcp": az.allow_external_mcp})
+
     def start(self, target: str, goal: str | None = None) -> str:
         t = self.domain.target(target)
-        if self.policy.authorization is None:
-            from . import authz as _authz
-
-            az = _authz.load(self.root, target)
-            if az is not None:
-                self.policy = Policy(authorization=az, confirm=self.policy.confirm,
-                                     max_timeout=self.policy.max_timeout,
-                                     sandbox_roots=self.policy.sandbox_roots)
-                _authz.audit(self.con, "authz.loaded", target, {"roots": len(az.roots),
-                                                               "active": az.active()})
+        self._load_authorization(target)
         # 授权已确定 ⇒ 这时才允许启动 MCP(启动有副作用:子进程/外网/登录态)
         self._ensure_mcp()
         rid = new_id("R")
@@ -565,6 +576,9 @@ class Runner:
                 run_id: str | None = None, history: list[dict] | None = None) -> RunResult:
         """持续推进,直到:收尾前置全清 / 需要用户输入 / 用完轮次预算。"""
         rid = run_id or self.start(target, goal)
+        if run_id:
+            self._load_authorization(target)      # 新进程接着跑:授权/MCP 必须恢复
+            self._ensure_mcp()
         hist = list(history or [])
         try:
             return self._advance_loop(rid, target, goal, hist, max_rounds)
@@ -621,9 +635,12 @@ class Runner:
             history = []
             with _db.Tx(self.con) as c:
                 _event(c, "run.checkpoint_corrupt", rid, {"error": str(e)[:200]})
+        self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
+        self._ensure_mcp()
         with _db.Tx(self.con) as c:
             c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
-            _event(c, "run.resumed", rid, {"step": row["step"]})
+            _event(c, "run.resumed", rid, {"step": row["step"],
+                                           "mcp": bool(self.mcp_bridge and not self.mcp_bridge.closed)})
         try:
             return self.turn(rid, row["target_name"], goal or row["goal"], history, budget)
         finally:
