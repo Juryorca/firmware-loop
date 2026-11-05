@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 用法: ida_tools.sh —— 列出可用的 MCP 工具与参数说明
-BASE_URL="${IDA_MCP_URL:-http://127.0.0.1:8745/mcp}"
+source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
+BASE_URL="$FW_IDA_URL"
 H=$(curl -s --noproxy '*' --max-time 10 -i -X POST "$BASE_URL" \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"fc","version":"1"}}}')

@@ -93,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--no-shell", action="store_true"); g.add_argument("--no-high-risk", action="store_true")
     rv = sp.add_parser("revoke"); rv.add_argument("target"); rv.add_argument("--reason", default="")
     sh = sp.add_parser("show"); sh.add_argument("target")
+    p = sub.add_parser("ida-env", help="IDA/Windows 接入配置(单一来源;可导出给 shell)")
+    p.add_argument("--sh", action="store_true", help="输出 export 语句(供 tools/ida_*.sh eval)")
     p = sub.add_parser("watchdog", help="独立看护进程(主进程崩了也能兜住)")
     p.add_argument("--once", action="store_true", help="只扫一轮后退出(测试/定时任务用)")
     p.add_argument("--poll", type=float, default=5.0)
@@ -200,6 +202,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(d, ensure_ascii=False, indent=2))
             else:
                 print(json.dumps(_authz.describe(args.root, args.target), ensure_ascii=False, indent=2))
+        elif args.cmd == "ida-env":
+            from .winenv import load as _ida_load
+
+            cfg = _ida_load(args.root)
+            if args.sh:
+                print(cfg.shell_exports())
+            else:
+                print(json.dumps(cfg.describe(), ensure_ascii=False, indent=2))
         elif args.cmd == "watchdog":
             import signal as _signal
             import threading as _th

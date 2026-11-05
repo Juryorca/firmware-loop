@@ -564,6 +564,12 @@ class Runner:
         if self.mcp_bridge is not None:
             with contextlib.suppress(Exception):
                 self.mcp_bridge.close()
+        # 特色适配器(如 IDA)的收尾挂在 **Runner 生命周期**上,而不是只在单测里单独调用。
+        # 幂等;是否真的停共享资源由适配器自己按配置决定(IDA 默认不停)。
+        with contextlib.suppress(Exception):
+            from .toolreg import close_feature_adapters
+
+            close_feature_adapters(self.registry)
 
     # ---------------- 自动继续 ----------------
     def run(self, rid: str, target: str, goal: str | None = None, history: list[dict] | None = None,

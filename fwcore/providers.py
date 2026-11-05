@@ -225,28 +225,27 @@ def system_tool_provider(name: str, extra: list[str] | None = None, version_arg:
 
 
 def windows_ida_provider(root: str) -> Provider:
-    """复用现有 IDA 生命周期封装(tools/ida_*.sh),不另造接口。"""
-    idat = "/mnt/d/ida9.3/idat.exe"
+    """复用现有 IDA 生命周期封装(tools/ida_*.sh),配置来自 winenv(单一来源)。"""
+    from .winenv import load as _ida_load
 
     def probe() -> Probe:
-        if not os.path.isfile(idat):
-            return Probe(MISSING, f"缺 {idat}")
-        stage = "/mnt/d/ida_test"
-        try:
-            if not os.path.isdir(stage) or not os.access(stage, os.W_OK):
-                return Probe(NOT_STARTED, f"{stage} 不可写")
-            ports = glob.glob(os.path.join(stage, ".port-*"))
-        except OSError as e:
-            return Probe(NOT_STARTED, f"暂存区不可读: {e}")
-        started = bool(ports)
+        cfg = _ida_load(root)
+        problems = cfg.problems()
+        if problems:
+            # 缺安装/缺暂存目录/挂载点不对 ⇒ 明确说是**环境配置**问题(不是 IDA 分析失败)
+            return Probe(MISSING if "不存在" in problems[0] else NOT_STARTED,
+                         "; ".join(problems)[:300], path=cfg.mcp_exe)
+        started = bool(glob.glob(os.path.join(cfg.stage, ".port-*")))
         return Probe(READY if started else NOT_STARTED,
                      "IDA supervisor 已启动(端口文件存在)" if started
-                     else "IDA 未启动(用 tools/ida_start.sh,不要另造)",
-                     path=idat, evidence="reachable" if started else "configured")
+                     else f"IDA 未启动(用 tools/ida_start.sh;配置来源 {cfg.source})",
+                     path=cfg.mcp_exe, evidence="reachable" if started else "configured")
 
     def resolve() -> dict:
-        return {"argv_prefix": ["bash", os.path.join(root, "tools/ida_call.sh")], "lifecycle":
-                os.path.join(root, "tools/ida_start.sh")}
+        cfg = _ida_load(root)
+        return {"argv_prefix": ["bash", os.path.join(root, "tools/ida_call.sh")],
+                "lifecycle": os.path.join(root, "tools/ida_start.sh"),
+                "stage": cfg.stage, "url": cfg.url, "config_source": cfg.source}
 
     return Provider(id="ida-windows-wsl", kind="windows", resolve=resolve, probe=probe)
 
@@ -341,9 +340,7 @@ def inventory(root: str) -> list[dict]:
                     "best_status": best_probe.status if best_probe else MISSING,
                     "providers": entries})
     # 工具 manifest 是"能力 → 工具"的单一来源:这里只读,不重复维护清单
-    from .toolreg import capability_index
-
-    from .toolreg import select_tool
+    from .toolreg import capability_index, select_tool
 
     tools = capability_index(root)
     for row in out:
