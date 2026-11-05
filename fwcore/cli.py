@@ -69,9 +69,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("conclude"); p.add_argument("hypothesis"); p.add_argument("verdict")
     p.add_argument("--scope", required=True)
 
-    p = sub.add_parser("authz", help="显示当前授权口径与**真实隔离级别**(不把 cwd 检查说成沙箱)")
-    p.add_argument("--roots", nargs="*", default=["."])
-    p.add_argument("--isolation", default="none", choices=["none", "chroot", "container", "bwrap"])
+    p = sub.add_parser("authz", help="研究授权:grant / revoke / show(按目标、可过期、可撤销)")
+    sp = p.add_subparsers(dest="authz_cmd", required=True)
+    g = sp.add_parser("grant"); g.add_argument("target"); g.add_argument("--roots", nargs="+", required=True)
+    g.add_argument("--hours", type=float, default=8.0); g.add_argument("--note", default="")
+    g.add_argument("--no-shell", action="store_true"); g.add_argument("--no-high-risk", action="store_true")
+    rv = sp.add_parser("revoke"); rv.add_argument("target"); rv.add_argument("--reason", default="")
+    sh = sp.add_parser("show"); sh.add_argument("target")
     p = sub.add_parser("progress", help="结构化进度快照(只读,给外部监控/Pi 适配器)")
     p.add_argument("run_id")
     p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
@@ -139,9 +143,19 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "conclude":
             print(dom.conclude(args.hypothesis, args.verdict, args.scope))
         elif args.cmd == "authz":
-            from .policy import Authz
-            az = Authz(roots=[os.path.abspath(r) for r in args.roots], isolation=args.isolation)
-            print(json.dumps(az.describe(), ensure_ascii=False, indent=2))
+            from . import authz as _authz
+            if args.authz_cmd == "grant":
+                d = _authz.grant(args.root, args.target, roots=list(args.roots), hours=args.hours,
+                                 note=args.note, allow_shell=not args.no_shell,
+                                 allow_high_risk=not args.no_high_risk)
+                _authz.audit(con, "authz.granted", args.target, {"roots": d["roots"], "hours": args.hours})
+                print(json.dumps(d, ensure_ascii=False, indent=2))
+            elif args.authz_cmd == "revoke":
+                d = _authz.revoke(args.root, args.target, args.reason)
+                _authz.audit(con, "authz.revoked", args.target, {"reason": args.reason})
+                print(json.dumps(d, ensure_ascii=False, indent=2))
+            else:
+                print(json.dumps(_authz.describe(args.root, args.target), ensure_ascii=False, indent=2))
         elif args.cmd == "progress":
             from .models import ScriptedAdapter
 

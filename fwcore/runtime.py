@@ -123,6 +123,16 @@ class Runner:
     # ---------------- 运行生命周期 ----------------
     def start(self, target: str, goal: str | None = None) -> str:
         t = self.domain.target(target)
+        if self.policy.authorization is None:
+            from . import authz as _authz
+
+            az = _authz.load(self.root, target)
+            if az is not None:
+                self.policy = Policy(authorization=az, confirm=self.policy.confirm,
+                                     max_timeout=self.policy.max_timeout,
+                                     sandbox_roots=self.policy.sandbox_roots)
+                _authz.audit(self.con, "authz.loaded", target, {"roots": len(az.roots),
+                                                               "active": az.active()})
         rid = new_id("R")
         now = _now()
         with _db.Tx(self.con) as c:
@@ -198,7 +208,8 @@ class Runner:
         —— 超时的任务仍在跑 ⇒ 主流程照样被拖死 ✗(实测过)。
         语义界定:Python 线程不可强杀 ⇒ 我们能保证的是"**主 Agent 不被拖死 + 迟到结果不被采纳**"。
         """
-        if not self.prepare:
+        prep = self.prepare
+        if prep is None:
             return {}
         import threading
 
@@ -208,7 +219,7 @@ class Runner:
 
         def _call():
             try:
-                box["out"] = self.prepare(payload)
+                box["out"] = prep(payload)
             except Exception as e:                      # 钩子自己坏了也不能毁掉研究
                 box["err"] = f"{type(e).__name__}: {e}"
 

@@ -83,6 +83,10 @@ class Policy:
             if risk == "high" and az.allow_shell:
                 return True, ""              # 授权范围内自主运行分析工具
         if risk == "high":
+            if self.authorization is None and self.confirm is None and not self.allow_high_risk:
+                # 可发现性:没有授权文件时要告诉用户**怎么授权**(而不是只说"被拒")
+                return False, ("未授权:需要研究授权(例如 `fw-core authz grant <target> --roots <dir>`)"
+                               "或显式确认(confirm) —— 默认拒绝高风险工具")
             if self.confirm is None and not self.allow_high_risk:
                 return False, "高风险工具需要人类确认(未配置 confirm,默认拒绝)"
             if self.confirm is not None:

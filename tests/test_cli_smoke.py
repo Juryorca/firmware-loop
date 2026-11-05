@@ -25,11 +25,21 @@ def test_help_runs():
     assert r.returncode == 0 and "gates" in r.stdout and "pi-event" in r.stdout
 
 
-def test_authz_reports_isolation():
-    r = _run("authz")
+def test_authz_show_reports_isolation_and_authorization(tmp_path):
+    root = str(tmp_path)
+    db = str(tmp_path / "az.sqlite3")
+    assert _run("--root", root, "--db", db, "init", "t", "--version", "1").returncode == 0
+    r = _run("--root", root, "--db", db, "authz", "show", "t")
     assert r.returncode == 0
     d = json.loads(r.stdout)
-    assert d["isolation"] in ("none", "chroot", "container", "bwrap")
+    assert d["authorized"] is False, "没有授权文件时必须如实报未授权"
+    assert "authz grant" in d["note"], "要告诉用户怎么授权"
+
+    g = _run("--root", root, "--db", db, "authz", "grant", "t", "--roots", root, "--hours", "1")
+    assert g.returncode == 0
+    r2 = _run("--root", root, "--db", db, "authz", "show", "t")
+    d2 = json.loads(r2.stdout)
+    assert d2["authorized"] is True and d2["isolation"] in ("none", "chroot", "container", "bwrap")
 
 
 def test_capabilities_lists_entries():
