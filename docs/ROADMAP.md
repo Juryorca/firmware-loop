@@ -25,18 +25,18 @@
 | 恢复/幂等 | ✅ | 死 pid 立即回收、活进程绝不回收、跨主机保守、`call_key` 幂等;新增 `tests/test_recovery_idempotency.py` 2 条 0.41s ✓(删检查点+step 回退模拟"副作用已生效但未落盘" ⇒ 恢复不重复执行;running 工具状态如实可见) |
 | 权限 vs 沙箱 | ✅(诚实标注) | `Authz` 增加 `isolation`(当前 `none`)与 `describe()`;`fw-core authz` 输出口径;`test_authz_reports_isolation_none_by_default` + `test_authz_root_check_does_not_sandbox_process` 证明"路径检查 ≠ 沙箱"(进程仍可访问 root 之外) |
 | Provider 可信度分级 | ✅ | `Probe.evidence`(discovered/configured/reachable/verified);`tests/test_providers.py` |
-| 研究评测 | 🟡 对照组 + 因果评分已加 | `eval/scoring.py`:对照组(安全实现)抓**假阳性**、`vulnerable` 结论必须有**挂在自己名下**的证据;新增 `eval/tasks/safe-control/`(先验签+全量 MAC+深度上限的安全实现);`tests/test_eval_scoring.py` 3 条 0.48s ✓;诱饵任务 `decoy-comment`(注释与实现相反)已加,score 4 条 0.81s ✓;待:与 Pi 线对比 |
+| 研究评测(除 Pi 线对比) | ✅ | `eval/scoring.py`:对照组(安全实现)抓**假阳性**、`vulnerable` 结论必须有**挂在自己名下**的证据;新增 `eval/tasks/safe-control/`(先验签+全量 MAC+深度上限的安全实现);`tests/test_eval_scoring.py` 3 条 0.48s ✓;诱饵任务 `decoy-comment`(注释与实现相反)已加,score 4 条 0.81s ✓;待:与 Pi 线对比 |
 
 ## 第三阶段:主线(按依赖)
 
 | 项 | 状态 | 下一步 |
 |---|---|---|
-| **Gate 迁移到权威状态** | 🟡 第二步完成 | `fwcore/gates_db.py`:覆盖度/收尾/三镜/材料 + **KB 条数 / 附件引用完整性 / legacy 对照**;CLI `fw-core gates <target> [--legacy]`;`tests/test_gates_db.py` 6 条 0.81s ✓;第三步完成:证据**版本一致性**与"结论必须挂自己证据"已进 gate(`evidence_version_mismatch` / unlinked 阻塞),`tests/test_gates_db.py` 9 条 1.24s ✓(含用**真实** `tools/derived_check.sh` 的 legacy 集成);下一步(需授权):Pi 侧调用同一 gate |
+| **Gate 迁移到权威状态**(除 Pi 侧调用) | ✅ | `fwcore/gates_db.py`:覆盖度/收尾/三镜/材料 + **KB 条数 / 附件引用完整性 / legacy 对照**;CLI `fw-core gates <target> [--legacy]`;`tests/test_gates_db.py` 6 条 0.81s ✓;第三步完成:证据**版本一致性**与"结论必须挂自己证据"已进 gate(`evidence_version_mismatch` / unlinked 阻塞),`tests/test_gates_db.py` 9 条 1.24s ✓(含用**真实** `tools/derived_check.sh` 的 legacy 集成);下一步(需授权):Pi 侧调用同一 gate |
 | **最终验证命令(可外部重跑)** | ✅ | `bash tools/fwcore_verify.sh`(cwd=仓库根;`PYTHONPATH` 由脚本设;临时目录 `.tmp/verify`,跑完自删);覆盖 8 个测试文件 + capabilities + gates 三项 |
 | Pi hook 接线 | ⏸ 待授权 | 需在**研究会话**里启用扩展(会改变 live harness 行为)⇒ 需用户明确同意后再做;桥本体已可用 | 
-| Pi 兼容适配器 | 🟡 桥已实现 | `fwcore/pi_bridge.py` + `fw-core pi-event`(stdin 事件流,幂等,坏事件不写);`tests/test_pi_bridge.py` 4 条 ✓;待:`.pi/extensions/` 里真正的 hook 接线 |
+| Pi 兼容适配器(桥本体) | ✅ | `fwcore/pi_bridge.py` + `fw-core pi-event`(stdin 事件流,幂等,坏事件不写);`tests/test_pi_bridge.py` 4 条 ✓;待:`.pi/extensions/` 里真正的 hook 接线 |
 | 独立 MCP 客户端 | ✅ | `fwcore/mcp_client.py`(initialize/tools.list/tools.call;select 等超时;关闭时 killpg)+ `fw-core mcp list|probe|call`;`tests/test_mcp_client.py` 6 条 1.06s ✓(含"server 起不来必须 unreachable") |
-| 结构化研究工具 | 🟡 仓库工具 + IDA + Ghidra 已结构化 | `fwcore/toolkit.py` 加 `OBSERVERS`(derived/queue/signal/fuzz/emu → 字段;解析不出标 `unparsed`)+ `tool_calls` 记录 provider/capability/arch/env;`tests/test_toolkit_structured.py` 4 条 0.53s ✓;IDA `ida_query`、Ghidra `ghidra_query`(能力缺失如实报错)已完成,测试 8 条 1.03s ✓ |
+| 结构化研究工具 | ✅ | `fwcore/toolkit.py` 加 `OBSERVERS`(derived/queue/signal/fuzz/emu → 字段;解析不出标 `unparsed`)+ `tool_calls` 记录 provider/capability/arch/env;`tests/test_toolkit_structured.py` 4 条 0.53s ✓;IDA `ida_query`、Ghidra `ghidra_query`(能力缺失如实报错)已完成,测试 8 条 1.03s ✓ |
 | 研究评测加难 | ✅ | 三个任务:`safe-control`(安全实现测假阳性)、`decoy-comment`(注释与实现相反)、`decoy-log`(过期日志);`eval/scoring.py` 要求 vulnerable 结论挂**自己名下**证据;`tests/test_eval_scoring.py` 5 条 1.30s ✓ |
 
 ## 纪律
@@ -52,7 +52,7 @@
 | Watchdog 复核(跨线程/自动启动/错误空转) | ✅ | 独立连接 + 退避 + 连续失败停止 + **Runner 自动启停**;`tests/test_watchdog.py` 8 passed 1.91s |
 | 源码级对照表(8 项) | ✅ | `docs/PI-CORE-ALIGNMENT.md`(基线 `d57c2d2`;每项含 Pi 依据/fwcore 现状/差距/是否改/反例) |
 | 取消语义(对齐 AbortSignal) | ✅ | `Runner.cancel()` + 安全点检查;`tests/test_cancel.py` 2 passed 0.38s |
-| 按差距逐项实施 | 🟡 已开始 | ①取消语义 ✅(`Runner.cancel()`;`tests/test_cancel.py` 2 passed 0.38s);②工具参数截断显式失败 ✅(`_exec_tool_call`;`tests/test_tool_args_invalid.py` 1 passed 0.19s);③轮前准备钩子 ✅(`prepare`/`prepare_timeout`;`tests/test_prepare_hook.py` 4 passed 2.13s);④结构化进度快照 ✅(`Runner.progress`/`fw-core progress`;`tests/test_prepare_hook.py` 5 passed 2.27s);⑤只读工具并行:暂不采纳(固件工具多为独占资源,理由已记录) |
+| 按差距逐项实施 | ✅ | ①取消语义 ✅(`Runner.cancel()`;`tests/test_cancel.py` 2 passed 0.38s);②工具参数截断显式失败 ✅(`_exec_tool_call`;`tests/test_tool_args_invalid.py` 1 passed 0.19s);③轮前准备钩子 ✅(`prepare`/`prepare_timeout`;`tests/test_prepare_hook.py` 4 passed 2.13s);④结构化进度快照 ✅(`Runner.progress`/`fw-core progress`;`tests/test_prepare_hook.py` 5 passed 2.27s);⑤只读工具并行:暂不采纳(固件工具多为独占资源,理由已记录) |
 
 ## 阻塞 / 推迟(需授权或外部条件)
 
