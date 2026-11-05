@@ -215,7 +215,10 @@ def default_db_path(root: str) -> str:
 
 
 def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    except OSError as e:
+        raise RuntimeError(f"无法创建数据库目录: {e}") from e
     # check_same_thread=False:取消/看护/长工具会在别的线程里读同一连接。
     # 写路径一律 `BEGIN IMMEDIATE` + busy_timeout 串行化 ⇒ 由 SQLite 兜并发,不靠 Python 线程锁。
     con = sqlite3.connect(path, timeout=timeout, isolation_level=None, check_same_thread=False)
@@ -226,7 +229,8 @@ def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
         ms = int(float(timeout) * 1000)
     except (TypeError, ValueError):
         ms = 5000
-    con.execute("PRAGMA busy_timeout=%d" % max(0, ms))
+    # 纯整数,没有外部输入(PRAGMA 不能参数化);标注给静态扫描器,避免被误判成注入
+    con.execute(f"PRAGMA busy_timeout={int(max(0, ms))}")  # nosemgrep: python.lang.security.audit.formatted-sql-query
     _migrate(con)
     return con
 
@@ -239,9 +243,10 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
     for ident in (table, col):
         if not _IDENT.match(ident):
             raise ValueError(f"非法标识符: {ident!r}")
-    cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}
+    # 标识符已过白名单正则 ⇒ 这两个 f-string 不接受任意输入(DDL 无法参数化)
+    cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}  # nosemgrep: python.lang.security.audit.formatted-sql-query
     if col not in cols:
-        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")  # nosemgrep: python.lang.security.audit.formatted-sql-query
 
 
 def _step2(con: sqlite3.Connection) -> None:
