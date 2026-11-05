@@ -106,3 +106,14 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   关闭时 `handle()` 纯 no-op(不写任何状态、不导重资源),打开时委派 `pi_bridge.handle_event`
 - 证据:`tests/test_pi_hook_gate.py` **2 passed in 0.27s**(默认关闭且零写入;启用后写入;再关闭又零写入)
 - 状态:代码就绪;**启用仍待用户授权**(创建那个文件即生效)
+
+### Iteration 12(验证覆盖面补齐 + 干净的最终验证)
+- 增量:`tools/fwcore_verify.sh` 的 pytest 清单补齐后三轮增量
+  (`test_cli_smoke` / `test_rule_selection` / `test_pi_hook_gate`),pytest 覆盖由 74 → **87 条**
+- **最终验证(外部可重跑)**
+  - 命令:`bash tools/fwcore_verify.sh`
+  - 工作目录:仓库根(`/home/juryorca/整活/漏洞复现/firmware-loop`)
+  - 环境:脚本内 `PYTHONPATH=$ROOT`;`PY=python3`;临时目录 `.tmp/verify`(跑完自删,不用 `/tmp`)
+  - 输出摘要:`pytest(8 文件) 87 passed in 30.40s` / `capabilities 10 项` / `gates 如实报阻塞` /
+    `评测答案隔离 PASS` / `ROADMAP 一致性 PASS` / `git status clean` / 退出码 0
+- 状态:除两项阻塞(Pi hook 启用待授权、与 Pi 线对比待外部条件)外,ROADMAP 全部 ✅
