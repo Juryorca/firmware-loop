@@ -60,6 +60,7 @@ class ScriptedAdapter:
     name: str = "scripted"
     i: int = 0
     calls: list[dict] = field(default_factory=list)
+    _seq: int = 0
 
     def chat(self, messages: list[dict], tools: list[dict]) -> Reply:
         self.calls.append({"messages": len(messages), "tools": [t["name"] for t in tools]})
@@ -77,7 +78,8 @@ class ScriptedAdapter:
                 except json.JSONDecodeError:
                     args = {"__invalid_json__": args}   # 保留原文,下面打标记
             invalid = isinstance(args, dict) and "__invalid_json__" in args
-            out.append({"id": c.get("id") or f"call_{len(out)}",
+            self._seq += 1
+            out.append({"id": c.get("id") or f"call_{self._seq}",
                         "name": c.get("name") or fn.get("name") or "",
                         "args": c.get("args") or args or {},
                         "args_raw": None,

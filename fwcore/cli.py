@@ -98,6 +98,13 @@ def main(argv: list[str] | None = None) -> int:
                             help="关闭外层看护(仅调试用)")
         parser.add_argument("--watchdog-poll", type=float, default=5.0)
         parser.set_defaults(watchdog=True)
+        # MCP:正式路径默认接入(不可达服务器会如实记录,不影响本地工具)
+        parser.add_argument("--no-mcp", dest="mcp", action="store_false",
+                            help="本次不接入 MCP 服务器")
+        parser.add_argument("--mcp-call-timeout", type=float, default=120.0)
+        parser.set_defaults(mcp=True)
+        p_script = parser.add_argument("--script", default=None,
+                                       help="scripted 模型的脚本 JSON 文件(测试/复现用)")
 
     p = sub.add_parser("run"); p.add_argument("target"); p.add_argument("--goal")
     p.add_argument("--model", default="scripted"); p.add_argument("--steps", type=int, default=0,
@@ -212,10 +219,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "view":
             print(render_view(con, args.root, args.target))
         elif args.cmd in ("run", "resume", "advance"):
-            model = _model(args.model)
+            model = _model(args.model, getattr(args, "script", None))
             runner = Runner(con, args.root, model, max_steps=(args.steps or None),
                             watchdog=getattr(args, "watchdog", False),
-                            watchdog_poll_s=getattr(args, "watchdog_poll", 5.0))
+                            watchdog_poll_s=getattr(args, "watchdog_poll", 5.0),
+                            mcp=getattr(args, "mcp", False),
+                            mcp_call_timeout=getattr(args, "mcp_call_timeout", 120.0))
             if args.cmd == "advance":
                 res = runner.advance(args.target, args.goal, max_rounds=args.rounds)
             elif args.cmd == "run":
@@ -230,14 +239,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
 
-def _model(name: str):
+def _model(name: str, script_path: str | None = None):
     if name in ("openai", "deepseek", "openai-compat"):
         try:
             key, base, model = credentials_from_pi_config()
         except Exception:
             key, base, model = os.environ.get("FW_API_KEY", ""), os.environ.get("FW_BASE_URL", ""), "deepseek-chat"
         return build_adapter("openai", api_key=key, base_url=base, model=model)
-    # scripted:默认脚本 = 登记一条假设后收束(便于本地冒烟,不产生外部调用)
+    # scripted:默认脚本 = 登记一条假设后收束(便于本地冒烟,不产生外部调用);
+    # 给了 --script 就用文件里的脚本(测试/复现"模型决定了什么"时唯一确定的手段)
+    if script_path:
+        import json as _json
+
+        try:
+            with open(script_path, encoding="utf-8") as f:
+                script = _json.load(f)
+        except (OSError, _json.JSONDecodeError) as e:
+            raise SystemExit(f"读脚本失败 {script_path}: {e}") from e
+        if not isinstance(script, list):
+            raise SystemExit(f"脚本必须是 JSON 数组: {script_path}")
+        return build_adapter("scripted", script=script)
     return build_adapter("scripted", script=[
         {"content": "先登记一个待验证的方向。", "tool_calls": [
             {"name": "state_add_hypothesis",

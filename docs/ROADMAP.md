@@ -58,12 +58,15 @@
 
 | 项 | 状态 | 证据 / 下一步 |
 |---|---|---|
-| **MCP 接入 Agent Runtime**(注册→模型选择→执行→记录→清理) | ✅ | `fwcore/mcp_runtime.py`:`MCPBridge.start()` 只注册**可达**服务器的工具(initialize+tools/list 都成功);工具名映射 `mcp_<server>_<tool>`(满足 `^[A-Za-z0-9_-]+$`);`inputSchema` 直通;错误/超时区分(`isError` ⇒ error,per-call timeout ⇒ timeout);`Runner(mcp=True)` 构造即接、结束/取消即关;`tests/test_mcp_runtime.py` 5 条(注册+schema、真实执行且 provider=mcp:fake、不可达不注册也不炸、error/timeout 区分、关闭后无客户端) |
+| **MCP 接入 Agent Runtime**(注册→模型选择→执行→记录→清理) | ✅(两次修正后) | `fwcore/mcp_runtime.py`:`MCPBridge.start()` 只注册**可连且 tools/list 成功**的服务器(不可达/未启用如实记状态);`mcp_<server>_<tool>` 名映射;`inputSchema` 直通;`isError`→error、断连→error、per-call 超时→timeout(修了 `call_tool` 忽略 per-call timeout 的 bug);provider 记 `mcp:<server>`。**修正①**:CLI `run/resume/advance` 之前没传 `mcp=True` ⇒ 正式路径根本没接,现已默认接(`--no-mcp` 关);**修正②**:`_finish_state()` 每轮关桥 ⇒ 第 2 轮起 MCP 全废,现改为桥归 `Runner` 所有(`close()` 幂等、`_ensure_mcp()` 跨轮自愈、`mcp.reopened` 留痕);**证据**:`tests/test_mcp_lifecycle.py` 6 passed —— **真实 CLI 子进程**跑 `fw-core run` 断言 `tool_calls.provider=mcp:fake`+`ok`+退出无残留进程、`--no-mcp` 对照失败留痕、`advance()` 两轮均 ok、异常退出桥关/看护停/run=paused、close 幂等 |
 | verify 脚本文件数不实/漏新测试 | ✅ | 改为**自动发现** `tests/test_*.py` + 真实计数:`pytest(23 个文件) 174 passed in 46.55s` |
 | **`advance()` 跨轮被自己写成"外部停止"** | ✅(真 bug) | 之前 `turn()` 结束时置 `state='finished'`,下一轮 `_external_stop()` 误判 ⇒ **自动继续根本不工作**;修法:turn 开始自标 `running`(外部 cancel 仍靠 `handback=user_stop` 生效);`test_advance_stops_after_idle_rounds` 覆盖 |
 | Watchdog 正式路径默认启用 + 旧 PGID 误杀 | ✅ | CLI `run/resume/advance` 默认开看护(`--no-watchdog` 可关,help 可发现);`.pgids` 记录 `pgid + starttime`,杀组前核对 `/proc/<pid>/stat` 的 starttime ⇒ **pid 复用不误杀**;`Watchdog.health()` 暴露 scans/errors/stopped_reason/alive,`Runner.progress()` 带出;`tests/test_watchdog.py` +2 条、`test_cli_smoke.py` +1 条 |
 | prepare hook 超时后的线程泄漏 | ✅ | 弃用 `ThreadPoolExecutor`(退出会 `shutdown(wait=True)` ⇒ 被卡死钩子拖住 ✗),改 **daemon 线程 + join(timeout)**:超时即放弃、迟到结果不采纳、`prepare_abandoned` 可观测;`test_prepare_timeout_does_not_wait_for_hung_hook` 断言"5s 钩子不拖住主流程(<3s)" |
-| 完整研究授权机制(目标/工作区/时限/撤销/审计) | ⬜ 下一步 | 在 `Authz` 之上加**显式授权文件**(目标名 + roots + 到期 + 撤销)与 `events` 审计;高风险工具不再全局放行 |
+| 完整研究授权机制(目标/工作区/时限/撤销/审计) | ✅ | `fwcore/authz.py` + `fw-core authz grant|revoke|show`:`state/<target>/authz.json`(target/roots/expires_at/revoked/note/granted_by);`Runner.start()` 按目标自动加载并写 `authz.loaded` 事件;无授权 ⇒ 默认拒绝且错误里给出授权命令;范围外路径仍拒;`tests/test_authz.py` 5 passed(默认拒绝/grant 放行/过期/撤销/自动加载+审计);授权≠沙箱(`isolation=none` 如实标注) |
+| 未知工具调用留痕(审计) | ✅ | 模型幻觉/`--no-mcp` 时的调用不再静默丢弃:`_exec_tool_call` 记 `status=error` + `note`,可审计;`test_cli_no_mcp_control_fails_the_call` 断言到行 |
+| scripted 工具调用 id 唯一 | ✅ | `ScriptedAdapter` 之前每轮都从 `call_0` 开始 ⇒ `call_key` 幂等把第 2 轮当成重复而吞掉(测试假象也会掩盖真问题);改全局自增 |
+| 本地 `state/mcp.json` 为权威 | ✅ | 有本地配置就**不再合并**用户 `~/.pi/agent/mcp.json`(合并会把无关服务器拉进来、拖慢启动,测试里实测撞到重名) |
 | 评测隔离(`eval/run.py` 从答案读 goal) | ✅ | 5 个任务都拆成 `task.json`(**公开 goal**)与 `answers/expected.json`(**私有判据**,已移除 goal);`load_task()` 两文件分离且**拒绝**私有侧带 goal;`prepare_workspace()` 只拷 `bundle/`(工作区无 answers/、无 task.json);`tests/test_eval_isolation.py` **13 passed**(含"goal 不得泄漏答案文本") |
 
 ## 阻塞 / 推迟(需授权或外部条件)

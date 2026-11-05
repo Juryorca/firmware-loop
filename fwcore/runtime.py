@@ -246,7 +246,13 @@ class Runner:
             err = "tool arguments 截断或非法 JSON ⇒ 未执行(请重发完整参数)"
             _record_tool(ctx, call.get("name") or "?", call.get("args") or {}, "error", err, call.get("id"))
             return {"status": "error", "error": err, "not_executed": True}
-        return self.registry.call(ctx, call.get("name") or "", call.get("args") or {},
+        name = call.get("name") or ""
+        if name not in self.registry.specs:
+            # 模型幻觉/工具未启用(如 --no-mcp)都必须**留痕**:审计里要能看到"它试图调什么"
+            err = f"工具不存在: {name}"
+            _record_tool(ctx, name or "?", call.get("args") or {}, "error", err, call.get("id"))
+            return {"status": "error", "error": err}
+        return self.registry.call(ctx, name, call.get("args") or {},
                                   call_key=call.get("id"), run_id=rid)
 
     def _external_stop(self, rid: str) -> str | None:
@@ -331,6 +337,7 @@ class Runner:
                 with _db.Tx(self.con) as c:
                     c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
         self._watchdog_start()
+        self._ensure_mcp()          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
         self._heartbeat(rid)
         try:
             seen: dict[str, int] = {}
@@ -443,8 +450,8 @@ class Runner:
 
     def _finish_state(self, rid: str, target: str, state: str, step: int, rounds: int,
                       final: str, history: list[dict]) -> RunResult:
-        if self.mcp_bridge is not None:
-            self.mcp_bridge.close()
+        # 注意:MCP 桥**不在这里关** —— `advance()` 一轮结束后还要继续下一轮,
+        # 关掉会让第 2 轮起所有 MCP 工具失效(实测过)。真正关闭在 `Runner.close()`。
         blockers = self.domain.closure_blockers(target) + self.research.dual_output_blockers(target)
         if self.research.mirror_due(target):
             blockers.append(f"三镜刷新超期({self.research.rounds_since_mirror(target)} 轮未做,"
@@ -486,16 +493,60 @@ class Runner:
             return "awaiting_user_close"
         return None
 
+    # ---------------- 资源生命周期(MCP / 看护) ----------------
+    def _ensure_mcp(self) -> None:
+        """跨轮/恢复时确保 MCP 真活着:被关过(或构造时没开)就重开并记事件。"""
+        if not self._mcp_enabled:
+            return
+        from .mcp_runtime import bridge_from_config
+
+        bridge = self.mcp_bridge
+        if bridge is not None and not getattr(bridge, "closed", False):
+            return
+        reopened = bridge is not None
+        if bridge is None:
+            self.mcp_bridge = bridge_from_config(self.registry, self.root, self._mcp_config_paths,
+                                                 timeout=self._mcp_timeout,
+                                                 call_timeout=self._mcp_call_timeout)
+            bridge = self.mcp_bridge
+        bridge.start()
+        with contextlib.suppress(Exception):
+            _event(self.con, "mcp.reopened" if reopened else "mcp.started", None,
+                   {"servers": bridge.health().get("servers", {})})
+
+    def mcp_health(self) -> dict | None:
+        return self.mcp_bridge.health() if self.mcp_bridge is not None else None
+
+    def close(self) -> None:
+        """幂等清理:停看护线程 + 关 MCP(杀进程组)。
+        正常结束、取消、异常退出都必须走这里 —— 否则残留子进程与后台线程。
+        """
+        with contextlib.suppress(Exception):
+            self._watchdog_stop()
+        if self.mcp_bridge is not None:
+            with contextlib.suppress(Exception):
+                self.mcp_bridge.close()
+
     # ---------------- 自动继续 ----------------
     def run(self, rid: str, target: str, goal: str | None = None, history: list[dict] | None = None,
             budget: int | None = None) -> RunResult:
-        return self.turn(rid, target, goal, list(history or []), budget)
+        try:
+            return self.turn(rid, target, goal, list(history or []), budget)
+        finally:
+            self.close()
 
     def advance(self, target: str, goal: str | None = None, *, max_rounds: int | None = None,
                 run_id: str | None = None, history: list[dict] | None = None) -> RunResult:
         """持续推进,直到:收尾前置全清 / 需要用户输入 / 用完轮次预算。"""
         rid = run_id or self.start(target, goal)
         hist = list(history or [])
+        try:
+            return self._advance_loop(rid, target, goal, hist, max_rounds)
+        finally:
+            self.close()
+
+    def _advance_loop(self, rid: str, target: str, goal: str | None,
+                      hist: list[dict], max_rounds: int | None) -> RunResult:
         res = self.turn(rid, target, goal, hist)
         guard = 0
         idle = 0
@@ -547,7 +598,10 @@ class Runner:
         with _db.Tx(self.con) as c:
             c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
             _event(c, "run.resumed", rid, {"step": row["step"]})
-        return self.turn(rid, row["target_name"], goal or row["goal"], history, budget)
+        try:
+            return self.turn(rid, row["target_name"], goal or row["goal"], history, budget)
+        finally:
+            self.close()
 
     # ---------------- 失联判定(不误伤活跃运行) ----------------
     def recover_stale(self, *, older_than_s: float = STALE_DEFAULT_S,

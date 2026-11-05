@@ -38,9 +38,13 @@ class MCPBridge:
     clients: dict[str, MCPClient] = field(default_factory=dict)
     status: dict[str, dict] = field(default_factory=dict)
     registered: dict[str, list[str]] = field(default_factory=dict)
+    closed: bool = False
 
     def start(self) -> dict[str, dict]:
-        """连接 + 注册;单个服务器失败不影响其它。"""
+        """连接 + 注册;单个服务器失败不影响其它。可重复调用(已关闭的桥会重新打开)。"""
+        self.closed = False
+        self.status.clear()
+        self.registered.clear()
         for spec in self.specs:
             if not spec.enabled:
                 self.status[spec.name] = {"status": "disabled"}
@@ -61,6 +65,10 @@ class MCPBridge:
             names = []
             for t in tools:
                 name = tool_name(spec.name, t["name"])
+                if name in self.registry.specs:
+                    # 桥重开(跨轮/恢复)时工具可能已在 Registry:保留既有定义,不重复注册
+                    names.append(name)
+                    continue
                 self.registry.register(ToolSpec(
                     name=name,
                     description=f"[MCP:{spec.name}] {t.get('description', '')}".strip(),
@@ -106,9 +114,22 @@ class MCPBridge:
         return _handler
 
     def close(self) -> None:
+        """幂等:重复调用安全(关闭后 clients 为空、closed=True)。"""
         for name, client in list(self.clients.items()):
-            client.close()
-            self.clients.pop(name, None)
+            try:
+                client.close()
+            finally:
+                self.clients.pop(name, None)
+        self.closed = True
+
+    def health(self) -> dict:
+        """看护/CLI 可观测:MCP 是否还活着、注册了哪些工具。"""
+        return {
+            "closed": self.closed,
+            "clients": sorted(self.clients),
+            "servers": {k: v.get("status") for k, v in self.status.items()},
+            "registered": {k: len(v) for k, v in self.registered.items()},
+        }
 
 
 def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | None = None,
@@ -116,8 +137,12 @@ def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | 
     """从配置建桥:`state/mcp.json`(本框架)优先,其次 `~/.pi/agent/mcp.json`(过渡兼容)。"""
     import os
 
-    paths = config_paths or [os.path.join(root, "state", "mcp.json"),
-                             os.path.expanduser("~/.pi/agent/mcp.json")]
+    if config_paths is None:
+        local = os.path.join(root, "state", "mcp.json")
+        # 本地配置是权威:有就只用它(合并用户 Pi 配置会把无关服务器拉进来、还会拖慢启动)
+        paths = [local] if os.path.isfile(local) else [os.path.expanduser("~/.pi/agent/mcp.json")]
+    else:
+        paths = list(config_paths)
     specs = list(load_servers(paths).values())
     return MCPBridge(root=root, registry=registry, specs=specs,
                      timeout=timeout, call_timeout=call_timeout)
