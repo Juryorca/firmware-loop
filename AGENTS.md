@@ -131,6 +131,10 @@
   opencode.json 已设 external_directory=allow 放行 /mnt/d;新增工作区外路径访问时需在 permission 里登记)
 - IDA 端点生命周期: 由会话壳 fw.sh 维护(打更循环保活,TUI 退出即回收) —— agent 无任何保活责任;
   裸 opencode(不经 fw.sh)时,端点在最后一次查询后 300s 自灭
+  - **Windows/IDA 接入配置是单一来源**:`fw-core ida-env`(环境变量 `FW_IDA_*` > `state/ida.json` > 兼容默认);
+    `tools/ida_*.sh` 全由它驱动,不再写死 `/mnt/d`、盘符、端口、Windows 用户目录;
+    换机器只需设 `FW_IDA_STAGE`/`FW_IDA_WIN_STAGE`/`FW_IDA_MCP_EXE`(或写 `state/ida.json`),细节见 `docs/IDA-ENV.md`。
+    配置缺项时工具会报"缺哪个 exe/目录/挂载点",那不是 IDA 分析失败。
 
 ### 登记维护义务(每次装包/建环境/卸载后执行)
 - 新建环境 → 登记表加一行
