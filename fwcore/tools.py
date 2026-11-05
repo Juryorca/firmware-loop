@@ -445,32 +445,40 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
     weak_hint = None
     if not tid:
         tid, relation, weak_hint = _auto_link_tool_call(ctx, path)
-    link_relation = None
-    if tid:
-        # 关系在 Domain 里已按路径判定;这里只记录(建证时是直接产出)
-        link_relation = "direct-stdout" if relation in ("execution",) else "direct-result"
     eid = ctx.domain.add_evidence(
         args["target"], args["kind"], path=path, capture=args.get("capture"),
         attempt_id=args.get("attempt_id"), hypothesis_id=args.get("hypothesis_id"),
         version=args.get("version"),
-        # 绑定到具体工具调用 ⇒ 自动继承 provider/原始产物,并标为"未复核"
+        # 绑定到具体工具调用:Domain 会校验状态、继承 source/产物路径/哈希,并标"未复核"
         tool_call_id=tid, source=args.get("source"),
     )
-    if tid and link_relation:
-        ctx.domain.con.execute("UPDATE evidence SET link_relation=? WHERE id=?",
-                               (link_relation, eid))
+    # 关系由**路径证据**判定(与 state_link_evidence 同一条规则):
+    # stdout/result ⇒ 直接;只在命令参数里 ⇒ command-write(弱);证不出 ⇒ 不写关系(不猜)
+    link_relation = None
+    out_link = ""
+    if tid:
+        try:
+            info = ctx.domain.link_evidence_source(eid, tid, note="建证时按路径判定来源")
+            link_relation = info.get("relation")
+            out_link = f"{link_relation}:{tid}"
+        except Exception as e:
+            weak_hint = f"relation-unproven: {str(e)[:120]}"
     out = {"status": "ok", "evidence_id": eid, "linked_tool_call_id": tid,
            "relation": relation, "link_relation": link_relation, "verified": False,
            "next": "复核后才算证据:state_verify_evidence(evidence_id, method=recheck-sha256|"
                    "reproduce-attempt|cross-check)"}
-    if relation:
-        out["link"] = f"direct:{relation}"
+    if link_relation:
+        out["link"] = out_link
     if weak_hint:
         out["link"] = weak_hint
-        out["note"] = ("未建立来源关联(弱线索);如需确定来源,补充 tool_call_id 或"
-                       "用产生该文件的那次调用的产物路径")
-        out["next"] = ("补来源:state_add_evidence(..., tool_call_id=<产生该文件的那次调用 id>);"
-                       "工具结果里带 tool_call_id 字段")
+        if tid:
+            out["note"] = ("已绑定工具调用,但来源**关系**无法按路径证明 ⇒ 不写关系"
+                           "(弱于直接产出,复核时按 command-write 处理)")
+        else:
+            out["note"] = ("未建立来源关联(弱线索);如需确定来源,补充 tool_call_id 或"
+                           "用产生该文件的那次调用的产物路径")
+            out["next"] = ("补来源:state_add_evidence(..., tool_call_id=<产生该文件的那次调用 id>);"
+                           "工具结果里带 tool_call_id 字段")
     return out
 
 

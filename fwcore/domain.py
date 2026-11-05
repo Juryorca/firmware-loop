@@ -52,9 +52,12 @@ class InvariantViolation(DomainError):
 
 def _sha256_file(path: str) -> str:
     h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError as e:
+        raise DomainError(f"算哈希失败(文件不存在/不可读): {path}: {e}") from e
     return h.hexdigest()
 
 
@@ -147,7 +150,8 @@ class Domain:
         sql = self._COUNT_SQL.get(key)
         if sql is None:
             raise DomainError(f"未登记的计数项: {key}")
-        return self.con.execute(sql, (target_id,)).fetchone()["n"]
+        # sql 来自 _COUNT_SQL 常量白名单,不含外部输入(不是拼接 SQL)
+        return self.con.execute(sql, (target_id,)).fetchone()["n"]  # nosemgrep: python-sql-injection
 
     # ---------------- 攻击面 ----------------
     def add_surface(self, target: str, key: str, **attrs) -> str:
@@ -713,12 +717,16 @@ class Domain:
     def material_check(self, target: str) -> dict:
         """报告材料完整性(程序可核的部分):advisory 骨架 / 图链 / 附件自含 / README。"""
         t = self.target(target)
-        rdir = os.path.join(self.root, "state", t.name, "report")
+        # 两种合法布局:框架工作区 `state/<目标>/report/`;演练/单目标工作区 `<root>/report/`
+        candidates = [os.path.join(self.root, "state", t.name, "report"),
+                      os.path.join(self.root, "report")]
+        rdir = next((d for d in candidates if os.path.isdir(d)), candidates[0])
         need = ("Summary", "Root Cause", "Steps to Reproduce", "Evidence")
         missing: list[str] = []
         advisories = []
         if not os.path.isdir(rdir):
-            return {"advisories": [], "missing": ["report/ 不存在"], "ok": False}
+            return {"advisories": [], "missing": [f"report/ 不存在(找过: {', '.join(
+                os.path.relpath(d, self.root) for d in candidates)})"], "ok": False}
         try:
             entries = sorted(os.listdir(rdir))
         except OSError as e:
@@ -726,13 +734,17 @@ class Domain:
         for name in entries:
             if not name.endswith(".md") or name in ("INDEX.md", "attack-surface.md", "CLOSURE.md"):
                 continue
-            advisories.append(name)
             try:
                 with open(os.path.join(rdir, name), encoding="utf-8", errors="replace") as _f:
                     body = _f.read()
             except OSError as e:
                 missing.append(f"{name}: 读取失败({e})")
                 continue
+            # 只有"advisory 文档"才按骨架核:VR-* 命名,或至少含一个骨架小节;
+            # 研究记录(report.md / *-findings.md 之类)是内部材料,不冒充 advisory
+            if not (name.startswith("VR-") or f"## {need[0]}" in body):
+                continue
+            advisories.append(name)
             gone = [s for s in need if f"## {s}" not in body]
             if gone:
                 missing.append(f"{name}: 缺 {', '.join(gone)}")

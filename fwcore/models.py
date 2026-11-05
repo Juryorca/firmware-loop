@@ -123,7 +123,10 @@ class OpenAICompatAdapter:
             calls.append({"id": c.get("id"), "name": fn.get("name"),
                           "args": c.get("_args") or {}, "args_raw": fn.get("arguments")})
         return Reply(content=r.get("content") or "", tool_calls=calls,
-                     reasoning=r.get("reasoning_content") or "")
+                     reasoning=r.get("reasoning_content") or "",
+                     # 诊断字段必须贯通:截断/长度限制不能和普通空转混为一谈
+                     finish_reason=r.get("finish_reason") or "",
+                     usage=r.get("usage") or {})
 
 
 def build_adapter(kind: str = "scripted", **kw) -> Adapter:

@@ -823,7 +823,9 @@ def _coerce_reply(r) -> Reply:
                           "name": c.get("name") or fn.get("name") or "",
                           "args": args, "args_raw": fn.get("arguments")})
         return Reply(content=r.get("content") or "", tool_calls=calls,
-                     reasoning=r.get("reasoning_content") or r.get("reasoning") or "")
+                     reasoning=r.get("reasoning_content") or r.get("reasoning") or "",
+                     finish_reason=r.get("finish_reason") or "",
+                     usage=r.get("usage") or {})
     raise TypeError(f"adapter 返回了不支持的类型: {type(r)}")
 
 

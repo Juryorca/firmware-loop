@@ -64,10 +64,11 @@ def test_evidence_auto_links_to_producing_tool_call(tmp_path):
         "target": "t1", "kind": "command-output", "attempt_id": aid,
         "hypothesis_id": hid, "path": tc["stdout_path"]})
     assert strong["linked_tool_call_id"] == tc["tool_call_id"], strong
-    assert (strong.get("link") or "").startswith("direct:")
-    row = con.execute("SELECT tool_call_id, verified FROM evidence WHERE id=?",
+    # 关系按路径判定:stdout ⇒ direct-stdout;result ⇒ direct-result(不再猜)
+    row = con.execute("SELECT tool_call_id, verified, link_relation FROM evidence WHERE id=?",
                       (strong["evidence_id"],)).fetchone()
     assert row["tool_call_id"] == tc["tool_call_id"] and row["verified"] == 0
+    assert row["link_relation"] in ("direct-stdout", "direct-result"), row["link_relation"]
 
 
 def test_evidence_without_matching_tool_call_does_not_fake_link(tmp_path):
