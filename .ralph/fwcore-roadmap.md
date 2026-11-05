@@ -77,3 +77,10 @@ ROADMAP 中 P0、第二阶段审计项、第三阶段主线**全部 ✅**,且:
   断言 `available=True`、`returncode∈{0,1}`、`summary` 以 `=== derived_check:` 开头(桥接不是空壳)
 - 证据:`tests/test_gates_db.py` **9 passed in 1.24s**(9 条含 legacy 集成)
 - 下一项:无未阻塞项剩余 —— Pi hook 接线(待授权)、与 Pi 线对比(待外部条件)⇒ 按硬约束暂停等用户
+
+### Iteration 8(Watchdog 自动启动 —— 用户点名项)
+- 增量:`Runner(watchdog=True, watchdog_poll_s=..., watchdog_heartbeat_timeout=...)`:
+  运行开始自动起守护线程(**用自己的 db 连接**)、运行结束(含异常路径)自动停;
+  `Watchdog.scans` 计数便于外部验证"确实跑过"
+- 证据:`tests/test_watchdog.py` **8 passed in 1.91s**(含:自动启动且 scans≥1、结束后线程为 None 不泄漏、未开启时不起线程)
+- 下一项:仍只剩阻塞项(Pi hook 待授权 / Pi 线对比待外部条件)

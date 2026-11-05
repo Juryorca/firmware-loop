@@ -49,7 +49,7 @@
 | 项 | 状态 | 证据 / 下一步 |
 |---|---|---|
 | 读真实 Pi 源码(记 SHA) | ✅ | `earendil-works/pi @ d57c2d2`;已取 `agent-loop.ts`(959) / `agent.ts`(623) / `types.ts`(551) / `agent-session.ts`(4532) 到 `.tmp/pi-ref/`(gitignored) |
-| Watchdog 复核(跨线程/自动启动/错误空转) | ✅ | 独立连接 + 退避 + 连续失败停止;`tests/test_watchdog.py` 6 passed 1.63s |
+| Watchdog 复核(跨线程/自动启动/错误空转) | ✅ | 独立连接 + 退避 + 连续失败停止 + **Runner 自动启停**;`tests/test_watchdog.py` 8 passed 1.91s |
 | 源码级对照表(8 项) | ✅ | `docs/PI-CORE-ALIGNMENT.md`(基线 `d57c2d2`;每项含 Pi 依据/fwcore 现状/差距/是否改/反例) |
 | 取消语义(对齐 AbortSignal) | ✅ | `Runner.cancel()` + 安全点检查;`tests/test_cancel.py` 2 passed 0.38s |
 | 按差距逐项实施 | 🟡 已开始 | ①取消语义 ✅(`Runner.cancel()`;`tests/test_cancel.py` 2 passed 0.38s);②工具参数截断显式失败 ✅(`_exec_tool_call`;`tests/test_tool_args_invalid.py` 1 passed 0.19s);③轮前准备钩子 ✅(`prepare`/`prepare_timeout`;`tests/test_prepare_hook.py` 4 passed 2.13s);④结构化进度快照 ✅(`Runner.progress`/`fw-core progress`;`tests/test_prepare_hook.py` 5 passed 2.27s);⑤只读工具并行:暂不采纳(固件工具多为独占资源,理由已记录) |

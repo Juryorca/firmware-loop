@@ -71,7 +71,9 @@ class Runner:
                  max_steps: int | None = None, timeout: float = 60.0, policy: Policy | None = None,
                  research: Research | None = None, max_seconds: float | None = None,
                  stall_repeats: int = 3, limits: Limits | None = None,
-                 prepare: object = None, prepare_timeout: float = 15.0):
+                 prepare: object = None, prepare_timeout: float = 15.0,
+                 watchdog: bool = False, watchdog_poll_s: float = 5.0,
+                 watchdog_heartbeat_timeout: float = 900.0):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -90,6 +92,12 @@ class Runner:
         self.prepare = prepare
         self.prepare_timeout = prepare_timeout
         self.prepare_timeouts = 0
+        self._watchdog_enabled = watchdog
+        self._watchdog_poll_s = watchdog_poll_s
+        self._watchdog_heartbeat = watchdog_heartbeat_timeout
+        self._wd_thread = None
+        self._wd_stop = None
+        self.watchdog = None
         self._prepare_state: dict = {}
         self._pending_pause: tuple[str, dict] | None = None
         self.timeout = timeout
@@ -107,6 +115,26 @@ class Runner:
                       (rid, t.id, goal, os.getpid(), _host(), now, now, now))
             _event(c, "run.started", rid, {"target": target, "goal": goal})
         return rid
+
+    def _watchdog_start(self) -> None:
+        if not self._watchdog_enabled or self._wd_thread is not None:
+            return
+        import threading
+
+        from .watchdog import Watchdog
+
+        db_path = self.con.execute("PRAGMA database_list").fetchone()[2]
+        self.watchdog = Watchdog(con=None, root=self.root, limits=self.limits, db_path=db_path,
+                                 heartbeat_timeout_s=self._watchdog_heartbeat, poll_s=self._watchdog_poll_s)
+        self._wd_stop = threading.Event()
+        self._wd_thread = self.watchdog.start_daemon(self._wd_stop)
+
+    def _watchdog_stop(self) -> None:
+        if self._wd_thread is None or self._wd_stop is None:
+            return
+        self._wd_stop.set()
+        self._wd_thread.join(timeout=2)
+        self._wd_thread = None
 
     def progress(self, rid: str) -> dict:
         """结构化进度快照(给外部监控/Pi 适配器用;只读)。"""
@@ -252,6 +280,7 @@ class Runner:
         final = ""
         stopped_by_final = False
         state = "running"
+        self._watchdog_start()
         self._heartbeat(rid)
         try:
             seen: dict[str, int] = {}
@@ -357,7 +386,10 @@ class Runner:
             state = "paused"          # 预算耗尽 = 暂停,不是完成
         else:
             state = "finished"
-        return self._finish_state(rid, target, state, step, rounds, final, history)
+        try:
+            return self._finish_state(rid, target, state, step, rounds, final, history)
+        finally:
+            self._watchdog_stop()
 
     def _finish_state(self, rid: str, target: str, state: str, step: int, rounds: int,
                       final: str, history: list[dict]) -> RunResult:

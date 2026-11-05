@@ -11,6 +11,7 @@ from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.limits import Limits
 from fwcore.models import ScriptedAdapter
+from fwcore.policy import Policy
 from fwcore.runtime import Runner
 from fwcore.watchdog import Watchdog
 
@@ -120,3 +121,37 @@ def test_daemon_stops_after_consecutive_errors(tmp_path):
     th.join(timeout=5)
     assert not th.is_alive() and wd.stopped_reason is not None
     stop.set()
+
+
+# ---------- 自动启动(用户点名"是否真正自动启动") ----------
+
+def test_runner_autostarts_watchdog_and_stops_it(tmp_path):
+    """Runner(watchdog=True) 必须在运行期间自动起看护,并在结束时停掉线程。"""
+    from fwcore.models import ScriptedAdapter
+    from fwcore.runtime import Runner
+
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: 收工", "tool_calls": []}]),
+               limits=Limits(max_model_calls=2), policy=Policy(allow_high_risk=True),
+               watchdog=True, watchdog_poll_s=0.02)
+    r.run(r.start("t1"), "t1")
+    assert r.watchdog is not None, "看护未自动启动"
+    assert r.watchdog.scans >= 1, "看护线程没有真正跑过扫描"
+    assert r._wd_thread is None, "运行结束后看护线程必须停掉(不能泄漏)"
+
+
+def test_runner_without_watchdog_does_not_start_one(tmp_path):
+    from fwcore.models import ScriptedAdapter
+    from fwcore.runtime import Runner
+
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: 收工", "tool_calls": []}]),
+               limits=Limits(max_model_calls=2), policy=Policy(allow_high_risk=True))
+    r.run(r.start("t1"), "t1")
+    assert r.watchdog is None and r._wd_thread is None

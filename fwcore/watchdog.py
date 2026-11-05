@@ -41,6 +41,7 @@ class Watchdog:
     db_path: str | None = None
     max_consecutive_errors: int = 5
     errors: int = 0
+    scans: int = 0
     stopped_reason: str | None = None
 
     @contextlib.contextmanager
@@ -86,6 +87,7 @@ class Watchdog:
         """检查一轮:返回触发的动作列表(空 = 一切正常)。"""
         actions: list[dict] = []
         now = time.time()
+        self.scans += 1
         with self._conn() as con:
             return self._scan(con, now, actions)
 
