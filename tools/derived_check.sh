@@ -207,6 +207,27 @@ def pool_open(blk):
         if not handled:
             out.append(e.strip().split("\n")[0][:80])
     return out
+def _db_surface_counts():
+    """权威状态优先:surfaces 表按 disposition 计数;找不到(未迁移)返回 None。"""
+    for _cand in (os.path.join(state, "state", "fwcore.sqlite3"),
+                  os.path.join(root, "state", "fwcore.sqlite3")):
+        if not os.path.isfile(_cand):
+            continue
+        try:
+            import sqlite3 as _s
+            _c = _s.connect(_cand)
+            _t = _c.execute("SELECT id FROM targets WHERE name=?", (target,)).fetchone()
+            if not _t:
+                continue
+            _r = _c.execute("SELECT disposition, COUNT(*) FROM surfaces"
+                            " WHERE target_id=? GROUP BY disposition", (_t[0],)).fetchall()
+            if _r:
+                return {d: n for d, n in _r}
+        except Exception:
+            continue
+    return None
+_dbc = _db_surface_counts()
+
 a2 = ""
 if os.path.isfile(notes):
     t = open(notes, encoding="utf-8").read()
@@ -249,8 +270,8 @@ if os.path.isfile(notes):
             a2 = _m2.group(1) if _m2 else _t2
 # 判据: A2 的权威载体必须存在(notes §2.3 或 report/attack-surface.md);两者都缺 ⇒ 无法核对"A2 未判定 0"
 #        ⇒ 直接 FAIL(否则会出现"空集假绿":缺文件时算出 0 行,让会话误以为可以宣布队列清空)
-if not a2.strip():
-    bad("缺 A2 载件: 既无 notes §2.3,也无 report/attack-surface.md ⇒ A2/队列一致性无从核对")
+if not a2.strip() and _dbc is None:
+    bad("缺 A2 载件: 既无权威 surfaces 记录,也无 notes §2.3 / report/attack-surface.md")
 
 buckets = {"Vulnerable": [], "Part": [], "NoFind": [], "Unjudged": [], "Out": [], "UNPARSED": []}
 # 布局自适应:【逐表】解析 —— 每张表按自己的表头认"入口列/判定列"(各目标 attack-surface.md 列序不同:
@@ -289,7 +310,7 @@ def _parse_rows(text):
             if not cells[_e] or not cells[_d]: continue
             rows.append((cells[_e], cells[_d]))
     return rows
-_rows = _parse_rows(a2)
+_rows = [] if _dbc is not None else _parse_rows(a2)
 if not _rows:      # notes 的 §2.3 表为空/不含判定列(或已收尾改成指针)⇒ 回退到权威文件
     # 出处:2026-10-04 QNAP-TS-464 收尾 —— notes §2.3 为指针 ⇒ 旧版不回退,覆盖度数成 0,而文件里有 11 行
     _asf3 = os.path.join(state, "report", "attack-surface.md")
@@ -308,7 +329,14 @@ for entry, disp in _rows:
     elif re.search(r"No finding|已审", disp): buckets["NoFind"].append(entry)
     elif re.search(r"未审|未判定", disp): buckets["Unjudged"].append(entry)
     else: buckets["UNPARSED"].append(entry)
-if a2:
+if _dbc is not None:
+    buckets = {"Vulnerable": [], "Part": [], "NoFind": [], "Unjudged": [], "Out": [], "UNPARSED": []}
+    _map = {"vulnerable": "Vulnerable", "no_finding": "NoFind",
+            "out_of_scope": "Out", "unjudged": "Unjudged"}
+    for _d, _n in _dbc.items():
+        buckets[_map.get(_d, "UNPARSED")] += [_d] * _n
+    print(f"覆盖度来源: 权威 surfaces 表 {_dbc}")
+if a2 or _dbc is not None:
     total = sum(len(v) for v in buckets.values())
     print(f"A2 覆盖度(解析 {total} 个入口点行" + (f";另有 {_group} 个分组/指针行未计" if _group else "") + f";权威 = state/{target}/report/attack-surface.md):")
     for k in ("Vulnerable", "Part", "NoFind", "Unjudged", "Out", "UNPARSED"):

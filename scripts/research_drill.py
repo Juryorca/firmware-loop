@@ -6,7 +6,7 @@
 
 用法:
   python3 scripts/research_drill.py --max-calls 20 --max-seconds 240 \
-      --out docs/evidence/autonomous-research-drill.md
+      --out state/_scratch/research-drill.md
 """
 from __future__ import annotations
 
@@ -459,7 +459,7 @@ def main() -> int:
                     help="恢复时给模型的研究方向(默认沿用通用'继续研究')")
     ap.add_argument("--resume", default=None,
                     help="从已有演练工作区恢复(不新建工作区/不重复付费重跑)")
-    ap.add_argument("--out", default="docs/evidence/autonomous-research-drill.md")
+    ap.add_argument("--out", default="state/_scratch/research-drill.md")
     ap.add_argument("--real-material", default=None,
                     help="真实固件材料目录(已提取);给了就走真实固件只读分析模式")
     ap.add_argument("--real-glob", default="*", help="从材料目录挑哪些文件(glob)")

@@ -111,3 +111,13 @@ runtime 发送 `[system 静态] + history + [user 动态状态]` ⇒ 前缀 = sy
 2. `resume` 时 `_sanitize_history` 可能改写旧坏消息(一次性 cache miss,可接受);
 3. `state_prompt` 每轮重算(纯 CPU,无 API 成本);
 4. 旧 run(`0b4df34e`)的 usage 未记录,无法回溯(不估算成真实值)。
+
+## 附:早期审计(2026-11-06 上半场,同一数据源)
+
+- 修复前的一次调用实测:`prompt=222,238 / cached=222,080 / miss=158 / completion=1,731(reasoning 871)`
+  ⇒ 长上下文确实"命中率极高",但每轮仍全量重发;
+- 旧 run 的空转:200 次重复 FINAL(内容相同、无工具调用)把预算烧光;根因是 FINAL 写在**第二段**
+  而旧判定只认开头 —— 已修(任意行首 `FINAL:` + 重复内容看护);
+- 旧 run checkpoint 473,850→492,771 B(120 条);第二阶段 10,335→384,502 B;
+- 结论口径:`total == prompt + completion`、`cached ⊆ prompt`、`reasoning ⊆ completion` 三者在两个
+  run 的 224 条 usage 上逐条验证成立,不重复累计。

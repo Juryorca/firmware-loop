@@ -6,7 +6,7 @@
 - 本脚本用**真实模型**(DeepSeek,OpenAI 兼容)⇒ 证明"模型真的能通过工具改状态并被恢复"。
 两者都不能单独证明"研究质量",只能证明工程闭环。
 
-用法: python3 scripts/e2e_real_model.py [--steps 6] [--out docs/evidence/real-model-run.md]
+用法: python3 scripts/e2e_real_model.py [--steps 6] [--out state/_scratch/e2e-real-model.md]
 """
 
 from __future__ import annotations
@@ -147,7 +147,7 @@ def main() -> int:
     os.environ.setdefault("FW_REASONING_CONTENT", "1")   # DeepSeek thinking 模式必需
     ap = argparse.ArgumentParser()
     ap.add_argument("--steps", type=int, default=0, help="0 = 不限(默认;由模型自己收)")
-    ap.add_argument("--out", default="docs/evidence/real-model-run.md")
+    ap.add_argument("--out", default="state/_scratch/e2e-real-model.md")
     ap.add_argument("--from-run", default=None,
                     help="只从已有运行目录重新渲染报告(不调用模型)")
     ap.add_argument("--dry-run", action="store_true",

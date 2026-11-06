@@ -1,179 +1,123 @@
-# 架构与设计记录
+# fwcore 架构(唯一架构文档)
 
-> **证据纪律**:本文分四类,不得混写 ——
-> ①**已实现**(有代码,有测试) ②**已验证的规则/工程结论**(有实验或事故支撑)
-> ③**方向**(尚未实现) ④**历史方案与已纠正的判断**(保留背景 + 写明纠正)。
->
-> 分支说明:**`main` 是运行基线**;`refactor/codify-ops` 是一次未合并的实验分支(见 §5),
-> 它的结论不能当成本项目的长期架构。
+> 文档定位:这是**给开发 agent 看的**工程事实记录,不是给用户的产品说明。
+> 用户可见的只有 `state/<目标>/report/`(advisory / CVE 材料)。
+> 分四类,不得混写:①已实现(有代码+测试) ②已验证的工程结论(有实验/事故) ③未实现 ④已纠正的旧判断。
 
----
+## 1. 定位与三层职责
 
-## 1. 目标与职责边界
+目标:让 agent 在固件研究里**持续、可恢复、可验证**地工作。
 
-系统目标:让 agent 在固件研究里**持续、可恢复、可验证**地工作,产出可复现的漏洞结论或覆盖度结论。
-
-三层职责(这条是本项目的核心,别的都从它推出):
-
-| 角色 | 负责 | **不**负责 |
+| 角色 | 负责 | 不负责 |
 |---|---|---|
-| **模型** | 选研究方向、选方法、解释结果、提出反例与新假设 | 不负责维护机器事实的权威性 |
-| **运行时** | 执行工具调用、真实状态、超时/取消、上下文、持久化、恢复、追踪 | 不替模型决定研究策略 |
-| **领域层** | 事实与不变量(假设/尝试/观察/证据/结论的合法流转) | 不判断"这个漏洞是否真实" |
+| 模型 | 选方向/方法、解释结果、提出反例 | 维护机器事实、判定结论合法性 |
+| 运行时 | 工具执行、超时/取消、上下文、持久化、恢复 | 判断"这个漏洞是否成立" |
+| 领域层 | 事实与不变量(假设/尝试/观察/证据/结论) | 产生研究判断 |
 
-> 判据(方法论)写在 `knowledge/` 与 `AGENTS.md`(人能讨论、能被推翻);
-> **机器可核的部分**才落进代码(闸门/不变量)。代码**不得自带新判据**(见 §4 的纠正 C1)。
+判据(方法论)在 `knowledge/`、`AGENTS.md`、`LOOP.md`;机器可核部分才进代码。
+代码**不得自带新判据**:闸门红 ≠ 结论变,而是"补事实"或"先改判据"。
 
-## 2. ① 已实现(有代码 + 有测试)
+## 2. ① 模块(全部有测试)
 
 ```
-fwcore/
-  db.py        SQLite schema(WAL / BEGIN IMMEDIATE / busy_timeout / schema 版本化)
-  domain.py    唯一写入口 + 不变量(见下)
-  tools.py     描述式工具注册(ToolSpec: name/description/JSON Schema/risk)+ 真实执行状态
-  runtime.py   模型↔工具循环、上下文重建、检查点、恢复
-  migrate.py   notes.md → 权威状态(原文逐字节入库 + 池条目搬移标记待核对)
-  cli.py       独立入口 fw-core(不依赖 Pi)
-tests/         21 个测试(domain/tools/runtime/migrate/并发)
+fwcore/  db.py(SCHEMA v13/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
+         tools.py(内置 ToolSpec)                toolreg.py(manifest→Registry,4 种注册路径)
+         runtime.py(循环/检查点/恢复/预算)       research.py(提示/池/三镜/进度)
+         compact.py(压缩)                        contextinfo.py(上下文状态)
+         mcp_runtime.py(MCP 桥)                  adapters_ida.py + winenv(IDA/Windows)
+         gates_db.py(权威 Gate)                  models/model_client(适配器/协议)
+         policy.py(Authz)  limits.py(边界)  watchdog.py  migrate.py  cli.py
+fwloop/  兼容入口        scripts/ 演练与 e2e        eval/ 答案隔离评测
+tools/registry/*.json  仓库工具 manifest(8 个)
 ```
 
-**领域不变量(全部有测试,`tests/test_domain_core.py`)**
+## 3. 存储:DB 是权威,文件是叙述/材料(不是双写)
 
-| 不变量 | 为什么 |
+| 谁写 | 写什么 | 参与判定 |
+|---|---|---|
+| 模型的 `state_*` 工具 | 假设/尝试/观察/证据/复核/结论/面处置 | ✅ |
+| runtime | `runs`(预算)、`checkpoints`(恢复)、`tool_calls`(产物/来源)、`events`(审计) | ✅ |
+| 模型/人 | `notes.md`(叙述、理由、下一步指针) | ❌ |
+| finding/收尾时 | `report/`(advisory/INDEX/attack-surface/CLOSURE/复现包) | 材料门读 |
+
+表:`targets surfaces hypotheses attempts observations evidence evidence_checks
+conclusions runs checkpoints tool_calls events mirror_checks documents meta`。
+
+保留机制:`checkpoints_keep=120`/run(写时裁剪)→ `_shrink_history`(老工具输出 200 字符 +
+保留路径/`tool_call_id`)→ 库超 `max_db_bytes=256MB` 删最老 checkpoint 仍超则暂停。
+清理:两档(**使用中/收尾未归档=提交中** 只清垃圾;**归档/不要了** 才释放载体/派生物/原件,需用户明说)。
+
+## 4. 工具接入(统一注册契约,不统一内部实现)
+
+四条路径:内置 `ToolSpec`(state_*/shell_exec/fs_*)、`tools/registry/*.json`(script/python)、
+feature 适配器(ida)、MCP(`mcp_<server>_<tool>`)。
+
+```json
+{"name":"x","description":"…","input_schema":{…},"kind":"script",
+ "argv":["bash","tools/x.sh","{a}"],"timeout":900,"timeout_arg":"timeout",
+ "risk":"high","capability":"extract.binwalk","provider":"repo:x.sh",
+ "requires_file":"tools/x.sh","observer":"x"}
+```
+
+执行链:`Registry.call`(call_key 幂等 + risk/Authz + capability)→ 适配器 → `run_process`
+(独立 PGID、取消杀组、输出上限、ok_exit_codes)→ 产物落 `state/artifacts/<run>/` →
+`tool_calls` 行(status/exit/sha/provider/arch/observation)→ `db_tool_call_id`(TC-…) →
+`_bounded_tool_result`(≤8k、始终合法 JSON、保留路径/哈希/错误)→ 模型。
+能力层:`fw-core capabilities` 探针(`ready/partial/deps_missing/arch_mismatch/missing`);
+manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失。
+
+## 5. 上下文生命周期(静态前缀 + 尾部状态 + 阈值压缩)
+
+- 请求 = `[system 静态规则] + history(append-only) + [user 尾部状态]`;状态块含派生量/事实/进度/目标
+  + `[Context status]`(model/window/估算/可用/预留/阈值/上次真实 usage)。**不进 system、不写 history/checkpoint。**
+- 阈值 = `window − max(output_reserve, 10% window)`;生产(1M 窗口/8k 预留)= 90%。
+- 压缩:按**协议组**切(assistant.tool_calls + 全部 tool 结果),保留最近 `keep_recent_tokens`;
+  被丢弃的历史走 `summarize_covered`:分块(默认 60k/块)→ 超大消息切片 → 归并;超 `summarize_max_calls`
+  或任一块为空 ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
+- 摘要调用与普通调用同一条**调用前**预算检查,计入 `run_calls` 与 `model.call(kind=summarize)`。
+
+## 6. 与 Pi 的关系:参考架构,不是依赖
+
+Pi 是外部开发工具(`.pi/` 不入库);fwcore 独立运行、不调用 Pi。
+Pi 侧只读结论:会话是 append-only entries + projection;system 静态、动态上下文作为消息注入;
+阈值/溢出 compaction(keepRecentTokens 20k + 结构化摘要);usage 字段 `input/cacheRead/cacheWrite/output/reasoning`。
+DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定并读 usage)。
+实测:Pi 命中 98.96%(n=11,561,均值 423k);fwcore 31 次(均值 12k)89.8%;
+**同规模(<20k)**:Pi 88.47%(n=338) vs fwcore 89.8% —— 持平。此前“98.36% vs 89.8%”是规模差异。
+可复核脚本:`scripts/pi_cache_stats.py`(只读/脱敏/`--by-size`)。
+
+## 7. ② 已验证的工程结论(有实验/事故)
+
+1. 成本类理由不是降级理由;停只有四种合法理由。
+2. 旧停止声明不能当本轮理由;半轮必须被识别。
+3. `qemu-user -L` 不翻译 `execve` ⇒ 设备侧执行需 chroot/容器证据。
+4. 附件包必须自含(禁符号链接)+ README 可独立跑通。
+5. 逐字节一致只证明迁移兼容,不证明语义正确。
+6. 工具名 `^[A-Za-z0-9_-]+$`(点号名被端点 400 拒)。
+7. thinking 模式要求每条 assistant 回传 `reasoning_content`(空串也要);新进程 env 未继承会 400
+   ⇒ 默认补、显式 `FW_REASONING_CONTENT=0` 才关。
+8. 步数预算是每次调用一份,不能当绝对上限(否则 resume 原地不动)。
+9. 高风险工具默认拒绝;授权范围内分析工具自主运行(`Authz` 区分)。
+10. 不要凭"命令存在"推断"能力可用"(aarch64 tracer 实为 x86-64 等),必须探针。
+11. 动态内容放 system 首位会让前缀缓存从 98% 掉到 1%(实测);动态状态必须在尾部。
+12. 请求长度分层后缓存才可比;不同均值规模不可直接比较。
+
+## 8. ③ 未实现 / 未验证(不得写成已验收)
+
+| 项 | 状态 |
 |---|---|
-| `environment_failure` / `no_signal` / `cancelled` **不能**推出结论 | 工具失败/超时/没打到目标 ≠ 漏洞不存在(旧设计用文字可绕过) |
-| `refuted` 必须挂该尝试名下的证据 | 防"文字否证" |
-| 结论必须写 `scope_note`;`vulnerable` 必须挂证据 | 防无依据扩大结论 |
-| `inconclusive` 必须写"还缺什么才能判定" | 强制把"下一步实验"说出来,而不是含糊收口 |
-| 目标不存在 ⇒ `unknown`;有目标无假设 ⇒ `empty` | `UNKNOWN ≠ EMPTY`(队列空 ≠ 目标不存在) |
-| 有 open 假设 / running 尝试 / 未判定面 / 材料不完整 ⇒ `closure_blockers` 非空 | 收尾前置程序可核 |
-| 证据自动绑定目标版本 + 文件 sha256 | 证据可定位、可复核 |
-| 并发写:第二个写者抛 `LockedError` | 多会话不静默覆盖 |
+| 真实 >500k 长历史的稳态命中率 | 未测(只有 31 次均值 12k 的受控实验) |
+| 真实 API 多轮压缩后的缓存重建 | 未测(只有离线模拟) |
+| 第三方网关缓存行为 | 未测(实测走官方 api.deepseek.com) |
+| 模型切换 / 自动重试 | 未实现(失败上抛、预算暂停) |
+| checkpoint append-only 日志 | 未做(每步全量快照,写入放大已记录) |
+| 报告自动生成 | 未做(advisory 由 agent 写,`derived_check` 校验) |
+| Web/图形界面 | 无(只有 CLI) |
 
-**工具真实状态**(`tests/test_runtime_core.py`):
-`pending → running → ok|error|timeout|cancelled`,带 exit_code / duration_ms / stdout+stderr 落盘与 sha256;
-高风险工具(`shell.exec`)在没有 `confirm` 回调时返回 `cancelled`。**"发起了" never equals "完成了"** ✓。
+## 9. 已知限制
 
-**运行时恢复**:`runs` + `checkpoints`;模型/进程异常 ⇒ run 置 `paused` + 写检查点,**假设状态不变**;
-`resume()` 从最后检查点继续(`test_interruption_pauses_and_keeps_hypothesis_state` / `test_resume_continues_from_checkpoint`)。
-
-**能力/Provider 层**(`fwcore/providers.py`,已实现)
-- 能力 → 多 provider → **真实探针**;状态区分 `ready / partial / deps_missing / not_started /
-  arch_mismatch / missing`。**不重装环境**,只做发现/解析/选择/记录。
-- 实测纠正了两条历史记载:`~/.local/bin/afl-aarch64/afl-qemu-trace` 实际是 **x86-64** ⇒
-  本机 **aarch64 fuzz 不可用**(报 `arch_mismatch`);`sasquatch` 不在 PATH;`unblob` 缺多个提取器 ⇒ `partial`。
-- 改版 QEMU 与上游 QEMU 是**两个不同的 provider**(`ready` vs `partial:NETLINK 被拒`),不静默互换。
-
-**授权与安全**(`fwcore/policy.py::Authz`,已实现)
-- 研究授权 = 可撤销 + 带范围 + 可设时限;授权范围内**分析工具自主运行**(不逐次确认);
-  `external=True` 的工具(外网/登录态/公开提交)永远需要人类确认;越权路径/过期/撤销 ⇒ 拒绝。
-
-**自动继续与执行语义**(已实现)
-- **不设步数预算**:由模型自己输出 `FINAL` 或交回控制权;只保留执行层保护 ——
-  重复无进展检测(同一调用连续 N 次 ⇒ `run.stalled`)、可选墙钟安全上限。
-- 交回控制权只有三种原因:`closed`(收尾前置全清)/ `needs_user_input` / 用户停。
-  模型说 `FINAL` 但还有未收口项 ⇒ `advance()` 带阻塞清单**自动开下一轮**。
-- 工具调用**幂等**:同一 `call_key` 重复执行返回缓存(`replayed=True`),恢复时不重复副作用。
-
-**研究评测(答案隔离)**(`eval/`,已实现)
-- `eval/tasks/<任务>/bundle`(给模型看)+ `answers/expected.json`(**只在评测侧**);
-- 判据:是否找到缺陷、是否**不过度概括**、是否有证据、是否有决定性尝试、是否交代观察;
-- 实测(DeepSeek,无步数上限):
-  `sig-after-parse` **PASS**(2 轮,12 条证据;模型自己提出"先解析后验签"并做了负对照)、
-  `partial-auth` **PASS**(1 轮,`handback=closed`);
-- 评分器曾出现**假阴性**(把证据引用里的"全部"当成过度概括)⇒ 已改为"收窄缺失 + 显式整体断言"双条件。
-
-**研究载体**(`fwcore/research.py`,已实现)
-- 系统提示**从仓库规则生成**:`AGENTS.md` / `LOOP.md` / `knowledge/misreports.md` / `knowledge/vuln-patterns.md`
-  原文按预算读入(**规则唯一来源,不在代码里复制一份**);
-- **假设池唯一**:来自 DB,程序按"未认证 > 认证后 / 解析器与状态机 > 简单 / 未理解优先"排序(**可被模型推翻**);
-- **三镜刷新**:`mirror_checks` 表 + `rounds_since_mirror()`;超过 3 轮未做 ⇒ 进收尾阻塞;
-- **双输出**:做过尝试但一条观察都没登记 ⇒ 收尾阻塞(程序可核);
-- **方法保持开放**:方法卡 = `knowledge/` 条目标题 + 工具描述,不是封闭技术表。
-
-**既有研究工具接入**(`fwcore/toolkit.py`):把 `tools/derived_check.sh`、`queue_state.sh`、`parse_signal.py`、
-`cgi_fuzz.sh`、`emu_run.sh` 包成带描述/schema/风险级的工具(按仓库实际存在的脚本注册),高风险走 policy 确认。
-
-**真实模型端到端**(`scripts/e2e_real_model.py`,`make e2e-real`)
-用 DeepSeek(`deepseek-flash`)跑两阶段:第一阶段 8 步预算后暂停,`resume()` 从检查点继续;
-实测 6 次工具调用(fs_hash ×2 → observation → hypothesis → attempt start/finish)、状态正确落库、
-history 通过 OpenAI 协议校验、阶段二步数继续增长 ⇒ **机制闭环成立**。
-⚠️ 这**只证明工程闭环**,不证明研究质量(任务是人给定的机械流程)。
-
-**历史迁移**(实测):QNAP TS-464 的真实 `notes.md` → 28 条池条目 → 28 条假设(标 `migrated:needs_review`),
-原文 **byte-identical** 入库,重复导入幂等。**不**根据"定论/已排除"字样推断历史已完成。
-
-## 3. ② 已验证的规则与工程结论(有实验/事故支撑)
-
-1. **成本类理由不是降级理由**;停只有四种合法理由(本轮新 finding / 需工作区外具体事物 / 队列清空 / 目标级裁决)。
-2. **半轮**必须被识别(只声明 `本轮目标` 不写收口)。
-3. **旧的停止声明不能被当本轮理由**(2026-09-29 真实踩过)。
-4. **`qemu-user -L` 不翻译 `execve`** ⇒ "设备侧执行"结论必须有 chroot/容器级证据。
-5. **附件包必须自含**(禁符号链接)且带可独立跑通的 README —— 符号链接在压缩/上传后必坏。
-6. **新旧实现逐字节一致只证明迁移兼容,不证明语义正确**(见 §4 C3)。
-7. 判据读 Markdown 靠正则是脆弱的(这正是 §2 权威状态的动机)。
-8. **工具名必须是 `^[A-Za-z0-9_-]+$`**(真实端点 400 验证):`fs.read` 这类点号名一律被拒 ⇒ 注册时校验。
-9. **thinking 模式要求每个 assistant 消息都回传 `reasoning_content`**(空串也要),且不能在本地方案化时丢掉。
-   —— 这两条**只有真实模型能暴露**,脚本化模型完全测不出来(审计结论)。
-10. **步数预算是每次调用一份**,不是绝对上限:否则 `resume()` 会因历史步数 ≥ 上限而原地不动。
-11. 高风险工具**默认拒绝**(没有 confirm 就 `cancelled`),参数先过 schema 校验与路径收敛,超时受上限约束;
-   但**授权范围内**应允许自主运行分析工具,否则谈不上自主研究(两者靠 `Authz` 区分,不是靠逐次确认)。
-12. **不要凭"命令存在"推断"能力可用"**:aarch64 tracer 文件实际是 x86-64;unblob 本体在但缺提取器。
-   能力必须走探针(capabilities),状态要能表达 `arch_mismatch` / `deps_missing` / `partial`。
-13. **不要给研究设"步数预算"**:预算猜小了只是浪费 token 且逼出半成品;让模型自己收(FINAL),
-   执行层只做停滞检测与墙钟安全上限。
-14. **评分器也会假阴性**:用关键词判"过度概括"会把证据引用误判 ⇒ 评分要双条件、并能离线重评(`--rescore`)。
-
-## 4. ④ 纠正过的设计判断(保留历史背景)
-
-- **C1"闸门 = 判据层"** ✗(2026-11-04 我在实验分支这么写过)。纠正:**闸门只是判据里可机械核的部分**;
-  判据来源是 `knowledge/` + `AGENTS.md`;闸门红 ≠ 结论变,而是"补事实"或"先改判据再改闸门"。
-- **C2"判据只有一个家 ⇒ 全写在 Markdown"** ✗。纠正:**研究原则**可在文档;**机器状态、硬不变量、字段约束、执行协议**
-  必须有代码 + 权威存储(本文件 §2 就是这类)。
-- **C3"逐字节差分一致 ⇒ 正确"** ✗。它只证明**等价迁移**;旧规则本身可能漏判/误判/被文字绕过
-  (例:靠"定论""已完成"字样判断生命周期)。
-- **C4"统一入口 ⇒ 所有脚本都要迁成同一种实现"** ✗。工具可以来自不同语言/外部程序/MCP;
-  要统一的是**调用、执行状态、证据与错误语义**,不是源码语言。
-- **C5"planner/parser/verifier 三个组件"** ✗(早期文档的说法)。纠正:规划是**模型的自主行为**;
-  程序侧只有"队列与事实管理",不能因此声称程序具备了研究规划能力。
-- **C6 "状态解析 ↔ 判据闸门" 二分** ✗。真实分层是:事实(state) · 判据(KB/AGENTS) · 闸门(可核子集) · 操作(工具)。
-
-## 5. `refactor/codify-ops` 实验分支的定位
-
-它做了:queue/derived 的 Python 化、逐字节差分、`Makefile`/`unified CLI`、部分闸门拆分。
-**选择性接纳**,不整分支合并:
-- ✅ 值得搬:逐字节差分作为迁移方法;legacy 副本作为对照物;测试覆盖历史事故的思路。
-- ⚠️ 需重做:`fwloop.state.notes` 仍以 Markdown 正则解析状态(与 §2 权威状态冲突);
-  `gates/_derived_body.py` 用 `exec` 跑旧脚本(临时手段,不是长期架构)。
-- ❌ 不采纳:把"闸门"当作判据层、"统一入口"作为架构目标、把文档结论当事实权威。
-
-## 6. ③ 尚未实现(明确不是已完成)
-
-| 方向 | 现状 | 阻碍/下一步 |
-|---|---|---|
-| 把闸门(derived_check)完全建立在权威状态+真实证据上 | 未开始(当前仍在 md 上跑) | 需先把 `surfaces/hypotheses` 填全;再实现从 DB 计算的 gates |
-| Pi 侧的适配(把 Pi 当兼容入口) | 未实现(独立路径已有 ✓) | 需要一个 Pi extension 把事件转调 `fwcore` |
-| 更多研究评测任务(仿 H-06/H-24/H-15/WS-Discovery 的困难场景) | 已有 2 个(答案隔离) | 需要更多任务与人工复核结论质量,而不只是机制判据 |
-| Pi 入口换成转调 fwcore | 未实现 | 见 §6 第一行 |
-| 反证驱动的提示与策略 | 部分(仅 `inconclusive` 强制说明) | 需要评测来验证是否真的改变行为,而不是只改文本 |
-| 工具生态(MCP / 外部逆向工具接入) | 只实现内置 4 类工具 | `ToolSpec` 已支持描述式注册;需 MCP client 适配 |
-| 迁移的语义核对 | 只做原文保真 + 条目搬移 | 需人工/模型对 `needs_review` 项逐条确认 |
-
-## 7. 已知限制(诚实清单)
-
-1. **真实模型只做了"机制 E2E",没有研究质量评测**:`scripts/e2e_real_model.py` 跑的是
-   人工给定的机械流程(读两个文件 → 登记 → 收尾),证明"模型能通过工具改状态、能恢复",
-   **不证明**它更会找漏洞。研究质量评测仍是 ③ 未实现项。
-2. **工具集仍然很薄**:内置 4 类 + 仓库 5 个脚本适配;IDA/Ghidra 仍是"外部脚本"而非结构化工具
-   (输出是文本尾巴,不是结构化观测),这是下一步要做的。
-3. **状态模型是初版**:只有 targets/surfaces/hypotheses/attempts/observations/evidence/conclusions;
-   跨版本对照、工具链环境、建场状态等还没有一等公民。
-4. **没有 CI**,只有本地 `pytest`。
-5. **迁移只覆盖假设池**;攻击面/证据/结论仍留在原文里,靠人工核对。
-
-## 8. 工程约定
-
-- 程序独占写权:外部不直接 SQL;所有写入走 `domain.py`。
-- 新增不变量 ⇒ 必须先有测试(反面示例:`tests/test_domain_core.py` 里"非判定性尝试不能收口")。
-- 迁移/重构 ⇒ 用"等价替换 + 对照物"验证,并在本文标注它**只**证明兼容。
-- 文档不得把 ③ 写成 ①;纠正旧判断时保留原文背景(见 §4)。
+1. 每步全量 checkpoint(427 条/114MB 的 drill 库即是例证);`checkpoints_keep` 只按 run 裁剪。
+2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
+3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
+4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 57 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + git clean)。
