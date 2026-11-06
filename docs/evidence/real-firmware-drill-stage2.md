@@ -40,3 +40,23 @@
 ## 未解决
 
 1. `.text` 头部 768 B OTP 与约 123 个未解字;2. 各 op 子处理器函数体未穷尽;3. 库内 token 逻辑只到调用点粒度;4. 无动态运行(混淆 CGI 无可加载入口);5. 3 条历史证据来源不可判定。
+
+## 离线补充事实(2026-11-06,未跑模型)
+
+对 `authLogin.recovered.elf` 直接 objdump(0xf780–0xf810):
+
+```
+f7a4  bl CGI_Find_Parameter@plt      ; 取参数
+f7ac  cbz x0, f898                  ; 缺参数 -> 走别的分支
+f7c0  bl CGI_Find_Parameter@plt      ; 再取一个参数
+f7c4  cbz x0, f7e0
+f7cc  bl Is_Guest_User@plt           ; 访客判定
+f7d0  cbz w0, f7e0                   ; w0==0 ⇒ 非访客:跳到 f7e0
+f7ec  bl strcmp@plt                  ; 访客路径继续做字符串比较
+f7f0  cbz w0, f86c
+```
+
+含义(限定范围):认证入口在 `main` 早期就有 `CGI_Find_Parameter` → `Is_Guest_User` 的门,
+且**访客/非访客走不同分支**;`op` 分发处理器的入口(如 0x19908)位于更后面。
+**尚未确认**:各 handler 内部是否另有权限检查、失败分支能否到达受保护操作 —— 需要沿
+`op` 值 → 分发表 → handler 的调用链逐点跟踪。
