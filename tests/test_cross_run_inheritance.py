@@ -22,7 +22,7 @@ class Replay:
         self.done = False
 
     def chat(self, messages, tools):
-        self.prompts.append(messages[0]["content"])
+        self.prompts.append("\n".join(m.get("content") or "" for m in messages))
         if self.done:
             return Reply(content="FINAL: 收束")
         self.done = True

@@ -21,7 +21,7 @@ class RecordingAdapter(ScriptedAdapter):
         self.systems: list[str] = []
 
     def chat(self, messages, tools):
-        self.systems.append(messages[0]["content"])
+        self.systems.append("\n".join(m.get("content") or "" for m in messages))
         return super().chat(messages, tools)
 
 

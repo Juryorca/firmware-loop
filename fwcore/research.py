@@ -357,10 +357,12 @@ class Research:
 
     # ---------- 系统提示 ----------
     # ---------- 系统提示 ----------
-    def system_prompt(self, target: str, goal: str | None = None,
-                      run_id: str | None = None) -> str:
-        d = self.domain.derived(target)
-        pool = self.pool(target)
+    def rules_prompt(self, target: str) -> str:
+        """**静态**系统提示:逐字节稳定(它是请求的第一条消息,一变就让前缀缓存整体失效)。
+
+        实测:同一 run 内 system 一变,下一次调用的缓存命中从 ~98% 掉到 ~1%
+        (数据见 docs/evidence/token-audit.md)。动态状态一律走 `state_prompt()`。
+        """
         cards = kb_titles(self.root)
         parts = [
             "你是固件漏洞研究 agent。程序负责机器事实的可靠性与不变量,你负责研究判断与行动。",
@@ -368,15 +370,32 @@ class Research:
             "## 不变量(程序会拒绝,不是建议)",
             "- 尝试结果六种:supported / refuted / inconclusive / environment_failure / no_signal / cancelled。",
             "  后三种**不能**推出结论;refuted 必须挂证据;结论必须写 scope_note;",
-            "  vulnerable 需要 supported 尝试 + 证据;no_finding 需要 refuted 尝试;inconclusive 要写清还缺什么。",
+            "  vulnerable 需要 supported 尝试 + 证据;no_finding 需要 refuted 尝试 + 至少一条经复核证据;"
+            "inconclusive 要写清还缺什么。",
             "- 面判 vulnerable 需要 evidence_id;判 no_finding / out_of_scope 要写理由。",
             "- 工具失败/超时/没打到目标 ≠ 漏洞不存在。",
             "",
-            "## 现状(程序算出的派生量)",
-            "```json",
-            __import__("json").dumps(d, ensure_ascii=False, indent=1)[:3000],
-            "```",
+            "## 工作方式",
+            "- 优先解决最可能改变判断的关键未知;主动找能推翻当前解释的反例;",
+            "- 不用抽样代表整体;结论写清适用范围;",
+            "- 需要结束时输出 `FINAL: <小结>` —— 但这只结束本轮,是否可收尾由程序判定。",
         ]
+        if cards:
+            parts += ["", "## 可选方法/判据(开放清单,来自 knowledge/,不是封闭技术表)", ""]
+            parts += [f"- {c}" for c in cards[:40]]
+        for rel in self.rules_files:
+            body = select_rules(_read(os.path.join(self.root, rel), 10 ** 6), RULES_LIMIT)
+            if body:
+                parts += ["", f"## 规则原文({rel})", body]
+        return "\n".join(parts)
+
+    def state_prompt(self, target: str, goal: str | None = None,
+                     run_id: str | None = None) -> str:
+        """**动态**状态:放在消息**末尾**(历史之后),变化只影响尾部,不破坏前缀缓存。"""
+        d = self.domain.derived(target)
+        pool = self.pool(target)
+        parts = ["## 现状(程序算出的派生量)", "```json",
+                 __import__("json").dumps(d, ensure_ascii=False, indent=1)[:3000], "```"]
         # 跨 run 继承:把已有假设/证据**事实**摆出来(不是让你重做);
         # 只有新 run 看得到这些,才不会从零开始重复第一阶段分析
         t = self.domain.target(target)
@@ -407,16 +426,9 @@ class Research:
         if self.mirror_due(target):
             parts += ["", f"## 三镜刷新(due:{self.rounds_since_mirror(target)} 轮未做)",
                       "面/格收口时用 state.record_mirror 记一行:机制=… / 作者=… / 状态=… / 新面=…"]
-        if cards:
-            parts += ["", "## 可选方法/判据(开放清单,来自 knowledge/,不是封闭技术表)", ""]
-            parts += [f"- {c}" for c in cards[:40]]
-        parts += ["", "## 工作方式",
-                  "- 优先解决最可能改变判断的关键未知;主动找能推翻当前解释的反例;",
-                  "- 不用抽样代表整体;结论写清适用范围;",
-                  "- 需要结束时输出 `FINAL: <小结>` —— 但这只结束本轮,是否可收尾由程序判定。"]
-        # 规则原文(唯一来源;截断到预算)
-        for rel in self.rules_files:
-            body = select_rules(_read(os.path.join(self.root, rel), 10 ** 6), RULES_LIMIT)
-            if body:
-                parts += ["", f"## 规则原文({rel})", body]
         return "\n".join(parts)
+
+    def system_prompt(self, target: str, goal: str | None = None,
+                      run_id: str | None = None) -> str:
+        """兼容入口 = 静态规则 + 动态状态(运行时把动态部分放到消息末尾)。"""
+        return self.rules_prompt(target) + "\n\n" + self.state_prompt(target, goal, run_id)

@@ -47,6 +47,21 @@
 - **权威 Gate 同步(本轮)**:`fw-core gates` 输出 `provenance{direct,weak,unlinked}`;只有完整性复核的 `no_finding` 进 `advisories`(提示,不阻断)。
 - 验收:`tests/test_provenance_strength.py`、`tests/test_gate_provenance.py`;真实 QNAP 库 gates 实测 `direct 10 / weak 8 / unlinked 3`,4 条 no_finding 标为"仅完整性复核"。
 
+### P6 Token 用量审计 ✅ 完成(2026-11-06)
+
+- **数据**:`R-…3518ef1d` prompt 10.75M / 命中 4.91M(45.7%) / 未命中 5.84M / completion 71.6k(推理 43.7k);
+  `R-…0d7f8196` 6.40M / 0.29M(4.6%) / 6.11M / 57.3k(35.5k)。逐条核对 `total=prompt+completion`、`cached⊆prompt`、`reasoning⊆completion`。
+- **根因(已修)**:动态内容(derived 计数/已有事实/进度/目标)原本在**第一条 system 消息**里,研究一推进就变
+  ⇒ provider 前缀缓存整体失效(实测稳定窗口 98.3% vs 变化窗口 1.8%;离线复现:加 1 条 observation 使 prompt 在偏移 795 处变化)。
+  现拆 `rules_prompt()`(静态)+ `state_prompt()`(尾部 user 消息),`[system]+history+[user state]`;
+  测试 `tests/test_prompt_cache_layout.py`(system 逐字节一致 / 历史只追加 / 动态在尾部)。
+- **分类**:A 完整历史 + 15 个工具 schema(5,430 字符/轮)+ reasoning 回传(协议必需);
+  B 工具结果已有 8k 上限(实测最大 3.3k);C 旧 run 的 200 次重复 FINAL(已修)、1 次 400(已修)、模型重复读同一库(4 次,非框架);
+  D `model_calls` 比事件多 1(失败调用计入预算但无 usage)。
+- **估算**:未命中输入合计 11.95M;按 98% 命中量级可降到 ~0.26M(标注为估算,非精确账单)。
+- **不删历史 / 不摘要 / 不减工具定义**。
+- 详见 `docs/evidence/token-audit.md`。
+
 ### P5 `passwordless op=8` 未认证信息暴露 ✅ 已成立(vulnerable,2026-11-06)
 
 - **结论** `H-20261106-33991ba5` = **vulnerable**,范围写死:样本 authLogin.cgi(sha256 `29eb3bda…`,QTS 5.2.11.3661)的

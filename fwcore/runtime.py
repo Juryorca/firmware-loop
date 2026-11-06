@@ -435,11 +435,15 @@ class Runner:
                     self._limit_hit(rid, "prepare_cancel", {"note": str(prep.get("why") or "")[:120]})
                     state = "paused"
                     break
-                _sys = self.research.system_prompt(target, goal, rid)
+                # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
+                # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
+                _sys = self.research.rules_prompt(target)
+                _state = self.research.state_prompt(target, goal, rid)
                 _note = self._prepare_state.get("context_note")
                 if _note:
-                    _sys += "\n\n## 轮前准备(程序注入)\n" + _note
-                msgs = [{"role": "system", "content": _sys}] + history
+                    _state += "\n\n## 轮前准备(程序注入)\n" + _note
+                msgs = [{"role": "system", "content": _sys}] + history \
+                    + [{"role": "user", "content": _state}]
                 # 预算判定必须在**计数之前**:被挡住的调用不该记账(时间/次数都一样)
                 if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
                     state = "paused"
@@ -455,7 +459,7 @@ class Runner:
                                     {"calls": run_calls, "limit": self.limits.max_model_calls})
                     break
                 run_calls += 1
-                _ctx = _context_stats(_sys, history)
+                _ctx = _context_stats(_sys + _state, history)
                 reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
                 # **每一次**真实调用都记账(含 tool_calls / FINAL / 推理-only / 截断);
                 # 服务端没给 usage ⇒ usage_known=false,不猜 token 数

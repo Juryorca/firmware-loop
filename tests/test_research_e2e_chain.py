@@ -95,7 +95,7 @@ def test_chain_large_output_observation_and_inheritance(tmp_path):
     seen = {}
 
     def spy(messages, tools):
-        seen["sys"] = messages[0]["content"]
+        seen["sys"] = "\n".join(m.get("content") or "" for m in messages)
         return Reply(content="FINAL: ok")
     m2.chat = spy
     r2.run(r2.start("t1", "继续"), "t1", goal="继续")
