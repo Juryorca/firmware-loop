@@ -45,9 +45,11 @@ ALLOWED_SCHEMES = ("http://", "https://")
 
 
 def _check_url(url: str) -> None:
-    """只允许 http(s):防止配置被改成 file:// 之类把本地文件读进来(advisory 的真实面)。"""
+    """只允许 http(s) 且必须有 host:防止配置被改成 file:// 读本地文件 / 空 host 触发 AttributeError。"""
     if not url.startswith(ALLOWED_SCHEMES):
         raise ModelHTTPError(0, f"拒绝非 http(s) 端点: {url[:80]}")
+    if not urlsplit(url).hostname:
+        raise ModelHTTPError(0, f"端点缺少 host: {url[:80]}")
 
 
 def http_transport(url: str, headers: dict, payload: dict) -> dict:
@@ -59,7 +61,14 @@ def http_transport(url: str, headers: dict, payload: dict) -> dict:
     u = urlsplit(url)
     path = (u.path or "/") + (f"?{u.query}" if u.query else "")
     cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
-    conn = cls(u.hostname, u.port, timeout=180)
+    host = u.hostname
+    if not host:
+        raise ModelHTTPError(0, f"端点缺少 host: {url[:80]}")
+    try:
+        port = u.port
+    except ValueError as e:
+        raise ModelHTTPError(0, f"端点端口非法: {e}") from e
+    conn = cls(host, port, timeout=180)
     try:
         conn.request("POST", path, body=json.dumps(payload).encode(), headers=headers)
         resp = conn.getresponse()

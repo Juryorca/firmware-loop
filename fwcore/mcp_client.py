@@ -69,9 +69,11 @@ def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
 class MCPClient:
     """最小 stdio MCP 客户端(initialize / tools.list / tools.call)。"""
 
-    def __init__(self, spec: ServerSpec, *, timeout: float = 20.0):
+    def __init__(self, spec: ServerSpec, *, timeout: float = 20.0,
+                 pgids_path: str | None = None):
         self.spec = spec
         self.timeout = timeout
+        self.pgids_path = pgids_path
         self._proc: subprocess.Popen | None = None
         self._next_id = 0
         self._buf = b""
@@ -93,6 +95,16 @@ class MCPClient:
             [self.spec.command, *self.spec.args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=env, start_new_session=True,
         )
+        if self.pgids_path:
+            # 登记到 run 的 .pgids:硬崩溃后 claim/recover/看护能按 starttime 核验并清掉孤儿 MCP
+            try:
+                from .watchdog import _proc_starttime
+                os.makedirs(os.path.dirname(self.pgids_path), exist_ok=True)
+                with open(self.pgids_path, "a", encoding="utf-8") as f:
+                    f.write(f"{os.getpgid(self._proc.pid)} "
+                            f"{_proc_starttime(self._proc.pid) or 0}\n")
+            except OSError:
+                pass
 
     def close(self) -> None:
         if not self._proc:

@@ -53,6 +53,7 @@ class MCPBridge:
     status: dict[str, dict] = field(default_factory=dict)
     registered: dict[str, list[str]] = field(default_factory=dict)
     closed: bool = False
+    pgids_path: str | None = None
 
     def start(self) -> dict[str, dict]:
         """连接 + 注册;单个服务器失败不影响其它。可重复调用(已关闭的桥会重新打开)。"""
@@ -66,7 +67,7 @@ class MCPBridge:
             if spec.transport != "stdio":
                 self.status[spec.name] = {"status": "unsupported_transport", "detail": f"url={spec.url}"}
                 continue
-            client = MCPClient(spec, timeout=self.timeout)
+            client = MCPClient(spec, timeout=self.timeout, pgids_path=self.pgids_path)
             try:
                 client.start()
                 client.initialize()
@@ -170,7 +171,8 @@ class MCPBridge:
 
 
 def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | None = None,
-                       *, timeout: float = 20.0, call_timeout: float = 120.0) -> MCPBridge:
+                       *, timeout: float = 20.0, call_timeout: float = 120.0,
+                       pgids_path: str | None = None) -> MCPBridge:
     """从 fwcore 自己的配置建桥:`FW_MCP_CONFIG` 或 `state/mcp.json`。"""
     import os
 
@@ -183,4 +185,4 @@ def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | 
         paths = list(config_paths)
     specs = list(load_servers(paths).values())
     return MCPBridge(root=root, registry=registry, specs=specs,
-                     timeout=timeout, call_timeout=call_timeout)
+                     timeout=timeout, call_timeout=call_timeout, pgids_path=pgids_path)

@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import os
 
+import pytest
+
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.limits import Limits
@@ -124,3 +126,12 @@ def test_reasoning_content_can_be_disabled_explicitly(monkeypatch):
     monkeypatch.setenv("FW_REASONING_CONTENT", "0")
     msgs = [{"role": "assistant", "content": "hi"}]
     assert "reasoning_content" not in to_api_messages(msgs)[0]
+
+
+def test_http_transport_rejects_bad_host_and_port():
+    """配置里的坏 URL 必须给清晰错误,而不是 AttributeError/ValueError 冒到调用方。"""
+    from fwcore.model_client import ModelHTTPError, http_transport
+
+    for url in ("http:///x", "http://127.0.0.1:bad/v1"):
+        with pytest.raises(ModelHTTPError):
+            http_transport(url, {}, {})

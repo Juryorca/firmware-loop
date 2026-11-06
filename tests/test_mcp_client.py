@@ -88,3 +88,23 @@ def test_unreachable_probe_does_not_leak_child(tmp_path):
     r = probe(spec, timeout=1)
     assert r["status"] == "unreachable"
     assert "超时" in r["detail"] or "关闭" in r["detail"]
+
+
+def test_mcp_child_pgid_registered_for_orphan_cleanup(tmp_path):
+    """MCP 子进程要登记进 run 的 .pgids(硬崩溃后 claim/recover/看护能清孤儿)。"""
+    import os
+
+    from fwcore.watchdog import _proc_starttime
+
+    pg = tmp_path / "art" / ".pgids"
+    spec = ServerSpec(name="sleepy", command=sys.executable,
+                      args=["-c", "import time; time.sleep(5)"])
+    c = MCPClient(spec, timeout=5, pgids_path=str(pg))
+    c.start()
+    try:
+        parts = pg.read_text(encoding="utf-8").strip().split()
+        assert len(parts) == 2, parts
+        assert parts[0] == str(os.getpgid(c._proc.pid))
+        assert int(parts[1]) == _proc_starttime(c._proc.pid)
+    finally:
+        c.close()

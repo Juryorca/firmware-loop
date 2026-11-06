@@ -162,8 +162,6 @@ class Runner:
     def start(self, target: str, goal: str | None = None) -> str:
         t = self.domain.target(target)
         self._load_authorization(target)
-        # 授权已确定 ⇒ 这时才允许启动 MCP(启动有副作用:子进程/外网/登录态)
-        self._ensure_mcp()
         rid = new_id("R")
         now = _now()
         note = json.dumps({"limits": self._budget_snapshot(), "set_at": now, "via": "start"},
@@ -176,6 +174,9 @@ class Runner:
                        getattr(self.model, "name", None), now, now, now, note))
             _event(c, "run.started", rid, {"target": target, "goal": goal,
                                             "limits": self._budget_snapshot()})
+        # 授权已确定 ⇒ 这时才允许启动 MCP(启动有副作用:子进程/外网/登录态);
+        # rid 已存在 ⇒ MCP 的 pgid 能登记进本 run(崩溃后可清孤儿)
+        self._ensure_mcp(rid)
         return rid
 
     def _watchdog_start(self) -> None:
@@ -501,7 +502,7 @@ class Runner:
                     c.execute("UPDATE runs SET state='running', updated_at=?"
                               " WHERE id=? AND state IN ('paused','finished')", (_now(), rid))
         self._watchdog_start()           # 心跳在起看护之前,避免旧 pid 被误判 owner_dead
-        self._ensure_mcp()          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
+        self._ensure_mcp(rid)          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
         # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
         row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
@@ -860,8 +861,12 @@ class Runner:
         return None
 
     # ---------------- 资源生命周期(MCP / 看护) ----------------
-    def _ensure_mcp(self) -> None:
-        """跨轮/恢复时确保 MCP 真活着:被关过(或构造时没开)就重开并记事件。"""
+    def _ensure_mcp(self, rid: str | None = None) -> None:
+        """跨轮/恢复时确保 MCP 真活着:被关过(或构造时没开)就重开并记事件。
+
+        `rid` 给出时,把 MCP 子进程的 pgid+starttime 登记进该 run 的 .pgids,
+        这样硬崩溃后 claim/recover/看护能按 starttime 核验并清掉孤儿 MCP。
+        """
         if not self._mcp_enabled:
             return
         from .mcp_runtime import bridge_from_config
@@ -880,11 +885,16 @@ class Runner:
         if bridge is not None and not getattr(bridge, "closed", False):
             return
         reopened = bridge is not None
+        pgids = (os.path.join(self.root, "state", "artifacts", rid, ".pgids")
+                 if rid else None)
         if bridge is None:
             self.mcp_bridge = bridge_from_config(self.registry, self.root, self._mcp_config_paths,
                                                  timeout=self._mcp_timeout,
-                                                 call_timeout=self._mcp_call_timeout)
+                                                 call_timeout=self._mcp_call_timeout,
+                                                 pgids_path=pgids)
             bridge = self.mcp_bridge
+        elif pgids and not bridge.pgids_path:
+            bridge.pgids_path = pgids
         bridge.start()
         with contextlib.suppress(Exception):
             _event(self.con, "mcp.reopened" if reopened else "mcp.started", None,
@@ -938,7 +948,7 @@ class Runner:
         if run_id:
             self._claim_run(rid)                  # 接管同一 run(并发 resume 防护)
             self._load_authorization(target)      # 新进程接着跑:授权/MCP 必须恢复
-            self._ensure_mcp()
+            self._ensure_mcp(rid)
         # 续跑已有 run 必须从检查点恢复历史:否则模型只看到新 goal,
         # 之前所有工具结果/结论都"消失"(resume 一直是这么做的,advance 漏了)
         hist = list(history) if history is not None else (
@@ -991,8 +1001,8 @@ class Runner:
             raise KeyError(f"run 不存在: {rid}")
         history = self._load_history(rid)
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
-        self._ensure_mcp()
         self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)
+        self._ensure_mcp(rid)
         with _db.Tx(self.con) as c:
             _event(c, "run.resumed", rid, {"step": row["step"],
                                            "mcp": bool(self.mcp_bridge and not self.mcp_bridge.closed)})
