@@ -43,6 +43,11 @@
 - 目标:缺失库或动态入口导致无法判定时,给出明确边界说明而非猜测;
 - 验收:边界写进结论 `scope_note`,并有对应证据。
 
+- **advance 续跑丢历史**(本轮修):`advance(run_id=…)` 以前把 `history` 当空列表交给 `turn()`,
+  ⇒ 模型只看到新 goal,之前所有工具结果/结论"消失"(`resume` 一直是加载检查点的)。
+  现抽出 `Runner._load_history()`(与 resume 共用,含旧坏 JSON 修复),advance 续跑自动恢复;
+  测试 `test_advance_resumes_history_from_checkpoint`。
+
 ## 已取消(不属于产品)
 
 - Pi Hook 接线、Pi 桥(`pi_bridge`/`pi_hook`/`pi-event`)、Pi continue-guard 开关 —— 已删除;

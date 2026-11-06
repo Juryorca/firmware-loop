@@ -120,3 +120,29 @@ def test_sanitize_history_repairs_legacy_truncated_json(tmp_path):
     # 合法 JSON 不动
     ok = [{"role": "tool", "tool_call_id": "c2", "content": '{"status":"ok"}'}]
     assert _sanitize_history(ok)[0]["content"] == '{"status":"ok"}'
+
+
+def test_advance_resumes_history_from_checkpoint(tmp_path):
+    """advance(run_id=…) 不能丢历史:续跑必须从检查点恢复(和 resume 一致)。"""
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    Domain(con, root).create_target("t1", version="1")
+    seen: list[int] = []
+
+    class Spy(_Chatty):
+        def chat(self, messages, tools):
+            seen.append(len(messages))
+            return super().chat(messages, tools)
+
+    r = Runner(con, root, Spy(2), limits=Limits(max_model_calls=6),
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+    rid = r.start("t1", "第一段")
+    r.run(rid, "t1")
+    first = len(seen)
+
+    # 预算是 run 级累计:第一段已用掉 3 次,这里给到 6 才有余量
+    r2 = Runner(con, root, Spy(0), limits=Limits(max_model_calls=6),
+                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+    r2.advance("t1", "第二段", run_id=rid, max_rounds=1)
+    # 第二次进程的第一次请求必须带着上一段的历史(>1 条系统消息之外的消息)
+    assert max(seen[first:]) > 2, seen

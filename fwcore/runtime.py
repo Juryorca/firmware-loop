@@ -299,6 +299,26 @@ class Runner:
         events.reverse()
         return {"derived": d, "recent_events": events}
 
+    def _load_history(self, rid: str) -> list[dict]:
+        """从最新检查点恢复历史(含旧版坏 JSON 修复);损坏就返回空并记事件。"""
+        ck = self.con.execute(
+            "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1",
+            (rid,)).fetchone()
+        if not ck:
+            return []
+        try:
+            def _lookup(pid):
+                row = self.con.execute(
+                    "SELECT id, stdout_path, result_path FROM tool_calls"
+                    " WHERE id=? OR call_key=?", (pid, pid)).fetchone()
+                return dict(row) if row else None
+
+            return _sanitize_history(json.loads(ck["messages"]), _lookup)
+        except (json.JSONDecodeError, TypeError) as e:
+            with _db.Tx(self.con) as c:
+                _event(c, "run.checkpoint_corrupt", rid, {"error": str(e)[:200]})
+            return []
+
     def _artifact_of(self, tool_call_id: str | None) -> str | None:
         """恢复用:工具调用 → 产物路径(偏好 stdout,其次 result)。"""
         if not tool_call_id:
@@ -714,7 +734,10 @@ class Runner:
         if run_id:
             self._load_authorization(target)      # 新进程接着跑:授权/MCP 必须恢复
             self._ensure_mcp()
-        hist = list(history or [])
+        # 续跑已有 run 必须从检查点恢复历史:否则模型只看到新 goal,
+        # 之前所有工具结果/结论都"消失"(resume 一直是这么做的,advance 漏了)
+        hist = list(history) if history is not None else (
+            self._load_history(rid) if run_id else [])
         try:
             return self._advance_loop(rid, target, goal, hist, max_rounds)
         finally:
@@ -761,21 +784,7 @@ class Runner:
         ).fetchone()
         if not row:
             raise KeyError(f"run 不存在: {rid}")
-        ck = self.con.execute(
-            "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1", (rid,)
-        ).fetchone()
-        try:
-            def _lookup(pid):
-                row = self.con.execute(
-                    "SELECT id, stdout_path, result_path FROM tool_calls"
-                    " WHERE id=? OR call_key=?", (pid, pid)).fetchone()
-                return dict(row) if row else None
-
-            history = _sanitize_history(json.loads(ck["messages"]), _lookup) if ck else []
-        except (json.JSONDecodeError, TypeError) as e:      # 检查点损坏 ⇒ 从空历史继续(记录事件)
-            history = []
-            with _db.Tx(self.con) as c:
-                _event(c, "run.checkpoint_corrupt", rid, {"error": str(e)[:200]})
+        history = self._load_history(rid)
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._ensure_mcp()
         with _db.Tx(self.con) as c:
