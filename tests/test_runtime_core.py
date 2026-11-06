@@ -404,3 +404,14 @@ def test_resume_cancels_stale_running_tool_calls(setup):
     r2.resume(rid)
     st = con.execute("SELECT status FROM tool_calls WHERE id='TC-stale'").fetchone()[0]
     assert st == "cancelled"
+
+
+def test_stale_awaiting_handback_is_not_reported_for_paused_run(setup):
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    con.execute("UPDATE runs SET state='paused', handback_reason='awaiting_user_close' WHERE id=?",
+                (rid,))
+    assert r._handback(rid, "paused", []) is None
+    con.execute("UPDATE runs SET state='finished' WHERE id=?", (rid,))
+    assert r._handback(rid, "finished", []) == "awaiting_user_close"

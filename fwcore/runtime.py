@@ -852,8 +852,14 @@ class Runner:
         # watchdog_paused 描述"上一次被谁停下";run 已 finished/resumed 时是过期值
         if reason and reason.startswith("watchdog_paused") and row["state"] != "paused":
             reason = None
+        # awaiting_user_close/closed 是"finished 时的结论",不是粘性原因:
+        # 一个后来被暂停/继续的 run 不应继续对外报"等用户确认收尾"
+        if reason in ("awaiting_user_close", "closed") and row["state"] != "finished":
+            reason = None
         if reason:
             return row["handback_reason"]          # needs_user_input 等
+        if state != "finished":
+            return None          # paused = 只是暂存点,不存在"等用户确认收尾"
         if not blockers:
             if self.domain.is_close_confirmed(row["target"]):
                 return "closed"
