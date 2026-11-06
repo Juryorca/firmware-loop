@@ -5,7 +5,8 @@
 "真实 E2E" 只证明了工具链路,不证明研究能力。这里:
 - 工作区 = 临时目录 + `bundle/`(设备模拟程序) + 目标文本;
 - 评分 = 事后读权威状态(结论/证据/尝试/观察交代),对照 `answers/expected.json` 的**判据**;
-- 评测过程记录落 `docs/evidence/eval-<task>.md`(含被判定的结论原文),供人复核。
+- **不往仓库写运行记录**:默认只打印终端摘要;需要存档时显式 `--out <state/_scratch/...>`
+  (运行产物不属于仓库内容;`docs/evidence/` 只放长期有效的工程验证资料)。
 
 用法:
   python3 eval/run.py --task sig-after-parse [--rounds 3] [--steps 12] [--model deepseek]
@@ -117,7 +118,8 @@ def main() -> int:
     ap.add_argument("--model", default="deepseek")
     ap.add_argument("--max-seconds", type=float, default=1800.0, help="执行安全上限(不是研究预算)")
     ap.add_argument("--rescore", default=None, help="对已有 workdir 重新评分(不调用模型)")
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--out", default=None,
+                    help="可选:把本次评测摘要写到指定文件(默认不写;建议 state/_scratch/)")
     args = ap.parse_args()
 
     public, answers = load_task(args.task)
@@ -126,10 +128,10 @@ def main() -> int:
         con0 = _db.connect(os.path.join(args.rescore, "state", "fwcore.sqlite3"))
         tid0 = con0.execute("SELECT id FROM targets LIMIT 1").fetchone()["id"]
         score0 = _score(args.task, answers, con0, tid0)
-        out0 = args.out or os.path.join(ROOT, "docs", "evidence", f"eval-{args.task}.md")
-        _write_evidence(out0, args.task, args.model, args.rescore, score0, None)
+        if args.out:
+            _write_evidence(args.out, args.task, args.model, args.rescore, score0, None)
+            print(f"[evidence] {args.out}(重评,未调用模型)")
         print(json.dumps({k: v for k, v in score0.items() if k != "conclusions"}, ensure_ascii=False, indent=2))
-        print(f"[evidence] {out0}(重评,未调用模型)")
         return 0 if score0["passed"] else 1
 
     work = prepare_workspace(args.task)      # 内部已建好 state/_scratch 并只拷 bundle/
@@ -154,10 +156,10 @@ def main() -> int:
     score.update({"run": {"state": res.state, "rounds": res.rounds, "handback": res.handback,
                           "final": res.final[:300]}, "workdir": work})
 
-    out = args.out or os.path.join(ROOT, "docs", "evidence", f"eval-{args.task}.md")
-    _write_evidence(out, args.task, args.model, work, score, res)
+    if args.out:
+        _write_evidence(args.out, args.task, args.model, work, score, res)
+        print(f"[evidence] {args.out}")
     print(json.dumps({k: v for k, v in score.items() if k != "conclusions"}, ensure_ascii=False, indent=2))
-    print(f"[evidence] {out}")
     return 0 if score["passed"] else 1
 
 

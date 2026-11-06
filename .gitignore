@@ -26,3 +26,8 @@ state/_scratch/
 
 # Pi 是开发工具,不是 fwcore 产品的一部分(本地保留,不入库)
 .pi/
+
+# 运行类评测/演练记录不属于仓库(存储规范:只有长期工程资料进 docs/evidence)
+docs/evidence/eval-*.md
+docs/evidence/*-drill.md
+docs/evidence/*-run.md

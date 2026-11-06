@@ -107,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("run_id")
     p = sub.add_parser("context", help="上下文状态:模型窗口/估算/阈值/最近压缩(只读)")
     p.add_argument("target")
+    p.add_argument("--run", dest="run_id", default=None,
+                   help="只看某个 run(默认:该目标全部 run;不同目标互不串)")
     p.add_argument("--context-tokens", type=int, default=None,
                    help="模型上下文窗口(token);不给则读 limits 默认(0=未配置)")
     p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
@@ -253,19 +255,36 @@ def main(argv: list[str] | None = None) -> int:
             from .models import limits_config, load_model_config
 
             dom = Domain(con, args.root)
-            dom.target(args.target)                       # 目标不存在就直接报错
+            t = dom.target(args.target)                   # 目标不存在就直接报错
             cfg = limits_config(args.root)
             lim = Limits(**cfg)
             if args.context_tokens:
                 lim = Limits(**{**cfg, "context_tokens": args.context_tokens})
-            ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
+            # 目标/run 隔离:只读本目标的 run;否则别的目标的 checkpoint/事件会串进来
+            run_ids = [r["id"] for r in con.execute(
+                "SELECT id FROM runs WHERE target_id=? ORDER BY rowid", (t.id,))]
+            if args.run_id:
+                if args.run_id not in run_ids:
+                    print(f"run {args.run_id} 不属于目标 {args.target}", file=sys.stderr)
+                    return 2
+                run_ids = [args.run_id]
+            ph = ",".join("?" * len(run_ids))
+            ck = (con.execute(f"SELECT messages FROM checkpoints WHERE run_id IN ({ph})"
+                              " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                              run_ids).fetchone() if run_ids else None)
             hist = json.loads(ck["messages"]) if ck else []
-            last = con.execute("SELECT payload FROM events WHERE kind='model.call' "
-                              "ORDER BY ts DESC LIMIT 1").fetchone()
+            last = (con.execute(f"SELECT payload FROM events WHERE kind='model.call'"
+                                f" AND ref IN ({ph}) ORDER BY ts DESC, id DESC LIMIT 1",
+                                run_ids).fetchone() if run_ids else None)
             lu = (json.loads(last["payload"]).get("usage") or {}) if last else {}
             _k, _b, _m = load_model_config(args.root)
             from .research import Research
+            from .toolkit import register_repo_tools
+            from .tools import default_registry
 
+            reg = default_registry()
+            register_repo_tools(reg, args.root)
+            schema = json.dumps(reg.describe(), ensure_ascii=False)
             _research = Research(args.root, dom)
             _sys = _research.rules_prompt(args.target)
             _st = json.dumps(_research.state_prompt(args.target), ensure_ascii=False)
@@ -276,11 +295,14 @@ def main(argv: list[str] | None = None) -> int:
                 context_tokens=lim.context_tokens,
                 last_prompt_tokens=lu.get("prompt_tokens"),
                 last_cached_tokens=(lu.get("prompt_tokens_details") or {}).get("cached_tokens"),
-                system=_sys, state=_st, schema="")
-            comp = con.execute("SELECT payload FROM events WHERE kind IN "
-                               "('run.compacted','run.compact_failed') ORDER BY ts DESC LIMIT 1").fetchone()
+                system=_sys, state=_st, schema=schema)
+            comp = (con.execute(f"SELECT payload FROM events WHERE kind IN "
+                                f"('run.compacted','run.compact_failed') AND ref IN ({ph})"
+                                " ORDER BY ts DESC, id DESC LIMIT 1", run_ids).fetchone()
+                    if run_ids else None)
             out = st.as_dict()
             out["checkpoint_messages"] = len(hist)
+            out["run_scope"] = args.run_id or f"{len(run_ids)} run(s)"
             out["threshold_tokens"] = threshold_tokens(lim.context_tokens, lim.output_reserve_tokens)
             out["last_compaction"] = json.loads(comp["payload"]) if comp else None
             out["last_compaction_kind"] = comp is not None and json.loads(comp["payload"]).get("error") is None
@@ -329,8 +351,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "view":
             print(render_view(con, args.root, args.target))
         elif args.cmd in ("run", "resume", "advance"):
+            from .limits import Limits
+            from .models import limits_config
+
             model = _model(args.model, args.root, getattr(args, "script", None))
+            limits = Limits(**limits_config(args.root))   # CLI 与运行期同一来源
             runner = Runner(con, args.root, model, max_steps=(args.steps or None),
+                            limits=limits,
                             watchdog=getattr(args, "watchdog", False),
                             watchdog_poll_s=getattr(args, "watchdog_poll", 5.0),
                             mcp=getattr(args, "mcp", False),

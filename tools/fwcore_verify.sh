@@ -70,7 +70,21 @@ if [ -f docs/ROADMAP.md ]; then
 fi
 if [ "$rm_fail" -eq 0 ]; then say "ROADMAP 一致性" "PASS(引用文件齐全,无 ⬜)"; else say "ROADMAP 一致性" "FAIL"; fail=1; fi
 
-# ⑥ 工作区必须干净(不留临时产物)
+# ⑥ 运行产物边界:脚本默认不写仓库;docs/evidence 不留未跟踪产物
+rb_fail=0
+if grep -rqE 'os\.path\.join\([^)]*"docs"[^)]*"evidence"|docs/evidence/eval-' eval/ scripts/ 2>/dev/null; then
+  echo "      脚本仍默认写 docs/evidence(应写 state/_scratch/)"; rb_fail=1
+fi
+if git status --porcelain --untracked-files=all docs/evidence 2>/dev/null | grep -q '^??'; then
+  echo "      docs/evidence 有未跟踪文件(运行产物?)"
+  git status --porcelain docs/evidence | head -3 | sed 's/^/        /'; rb_fail=1
+fi
+if ls docs/evidence/eval-*.md >/dev/null 2>&1; then
+  echo "      docs/evidence 出现 eval-*.md(应写 state/_scratch/)"; rb_fail=1
+fi
+if [ "$rb_fail" -eq 0 ]; then say "运行产物边界" "PASS(默认不写 docs/evidence)"; else say "运行产物边界" "FAIL"; fail=1; fi
+
+# ⑦ 工作区必须干净(不留临时产物)
 if [ -d "$WORK" ]; then rm -rf "$WORK"; fi
 if git status --porcelain | grep -q .; then
   say "git status" "DIRTY(提交后再跑)"

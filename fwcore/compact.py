@@ -182,9 +182,11 @@ def summarize_covered(messages: list[dict], summarize, *, chunk_tokens: int = 60
             cur_tok += tok
         if cur:
             packed.append("\n\n".join(cur))
+        # 预算**共用**:分块摘要 + 归并摘要都算在同一个 max_calls 里(不额外发一份额度)
+        if calls + len(packed) > max_calls:
+            raise SummarizationIncomplete(
+                f"分块+归并共需 {calls + len(packed)} 次调用,超过上限 {max_calls}")
         calls += len(packed)
-        if calls > max_calls * 2:
-            raise SummarizationIncomplete("归并摘要次数超限")
         merge_calls += len(packed)
         summaries = [(summarize([{"role": "user", "content": p}]) or "").strip() for p in packed]
         if any(not s for s in summaries):

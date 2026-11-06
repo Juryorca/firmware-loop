@@ -235,8 +235,8 @@
 ## 报告产出(硬性要求)
 
 - **触发**: 有 finding / 到达范围门控 / 用户要求 —— 任一即产出。
-- **产出时机**: `report/` 只在 ①有 finding ②收尾 时建立;跑循环期间的 A1/A2 活载体 = `state/<目标>/notes.md` 的 surface map
-  (**结构化表**),收尾时**移动**(不是复制)为 `report/attack-surface.md`;留下旧副本 = 双源会漂。
+  - **产出时机**: `report/` 只在 ①有 finding ②收尾 时建立;跑循环期间的 A1/A2 活载体 = 权威状态 `surfaces` 表;
+    收尾时从 DB **导出** `report/attack-surface.md`(不是手工移动);留下手工副本 = 双源会漂。
 - **落点**: `report/` = INDEX.md · attack-surface.md · CLOSURE.md · 每 finding 的 advisory(**顶层**)· `attachments/<描述性名称>/` · CVE 备料。
   **非发现不进 report/**;禁止临时自造板块(要新增类别,先在 `AGENTS.md` 定路径与归属)。
 - **交付物规范一律在模板**(骨架 / 格式 / shots.json / CVE 编号线 / 通用原则 / 材料完成判据):
@@ -268,8 +268,8 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
   ⚠️ **什么不算“未覆盖面”**: “我还没审的”**补集**不算 —— 它回答的是“我还没看什么”,不是
   “攻击面里哪些没判定”。未覆盖面必须**逐条挂在 A1 枚举出的入口点上**;
   A2 表未给出的入口点不得声称“已覆盖”;“部分完成”必须写明缺哪一条入口点。
-  **载体**: 跑循环期间 = `state/<目标>/notes.md` 的 surface map(**结构化表:入口点 × 属性(含 disposition)**);
-  收尾时**移动**到 `report/attack-surface.md`。无论在哪,都不许是自由文本。
+    **载体**: 跑循环期间 = 权威状态 `surfaces` 表(入口点 × 属性 × disposition);
+    收尾时导出 `report/attack-surface.md`。无论在哪,都不许是自由文本。
   ⚠️ **差分单独不改变 disposition**: 差分只覆盖厂商改过的点;一个面的结论若**全部来自差分**,该面**仍是未判定**
   —— 判“面干净”必须做与差分无关的审计(入口→sink 遍历 / 解析器边界 / 鉴权覆盖)。见 `knowledge/methodology.md`「差分的正确定位」。
   ⚠️ **派生量“算”不“写”**: 覆盖度 / knowledge 条数 / 材料完成 这类**能从权威处算出来**的值,
