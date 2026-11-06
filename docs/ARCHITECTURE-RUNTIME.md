@@ -98,3 +98,48 @@ last reply usage: prompt … (cached …). estimated_input is an estimate (chars
 
 **未验证(如实)**:长历史(>500k tokens)下的压缩后命中率、多轮压缩的真实 API 行为——本轮未跑付费长程,
 只做了离线/fake 端到端。
+
+## 7. P9:Pi 实际运行基准 vs fwcore(实测,非推断)
+
+### 7.1 Pi 实际运行事实(本机只读测量)
+
+- 版本 **pi 1.5.0**;会话记录中的 provider/model:`deepseek/deepseek-flash` 5,352 次(另有少量 `sigvoid/deepseek-flash`、`deepseek/deepseek-v4-pro`)。
+- 模型目录(pi models-store):`deepseek-flash` **contextWindow=1,000,000 / maxTokens=384,000**;
+  单价(每 1M):input **$0.3**、output **$1.2**、cacheRead **$0.006**(≈ 输入价的 1/50)、cacheWrite 0。
+- Pi 每条 assistant 记录的 usage 字段:`input`(未命中输入)、`cacheRead`(命中)、`cacheWrite`、`output`、`reasoning`、`totalTokens`、`cost`。
+- **实测命中率(不是 UI 百分比)** = `cacheRead / (input + cacheRead)`:
+  2,505,984,896 / (41,757,463 + 2,505,984,896) = **98.36%**(n=5,386);按 1000 条分段 97.6%–99.9%;最近 50 条 97.8%。
+  分母只含输入(cacheRead 已包含在 prompt 侧),不含 output/reasoning ⇒ 与 DeepSeek 的
+  `cached_tokens ⊆ prompt_tokens` 口径一致。
+
+### 7.2 DeepSeek 原生缓存与"客户端该做什么"
+
+官方文档确认:缓存**默认开启**,按**请求公共前缀**复用,命中 best-effort、可能过期清除。
+⇒ 客户端不需要实现任何缓存;需要做的是**保持请求前缀稳定**并**读真实 usage**。
+Pi 的 98.36% 不是"Pi 有客户端缓存算法",而是它的请求结构天然前缀稳定。
+
+### 7.3 fwcore 实测(同一官方 endpoint,独立临时工作区,31 次调用)
+
+| 区间 | prompt_tokens | cached_tokens | 命中率 |
+|---|---|---|---|
+| 1–10 | 54,882 | 43,904 | 80.0% |
+| 11–20 | 117,424 | 104,576 | 89.1% |
+| 21–30 | 177,700 | 164,864 | 92.8% |
+| 全部 | 371,061 | 333,056 | **89.8%** |
+
+逐次命中 85% → 93%(单调上升)。请求结构:`[静态 system] + history(append-only) + [尾部 state ~160 tokens]`,
+工具 schema 固定 5,430 字符,`reasoning_content` 按协议回传。
+修复前(P6 之前)的对照:system 稳定的窗口 **98.3%**,system 内容一变就掉到 **1.8%**。
+
+### 7.4 结论
+
+1. **Pi 与 fwcore 的差异不在缓存算法**,而在请求前缀是否稳定;fwcore 的 P6 修复正是修这个根因;
+2. 剩余差距(89.8% vs 98.36%)主要来自**小历史下新增内容占比大**(每次新增工具结果 + 状态块占本次 prompt 的比例),
+   以及 DeepSeek best-effort/批次边界;随历史增长命中率单调上升(85→93),不是结构性缺陷;
+3. 不引入任何客户端缓存实现;不删历史、不减工具定义。
+
+### 7.5 仍未验证(如实)
+
+- >500k tokens 长历史下的稳态命中率(本轮未跑到该规模);
+- 多轮压缩后的真实 API 缓存重建行为(只做了离线模拟);
+- 第三方网关下的缓存行为(本机实测走官方 `api.deepseek.com`)。

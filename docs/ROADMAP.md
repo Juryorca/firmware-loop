@@ -47,6 +47,17 @@
 - **权威 Gate 同步(本轮)**:`fw-core gates` 输出 `provenance{direct,weak,unlinked}`;只有完整性复核的 `no_finding` 进 `advisories`(提示,不阻断)。
 - 验收:`tests/test_provenance_strength.py`、`tests/test_gate_provenance.py`;真实 QNAP 库 gates 实测 `direct 10 / weak 8 / unlinked 3`,4 条 no_finding 标为"仅完整性复核"。
 
+### P9 Pi 真实基准 + fwcore 缓存对齐 + 压缩模拟 ✅ 完成(2026-11-06)
+
+- **Pi 实测(只读)**:pi 1.5.0;usage 字段 `input/cacheRead/cacheWrite/output/reasoning`;命中率
+  `cacheRead/(input+cacheRead)` = **98.36%**(5,386 次,分段 97.6–99.9%);deepseek-flash 窗口 1,000,000、
+  maxTokens 384,000、cacheRead 单价为 input 的 1/50。**Pi 没有客户端缓存算法** —— DeepSeek 原生前缀缓存。
+- **fwcore 实测(31 次调用,官方 endpoint,临时工作区)**:总体 **89.8%**(80.0/89.1/92.8% 分段),逐次 85→93 单调上升;
+  请求结构 `[静态 system] + append-only history + [尾部 state ≈160 tokens]`,工具 schema 固定。
+  修复前对照:system 稳定窗口 98.3% vs 变化窗口 1.8% ⇒ **根因是前缀稳定,不是缓存实现**。
+- **压缩模拟(全离线,不烧 token)**:70/85/90/95% 占用触发正确;85/90/95% 压缩后配对完整且体积下降;
+  连续三次压缩稳定;压缩不动 hypothesis/evidence(verified 仍为 1);压缩后 resume 正常。测试 5 passed。
+- **未验证**:>500k 长历史稳态命中、多轮压缩的真实 API 重建、第三方网关缓存行为。
 ### P8 上下文生命周期生产化 + 上下文感知 ✅ 完成(2026-11-06)
 
 - **生产配置**:`state/model.json` 增 `context_tokens: 1000000`(依据 Pi 模型目录 `deepseek-flash.contextWindow`,
