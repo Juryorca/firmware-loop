@@ -60,6 +60,27 @@ conclusions runs checkpoints tool_calls events mirror_checks research_logs docum
 保留路径/`tool_call_id`)→ 库超 `max_db_bytes=256MB` 删最老 checkpoint 仍超则暂停。
 清理:两档(**使用中/收尾未归档=提交中** 只清垃圾;**归档/不要了** 才释放载体/派生物/原件,需用户明说)。
 
+## 3b. 生命周期与并发不变量(程序强制,不是约定)
+
+- **单 owner 租约**:`runs.pid + pid_starttime` 是所有者凭据。接管走 `_claim_run` 的 CAS
+  (状态+旧 owner 全匹配);另有活主(同主机、pid 活、starttime 一致)时 **拒绝** 并发 resume。
+  ＞ SQLite 事务只保证单条 UPDATE 原子,不保证"读状态→接管"这段逻辑。
+- **心跳不抢所有权**:`_heartbeat` 是 CAS(pid/starttime 对不上就返回 False);turn 每个循环先
+  `_owns` 校验,失去所有权立即退出。`_persist`/`_limit_hit`/`_checkpoint`/`_finish_state`/
+  rounds 写入全部有 owner 守卫 —— 旧 owner 不得覆盖新 owner 的状态/历史/计数。
+- **工具批次围栏**:模型调用期间被接管 ⇒ 同一回复里剩余工具(含 `state_*` 写操作)不执行,
+  逐个补 cancelled 保证协议完整。
+- **看护先赢竞争再动手**:hard / stale 两分支都是 `UPDATE ... WHERE state='running'`(rowcount=0 跳过),
+  赢下后才 killpg + 写事件;`recover_stale` 同样 CAS,且只对"同主机 + 有 pid 记录 + 已死"执行 killpg。
+- **pgid 安全三条件**:杀进程组必须①同主机 ②`.pgids` 带 starttime ③进程组仍属该 starttime
+  (缺 starttime ⇒ 不杀,防 pgid 复用误伤);接管死亡 owner 时清孤儿,并把它遗留的
+  `tool_calls.status='running'` 标 cancelled。
+- **预算可核对**:`runs.budget_note` 记录每次 start/resume 生效的 limits 与最近 limit_hit;
+  计数每步落库;预算只暂停(不写结论),resume 延续同一计数。
+
+对应测试:`test_runtime_core`(租约/心跳/批次/handback)、`test_watchdog`(CAS 与 pgid 安全)、
+`test_cross_process_resume`(跨进程 resume 幂等)。
+
 ## 4. 工具接入(统一注册契约,不统一内部实现)
 
 四条路径:内置 `ToolSpec`(state_*/shell_exec/fs_*)、`tools/registry/*.json`(script/python)、
