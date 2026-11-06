@@ -177,3 +177,72 @@ def test_crash_watchdog_then_resume(tmp_path):
     assert r.returncode == 0, r.stderr[-600:]
     final = con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"]
     assert final in ("finished", "paused")
+
+
+HOLD = r'''
+import os, sys
+sys.path.insert(0, sys.argv[3])
+from fwcore import db
+from fwcore.models import ScriptedAdapter
+from fwcore.policy import Authz, Policy
+from fwcore.runtime import Runner
+
+root = sys.argv[1]
+con = db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+ad = ScriptedAdapter(script=[
+    {"content": "long tool", "tool_calls": [{"id": "c1", "name": "shell_exec",
+                                             "args": {"command": "sleep 30", "timeout": 60}}]},
+    {"content": "FINAL: done", "tool_calls": []},
+])
+r = Runner(con, root, ad, policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+rid = r.start("t1")
+print(rid, flush=True)
+r.run(rid, "t1")
+'''
+
+
+def test_live_owner_refuses_resume_then_takeover_after_kill(tmp_path):
+    """真实两进程:活主持有 run 时 resume 必须拒绝;主进程被杀后接手并清理遗留状态。"""
+    import select
+
+    root, _counter = _prep(tmp_path)
+    child_py = os.path.join(root, "hold.py")
+    with open(child_py, "w", encoding="utf-8") as f:
+        f.write(HOLD)
+    env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t1")
+    child = subprocess.Popen([sys.executable, child_py, root, "unused", ROOT],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    try:
+        assert child.stdout is not None
+        ready, _, _ = select.select([child.stdout], [], [], 30)
+        assert ready, "子进程没有输出 run id"
+        rid = child.stdout.readline().strip()
+        assert rid.startswith("R-"), rid
+        # 等工具真的进入 running(子进程正握着 owner)
+        con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+        row = None
+        for _ in range(300):
+            row = con.execute("SELECT id FROM tool_calls WHERE run_id=? AND status='running'",
+                              (rid,)).fetchone()
+            if row:
+                break
+            time.sleep(0.05)
+        assert row, "工具没进入 running"
+        # 活主 ⇒ 第二进程 resume 必须拒绝
+        r2 = _cli(root, "resume", rid, "--model", "scripted",
+                  "--script", _script(root, "b.json", [{"content": "FINAL: y", "tool_calls": []}]),
+                  "--no-watchdog")
+        assert r2.returncode != 0
+        assert "正在被 pid" in (r2.stderr + r2.stdout), (r2.stderr + r2.stdout)[-500:]
+    finally:
+        child.kill()
+        child.wait(timeout=10)
+
+    # 主进程已死 ⇒ 接手成功,遗留 running 行被标 cancelled
+    r3 = _cli(root, "resume", rid, "--model", "scripted",
+              "--script", _script(root, "c.json", [{"content": "FINAL: z", "tool_calls": []}]),
+              "--no-watchdog")
+    assert r3.returncode == 0, r3.stderr[-600:]
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "finished"
+    assert con.execute("SELECT status FROM tool_calls WHERE id=?", (row["id"],)).fetchone()["status"] == "cancelled"
