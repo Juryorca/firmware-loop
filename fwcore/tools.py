@@ -289,6 +289,12 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
                         pf.write(f"{pg} {_proc_starttime(proc.pid) or 0}\n")
                 except OSError:
                     pass
+                # 取消可能发生在"行已 running、进程刚起"的窗口(cancel() 扫 .pgids 时还没写)
+                # ⇒ 起进程后立刻复查一次,避免漏杀后干等到超时
+                if _cancel_requested(ctx):
+                    _kill_group(proc)
+                    with contextlib.suppress(Exception):
+                        proc.wait(timeout=2)
             except FileNotFoundError as e:
                 with open(ep, "ab") as fe2:
                     fe2.write(f"命令不存在: {e}".encode())

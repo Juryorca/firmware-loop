@@ -28,11 +28,17 @@
 ### P1 认证控制流:`op` 值 → 分发 → 权限检查 → 失败分支 ⛔ 仅缺授权
 
 - **已有**:11 个 op 子处理器入口(0x196d8/0x197d8/0x19908/0x19a68/0x19b08 分发到 0x14d60…0x12d78)、
-  门禁类型(口令/session 三重校验/Qtoken/verify_code)、`_notes/s3`+`all_calls.txt`、库内门禁原语哈希。
-- **缺**:`op` 取值异常处理、各 handler 内权限检查点的完整数据流、失败分支可达性;无动态验证。
+  门禁类型(口令/session 三重校验/Qtoken/verify_code)、`_notes/s3`+`all_calls.txt`、库内门禁原语哈希;
+  **op 分发表**(qr_code 2/7/4;approve 1/7/4/3;verification_code 1/7/12/3/13;passwordless 8)、
+  `strtol(param,NULL,10)` 无 endptr(缺省/非法 ⇒ 空响应),verification_code op=1 失败分支
+  `error_code=1` 且 session/verify_code 缓冲区清零(无泄露),成功需 getpwnam+load_user_config+
+  `Verify_Qtoken_DB_by_Client_ID`+两个配置位。
+- **缺**:动态验证须由 agent 在受控 run 内完成(本机手工 `qemu-user` 报 SIGILL,不作为准绳);
+  各 handler 门禁表的动态复核。
 - **验收**:地址级链路 + ≥1 条带来源 observation;判不了写 inconclusive。
-- **预算**:`R-20261105-3518ef1d` run 级累计上限 200 calls / 7200 s,耗尽即暂停。
-- **阻塞**:需用户批准付费模型续跑(离线部分已完成)。
+- **预算**:`R-20261105-3518ef1d` 已用 **130/200 calls、571.9/7200 s** ⇒ 余 ~70 calls / ~6628 s;
+  不得新建 run 绕开预算。
+- **阻塞**:续跑需用户批准付费模型(离线静态已完成并入库:观察 + 2 条 static-note 证据)。
 
 ### P4 依赖库/样本边界(需 P1 运行结果)
 

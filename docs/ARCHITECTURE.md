@@ -20,7 +20,7 @@
 ## 2. ① 模块(全部有测试)
 
 ```
-fwcore/  db.py(SCHEMA v13/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
+fwcore/  db.py(SCHEMA v14/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
          tools.py(内置 ToolSpec)                toolreg.py(manifest→Registry,4 种注册路径)
          runtime.py(循环/检查点/恢复/预算)       research.py(提示/池/三镜/进度)
          compact.py(压缩)                        contextinfo.py(上下文状态)
@@ -134,4 +134,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 57 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 62 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + git clean)。

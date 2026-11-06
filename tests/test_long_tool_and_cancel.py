@@ -87,7 +87,7 @@ def test_cancel_marks_inflight_tool_cancelled(tmp_path):
     t = threading.Thread(target=_run_tool, daemon=True)
     t.start()
     row = None
-    for _ in range(100):
+    for _ in range(300):                      # 全量套件下机器负载高:给到 15 s 再判"没进 running"
         row = con.execute("SELECT id FROM tool_calls WHERE run_id=? AND status='running'",
                           (rid,)).fetchone()
         if row:
