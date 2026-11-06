@@ -46,6 +46,8 @@
 
 - **advance 续跑丢历史**:`advance(run_id=…)` 把空 history 交给 `turn()` ⇒ 模型只看到新 goal;现与 `resume` 共用 `Runner._load_history()`。
 - **`state_add_observation` schema 缺来源参数**:handler 收了 `tool_call_id/path`,schema 没声明 ⇒ 调用被"未知参数"拒绝(端到端测试抓到)。
+- **时间戳只有秒精度**:`round.ended`/`mirror_checks`/`evidence` 同秒时 `ts > since` 排序失效
+  ⇒ 轮次可能漏计、`mirror_due` 偶发为 False(全量测试里表现为顺序相关的 flaky)。改微秒精度。
 - **`domain._count` 动态 SQL**:改字面量分支,静态扫描不再报注入(误报也一并消除)。
 
 ## 已取消(不属于产品)

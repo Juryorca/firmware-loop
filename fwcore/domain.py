@@ -62,7 +62,9 @@ def _sha256_file(path: str) -> str:
 
 
 def _now() -> str:
-    return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
+    # 微秒精度:秒级会让"同一秒内的 round.ended / mirror / evidence"无法排序,
+    # 轮次统计(`ts > since`)会漏掉同秒事件(实测会让 mirror_due 偶发为 False)
+    return _dt.datetime.now(_dt.UTC).isoformat(timespec="microseconds")
 
 
 def new_id(prefix: str) -> str:
