@@ -57,3 +57,21 @@ def test_second_run_sees_prior_research(tmp_path):
     # 研究事实仍在库里,新 run 不新建重复假设
     assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 1
     assert con.execute("SELECT COUNT(*) n FROM conclusions").fetchone()["n"] == 1
+
+
+def test_observation_survives_to_next_run(tmp_path):
+    """observation 是"已确认但还不足以成假设"的事实;必须跨 run 可见。"""
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    hid = dom.add_hypothesis("t1", "op 分发是否检查权限", body="b", source="[RE]")
+    aid = dom.start_attempt(hid, "跟踪 op 参数")
+    oid = dom.add_observation("t1", "0x19908 从 CGI_Find_Parameter(\"op\") 取值后 strtol",
+                              attempt_id=aid)
+    model = Replay()
+    r = Runner(con, root, model, limits=Limits(max_model_calls=2),
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+    r.run(r.start("t1", "继续"), "t1", goal="继续")
+    assert oid in model.prompts[0]
+    assert "0x19908" in model.prompts[0]

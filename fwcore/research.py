@@ -283,9 +283,17 @@ class Research:
             n_ev = con.execute(
                 "SELECT COUNT(*) n FROM evidence e JOIN tool_calls t ON t.id=e.tool_call_id"
                 " WHERE t.run_id=?", (run_id,)).fetchone()["n"]
-            if n_tc >= 10 and n_ev == 0:
+            n_obs = con.execute(
+                "SELECT COUNT(*) n FROM observations WHERE target_id=? AND created_at > "
+                "(SELECT COALESCE(MAX(started_at),'1970') FROM runs WHERE id=?)",
+                (t.id, run_id)).fetchone()["n"]
+            if n_tc >= 10 and n_ev == 0 and n_obs == 0:
                 out.append("### 本 run 的产出还没入账(提醒,不是配额)")
-                out.append(f"- 本 run 已执行 {n_tc} 次工具调用,但没有任何证据挂在这些调用上;若有可追溯产物(反汇编/脚本输出/日志),用 state_add_evidence(path=…, tool_call_id=<调用 id>) 登记并复核;纯探索不必登记,继续研究即可。")
+                out.append(f"- 本 run 已执行 {n_tc} 次工具调用,但还没有任何 observation/evidence;"
+                           "**已确认的逆向事实**(地址/字符串/调用关系)用 "
+                           "state_add_observation(target, text=…) 记下来;"
+                           "有可追溯产物再用 state_add_evidence(path=…, "
+                           "tool_call_id=<db_tool_call_id>) 登记并复核;纯探索不必登记。")
         return out
 
     # ---------- 系统提示 ----------
@@ -319,7 +327,11 @@ class Research:
         evs = list(self.domain.con.execute(
             "SELECT id,path,link_relation FROM evidence WHERE target_id=?"
             " ORDER BY created_at DESC LIMIT 25", (t.id,)))
-        if hyps or evs:
+        # 观察 = 已确认但还不足以成假设的技术事实;不注入的话跨 run 就丢了
+        obs = list(self.domain.con.execute(
+            "SELECT id,text FROM observations WHERE target_id=?"
+            " ORDER BY created_at DESC LIMIT 15", (t.id,)))
+        if hyps or evs or obs:
             facts = ["", "## 已有研究事实(程序从数据库读出;先复用,不要重做)"]
             for h in hyps:
                 facts.append(f"- {h['id']} [{h['state']}/{h['verdict'] or '-'}] "
@@ -329,6 +341,8 @@ class Research:
             for e in evs:
                 facts.append(f"- {e['id']} {e['path'] or '(capture)'} "
                              f"[{e['link_relation'] or 'unlinked'}]")
+            for o in obs:
+                facts.append(f"- 观察 {o['id']}: {(o['text'] or '').strip()[:220]}")
             parts += ["\n".join(facts)[:3000]]
 
         brief = self.progress_brief(target, run_id)

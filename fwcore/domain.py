@@ -702,6 +702,7 @@ class Domain:
         ).fetchall()
         attempts = {r["result"]: r["n"] for r in att}
         ev = self.con.execute("SELECT COUNT(*) n FROM evidence WHERE target_id=?", (t.id,)).fetchone()["n"]
+        obs = self.con.execute("SELECT COUNT(*) n FROM observations WHERE target_id=?",                               (t.id,)).fetchone()["n"]
         material = self.material_check(target)
         total_surf = sum(surfaces.values())
         judged = total_surf - surfaces.get("unjudged", 0)
@@ -714,6 +715,7 @@ class Domain:
             "attempts": attempts,
             "running_attempts": attempts.get("running", 0),
             "evidence": ev,
+            "observations": obs,
             "material": material,
             "closure_blockers": self.closure_blockers(target),
         }
