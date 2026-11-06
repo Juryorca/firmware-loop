@@ -23,6 +23,8 @@ from dataclasses import dataclass
 
 from . import db as _db
 from .compact import compact_history, estimate_tokens, should_compact
+from .compact import find_cut as _find_cut
+from .contextinfo import build_status
 from .domain import Domain, new_id
 from .limits import Limits
 from .models import Adapter, Reply, ScriptedAdapter, assistant_message  # noqa: F401 (对外兼容)
@@ -115,6 +117,9 @@ class Runner:
         self._mcp_call_timeout = mcp_call_timeout
         # 上下文压缩的摘要器(测试注入 fake;默认用模型,计入预算)
         self.summarizer = summarizer
+        self._last_usage: dict = {}
+        self._compact_cooldown_until = -1
+        self._last_compact: dict | None = None
         self.mcp_bridge = None
         self.mcp_skipped_reason: str | None = None
         # 注意:**构造时不启动 MCP**。MCP 服务器启动本身就有副作用(子进程/外网/登录态),
@@ -441,7 +446,10 @@ class Runner:
                     break
                 # 上下文生命周期(对齐 Pi 的 compaction):接近配置窗口才压缩,保留最近一段;
                 # 摘要是一次**模型调用**(计入预算),不是静默丢内容
-                if should_compact(history, self.limits.context_tokens):
+                if (run_calls >= self._compact_cooldown_until
+                        and should_compact(history, self.limits.context_tokens,
+                                           self.limits.output_reserve_tokens)
+                        and _find_cut(history, self.limits.keep_recent_tokens) > 0):
                     before = estimate_tokens(history)
 
                     def _summarize(old):
@@ -460,15 +468,34 @@ class Runner:
                         })
                         return reply.content or ""
 
-                    history, _info = compact_history(
-                        history, _summarize, self.limits.keep_recent_tokens)
-                    _event(self.con, "run.compacted", rid,
-                           {"before_tokens": before,
-                            "after_tokens": estimate_tokens(history), **_info})
+                    try:
+                        new_history, _info = compact_history(
+                            history, _summarize, self.limits.keep_recent_tokens)
+                        if not _info.get("compacted"):        # 切不出东西 ⇒ 不动历史
+                            raise RuntimeError("没有可压缩的完整协议组(keep_recent 过大)")
+                    except Exception as e:
+                        # 失败:历史原样保留 + 明确事件 + 冷却(不无限重试、不重复付费)
+                        _event(self.con, "run.compact_failed", rid,
+                               {"tokens": before, "error": str(e)[:300]})
+                        self._compact_cooldown_until = run_calls + self.limits.compact_retry_cooldown_calls
+                    else:
+                        history = new_history
+                        self._last_compact = {"before_tokens": before,
+                                              "after_tokens": estimate_tokens(history), **_info}
+                        _event(self.con, "run.compacted", rid, self._last_compact)
                 # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
                 # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
                 _sys = self.research.rules_prompt(target)
-                _state = self.research.state_prompt(target, goal, rid)
+                _status = build_status(
+                    model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
+                    window=self.limits.context_tokens or None,
+                    messages=history,
+                    output_reserve=self.limits.output_reserve_tokens,
+                    context_tokens=self.limits.context_tokens,
+                    last_prompt_tokens=self._last_usage.get("prompt_tokens"),
+                    last_cached_tokens=self._last_usage.get("cached_tokens"))
+                _state = self.research.state_prompt(target, goal, rid,
+                                                    context_note=_status.render())
                 _note = self._prepare_state.get("context_note")
                 if _note:
                     _state += "\n\n## 轮前准备(程序注入)\n" + _note
@@ -494,6 +521,10 @@ class Runner:
                 # **每一次**真实调用都记账(含 tool_calls / FINAL / 推理-only / 截断);
                 # 服务端没给 usage ⇒ usage_known=false,不猜 token 数
                 _u = dict(reply.usage or {})
+                if _u.get("prompt_tokens"):
+                    self._last_usage = {"prompt_tokens": _u.get("prompt_tokens"),
+                                        "cached_tokens": (_u.get("prompt_tokens_details") or {}).get(
+                                            "cached_tokens", _u.get("prompt_cache_hit_tokens"))}
                 _event(self.con, "model.call", rid, {
                     "step": step, "n_messages": len(msgs),
                     "system_chars": _ctx["system"], "history_chars": _ctx["total"],

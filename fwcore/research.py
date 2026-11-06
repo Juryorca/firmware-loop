@@ -390,7 +390,7 @@ class Research:
         return "\n".join(parts)
 
     def state_prompt(self, target: str, goal: str | None = None,
-                     run_id: str | None = None) -> str:
+                     run_id: str | None = None, context_note: str | None = None) -> str:
         """**动态**状态:放在消息**末尾**(历史之后),变化只影响尾部,不破坏前缀缓存。"""
         d = self.domain.derived(target)
         pool = self.pool(target)
@@ -426,6 +426,9 @@ class Research:
         if self.mirror_due(target):
             parts += ["", f"## 三镜刷新(due:{self.rounds_since_mirror(target)} 轮未做)",
                       "面/格收口时用 state.record_mirror 记一行:机制=… / 作者=… / 状态=… / 新面=…"]
+        if context_note:
+            # 上下文事实:只在这里(尾部),不进 system、不写 history/checkpoint
+            parts += ["", context_note]
         return "\n".join(parts)
 
     def system_prompt(self, target: str, goal: str | None = None,

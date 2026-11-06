@@ -26,6 +26,10 @@ class Limits:
     # 到达 context_tokens-reserve 时压缩较早历史,保留最近 keep_recent_tokens。
     context_tokens: int = 0
     keep_recent_tokens: int = 20_000
+    # 输出/协议预留:压缩阈值 = 窗口 − max(预留, 10% 窗口);不能把阈值顶到窗口上
+    output_reserve_tokens: int = 8_000
+    # 压缩失败后的冷却(模型调用次数):避免每轮重试烧预算
+    compact_retry_cooldown_calls: int = 5
     # 单轮最多执行多少个工具调用(模型可能一次发很多;这是执行边界,不是研究规则)
     max_tool_calls_per_turn: int = 8
     # 硬边界:**永远生效**,不受 unbounded 影响

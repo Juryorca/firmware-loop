@@ -63,3 +63,38 @@ resume/advance ──► _load_history()(最新 checkpoint + 坏 JSON 修复)─
 - 不引入第二套会话存储、不复制 Pi 代码、不依赖 Pi 运行时;
 - 不做模型自动切换/静默重试;
 - 不在没有真实 usage 数据时宣称"省了多少 token"。
+
+## 6. 上下文感知(Context Awareness)与压缩联动(2026-11-06,P8)
+
+**注入位置**:合并进已有的 `state_prompt()` **尾部**(不新增消息、不进 system、不写 history/checkpoint)。
+内容(每次请求实时生成):
+
+```
+[Context status] model=… window=… estimated_input=… output_reserve=… available=…
+                 auto_compact=on|off threshold=…
+last reply usage: prompt … (cached …). estimated_input is an estimate (chars/2.0), not provider usage.
++ 行为提示:空间充足 ⇒ 继续工作,不得声称上下文快满;>=90% 阈值 ⇒ 保存关键进度,框架会在安全边界压缩;
+  窗口未配置 ⇒ 明确 unknown,不得假设快满。
+```
+
+**Token 估算校准(真实数据,224 次调用)**:实测 **2.08 字符/token**;旧的 3.5 会**低估约 40%**
+(est/actual ≈ 0.59)。现用 **2.0**(略偏保守,宁可早触发);估算只用于触发阈值,计费仍以 usage 为准。
+
+**阈值**:`context_tokens`(显式窗口,0=不启用)+ `output_reserve_tokens`(默认 8k);
+阈值 = 窗口 − max(预留, 10% 窗口)。生产配置在 `state/model.json`:`context_tokens: 1000000`
+(依据:Pi 模型目录 `deepseek-flash` 的 `contextWindow=1,000,000`,不是按名字猜)。
+
+**压缩失败语义**:摘要异常 ⇒ **历史原样保留** + `run.compact_failed` 事件 + 冷却 `compact_retry_cooldown_calls`
+(默认 5 次调用内不重试,避免重复付费);摘要为空视为失败;不产生"空摘要头"。
+
+**真实 10 次调用 A/B 基线**(独立临时工作区,非研究数据):
+
+| 指标 | 值 |
+|---|---|
+| prompt_tokens | 2,552 → 5,767(单调增长) |
+| cached_tokens | 0 → 3,968(第 2 次起命中) |
+| 命中率 | 70.9% → 81.3%(小历史;大历史下更高) |
+| 状态块自身 | 332 字符 ≈ 160 tokens(按 2.08 字符/token 估算;≈ 初始请求的 6%) |
+
+**未验证(如实)**:长历史(>500k tokens)下的压缩后命中率、多轮压缩的真实 API 行为——本轮未跑付费长程,
+只做了离线/fake 端到端。

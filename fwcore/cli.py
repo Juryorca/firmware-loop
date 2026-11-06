@@ -105,6 +105,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--remote-factor", type=float, default=6.0)
     p = sub.add_parser("progress", help="结构化进度快照(只读,给外部监控/Pi 适配器)")
     p.add_argument("run_id")
+    p = sub.add_parser("context", help="上下文状态:模型窗口/估算/阈值/最近压缩(只读)")
+    p.add_argument("target")
+    p.add_argument("--context-tokens", type=int, default=None,
+                   help="模型上下文窗口(token);不给则读 limits 默认(0=未配置)")
     p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
     p.add_argument("action", choices=["list", "probe", "call"])
     p.add_argument("--server")
@@ -242,6 +246,39 @@ def main(argv: list[str] | None = None) -> int:
 
             r = Runner(con, args.root, ScriptedAdapter(script=[]))
             print(json.dumps(r.progress(args.run_id), ensure_ascii=False, indent=2))
+        elif args.cmd == "context":
+            from .compact import estimate_tokens, threshold_tokens
+            from .contextinfo import build_status
+            from .limits import Limits
+            from .models import limits_config, load_model_config
+
+            dom = Domain(con, args.root)
+            dom.target(args.target)                       # 目标不存在就直接报错
+            cfg = limits_config(args.root)
+            lim = Limits(**cfg)
+            if args.context_tokens:
+                lim = Limits(**{**cfg, "context_tokens": args.context_tokens})
+            ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
+            hist = json.loads(ck["messages"]) if ck else []
+            last = con.execute("SELECT payload FROM events WHERE kind='model.call' "
+                              "ORDER BY ts DESC LIMIT 1").fetchone()
+            lu = (json.loads(last["payload"]).get("usage") or {}) if last else {}
+            _k, _b, _m = load_model_config(args.root)
+            st = build_status(
+                model=_m or str(os.environ.get("FW_MODEL", "") or "unknown"),
+                window=lim.context_tokens or None, messages=hist,
+                output_reserve=lim.output_reserve_tokens,
+                context_tokens=lim.context_tokens,
+                last_prompt_tokens=lu.get("prompt_tokens"),
+                last_cached_tokens=(lu.get("prompt_tokens_details") or {}).get("cached_tokens"))
+            comp = con.execute("SELECT payload FROM events WHERE kind IN "
+                               "('run.compacted','run.compact_failed') ORDER BY ts DESC LIMIT 1").fetchone()
+            out = st.as_dict()
+            out["checkpoint_messages"] = len(hist)
+            out["threshold_tokens"] = threshold_tokens(lim.context_tokens, lim.output_reserve_tokens)
+            out["last_compaction"] = json.loads(comp["payload"]) if comp else None
+            out["last_compaction_kind"] = comp is not None and json.loads(comp["payload"]).get("error") is None
+            print(json.dumps(out, ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":
             from .mcp_client import MCPClient, load_servers, probe as mcp_probe
             cfgs = [os.environ.get("FW_MCP_CONFIG") or

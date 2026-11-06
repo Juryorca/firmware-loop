@@ -47,6 +47,21 @@
 - **权威 Gate 同步(本轮)**:`fw-core gates` 输出 `provenance{direct,weak,unlinked}`;只有完整性复核的 `no_finding` 进 `advisories`(提示,不阻断)。
 - 验收:`tests/test_provenance_strength.py`、`tests/test_gate_provenance.py`;真实 QNAP 库 gates 实测 `direct 10 / weak 8 / unlinked 3`,4 条 no_finding 标为"仅完整性复核"。
 
+### P8 上下文生命周期生产化 + 上下文感知 ✅ 完成(2026-11-06)
+
+- **生产配置**:`state/model.json` 增 `context_tokens: 1000000`(依据 Pi 模型目录 `deepseek-flash.contextWindow`,
+  非按名字猜)+ `output_reserve_tokens: 8000`;`models.limits_config()` 读 env > `state/model.json`;
+  未配置时状态块明确 `window=unknown`,不静默宣称自动压缩已生效。
+- **估算校准**:224 次真实调用实测 **2.08 字符/token**;旧 3.5 低估 ~40%(est/actual≈0.59)⇒ 改 **2.0**(偏保守)。
+- **切点正确性**:改为按**协议组**(assistant.tool_calls + 全部 tool 结果)切分,不再只看"不以 tool 开头";
+  测试覆盖多 tool_calls 组整体保留。
+- **压缩失败语义**:摘要异常 ⇒ 历史原样保留 + `run.compact_failed` + 冷却(默认 5 次调用)⇒ 不重复付费、不产生空摘要。
+- **上下文感知**:状态块合入 `state_prompt()` 尾部(model/窗口/估算/可用/预留/阈值/准备压缩/上次真实 usage),
+  **不进 system、不写 history/checkpoint**;空间充足时明确"继续工作,不得声称快满"。
+- **CLI**:`fw-core context <target>`(模型/窗口/估算/阈值/是否启用/最近压缩/上次真实 usage/checkpoint 消息数)。
+- **真实 10 次调用基线**(临时工作区):prompt 2,552→5,767、cached 0→3,968、命中 70.9%→81.3%、
+  状态块 ≈160 tokens(约初始请求 6%)。
+- **未验证(如实)**:>500k tokens 长历史压缩后的命中率、多轮压缩的真实 API 行为(本轮未跑付费长程)。
 ### P7 Agent Runtime 架构对照与上下文生命周期 ✅ 完成(2026-11-06)
 
 - **对照 Pi**(只读):append-only entries + projection、system 静态 + 动态更新消息、阈值 compaction(`keepRecentTokens 20000` + 结构化摘要);

@@ -129,6 +129,37 @@ class OpenAICompatAdapter:
                      usage=r.get("usage") or {})
 
 
+def limits_config(root: str | None = None) -> dict:
+    """上下文相关的**执行配置**(生产来源: env > state/model.json)。
+
+    只认显式配置:没有 `context_tokens` 就是"窗口未知",不做按模型名的猜测。
+    返回的键可直接传给 `Limits(**)`:context_tokens / output_reserve_tokens /
+    keep_recent_tokens / compact_retry_cooldown_calls。
+    """
+    import json as _json
+    import os as _os
+
+    keys = ("context_tokens", "output_reserve_tokens", "keep_recent_tokens",
+            "compact_retry_cooldown_calls")
+    out: dict = {}
+    path = _os.environ.get("FW_MODEL_CONFIG") or (
+        _os.path.join(root, "state", "model.json") if root else "")
+    if path and _os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                d = _json.load(f)
+            for k in keys:
+                if isinstance(d.get(k), int):
+                    out[k] = d[k]
+        except (OSError, ValueError):
+            pass
+    for k in keys:                       # env 覆盖(FW_CONTEXT_TOKENS 等)
+        v = _os.environ.get("FW_" + k.upper())
+        if v and v.isdigit():
+            out[k] = int(v)
+    return out
+
+
 def build_adapter(kind: str = "scripted", **kw) -> Adapter:
     if kind in ("scripted", "fake"):
         return ScriptedAdapter(script=kw.get("script") or [])

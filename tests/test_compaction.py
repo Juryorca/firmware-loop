@@ -31,7 +31,7 @@ def _history(n: int) -> list[dict]:
 
 
 def test_estimate_and_threshold():
-    assert estimate_tokens([{"role": "user", "content": "x" * 350}]) == 100
+    assert estimate_tokens([{"role": "user", "content": "x" * 350}]) == 175   # 2.0 字符/token(实测校准)
     assert should_compact(_history(50), 0) is False          # 0 = 不做阈值压缩
     assert should_compact(_history(50), 5_000) is True
     assert should_compact([{"role": "user", "content": "hi"}], 5_000) is False
@@ -109,3 +109,67 @@ def test_runtime_compacts_when_context_tokens_reached(tmp_path):
     assert ev and ev[0]["after_tokens"] < ev[0]["before_tokens"]
     # 摘要头出现在后续请求里(不是写死的历史),且只出现一次
     assert model.seen_summary, "压缩后的摘要必须进入后续请求"
+
+
+def _multi_tool_group(i: int, tools: int = 3) -> list[dict]:
+    calls = [{"id": f"c{i}_{k}", "type": "function",
+              "function": {"name": "fs_read", "arguments": json.dumps({"path": f"{i}_{k}.txt"})}}
+             for k in range(tools)]
+    out = [{"role": "assistant", "content": "", "tool_calls": calls}]
+    out += [{"role": "tool", "tool_call_id": c["id"], "content": "y" * 400} for c in calls]
+    return out
+
+
+def test_cut_keeps_multi_tool_groups_whole():
+    hist: list[dict] = []
+    for i in range(8):
+        hist += _multi_tool_group(i)
+    cut = find_cut(hist, keep_recent_tokens=1_200)
+    kept = hist[cut:]
+    # 保留段不能以 tool 开头,且每个 assistant 的 tool_calls 必须全有对应 tool 结果
+    assert kept[0]["role"] != "tool"
+    pending = set()
+    for m in kept:
+        if m.get("role") == "assistant":
+            pending |= {c["id"] for c in m.get("tool_calls") or []}
+        elif m.get("role") == "tool":
+            assert m["tool_call_id"] in pending, "tool 结果必须属于保留段里的 assistant"
+            pending.discard(m["tool_call_id"])
+    assert not pending, "保留段里不得有缺失结果的 tool_call"
+
+
+def test_summarizer_failure_keeps_history_and_cools_down(tmp_path):
+    root = str(tmp_path)
+    for i in range(1, 6):
+        with open(os.path.join(root, f"big{i}.txt"), "w", encoding="utf-8") as f:
+            f.write("z" * 20_000)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    Domain(con, root).create_target("t1", version="1")
+    calls = {"n": 0, "summaries": 0}
+
+    def bad_summary(old):
+        calls["summaries"] += 1
+        raise RuntimeError("summarizer down")
+
+    class M(_ToolModel):
+        def chat(self, messages, tools):
+            calls["n"] += 1
+            return super().chat(messages, tools)
+
+    r = Runner(con, root, M(), limits=Limits(max_model_calls=10, context_tokens=8_000,
+                                             keep_recent_tokens=2_000,
+                                             compact_retry_cooldown_calls=5),
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True),
+               summarizer=bad_summary)
+    r.run(r.start("t1", "失败"), "t1")
+    ev = [json.loads(x["payload"]) for x in
+          con.execute("SELECT payload FROM events WHERE kind='run.compact_failed'")]
+    assert ev, "压缩失败必须留事件"
+    assert "summarizer down" in ev[0]["error"]
+    # 冷却:失败后不会每轮重试(test 的调用数应远小于模型调用数)
+    assert calls["summaries"] <= 2, calls
+    # 历史没被删:checkpoint 里仍有 tool 消息,且没有空摘要头
+    ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
+    msgs = json.loads(ck["messages"])
+    assert any(m.get("role") == "tool" for m in msgs)
+    assert not any("历史摘要" in (m.get("content") or "") for m in msgs)
