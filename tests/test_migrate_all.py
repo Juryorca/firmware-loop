@@ -78,3 +78,19 @@ def test_migrate_all_skips_scratch(tmp_path):
     os.makedirs(os.path.join(root, "state", "_scratch", "x"), exist_ok=True)
     out = migrate_all(root)
     assert out["targets"] == 1 and out["results"][0]["target"] == "t"
+
+
+def test_reset_then_remigrate_after_notes_edit(tmp_path):
+    """改 notes 后:reset 清迁移行再重导 ⇒ 不产生重复行(不能靠内容 id 硬碰)。"""
+    from fwcore.migrate_all import reset_migrated
+
+    root, con = _mk(tmp_path)
+    migrate_target(con, root, "t")
+    with open(os.path.join(root, "state", "t", "notes.md"), "a", encoding="utf-8") as f:
+        f.write("\n- **H-03** 新条目\n  状态: 未处理\n")
+    reset_migrated(con, root, only=["t"])
+    out = migrate_target(con, root, "t")
+    assert out["stats"]["hypotheses"] == 3, out["stats"]
+    again = migrate_target(con, root, "t")
+    assert all(v == 0 for k, v in again["stats"].items() if k != "target"), again["stats"]
+    assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 3
