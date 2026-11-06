@@ -151,7 +151,7 @@ class Domain:
         if sql is None:
             raise DomainError(f"未登记的计数项: {key}")
         # sql 来自 _COUNT_SQL 常量白名单,不含外部输入(不是拼接 SQL)
-        return self.con.execute(sql, (target_id,)).fetchone()["n"]  # nosemgrep: python-sql-injection
+        return self.con.execute(sql, (target_id,)).fetchone()["n"]  # nosemgrep: python-sql-injection(sql 来自白名单常量)  # nosemgrep: python-sql-injection
 
     # ---------------- 攻击面 ----------------
     def add_surface(self, target: str, key: str, **attrs) -> str:
@@ -350,6 +350,17 @@ class Domain:
             full = path if os.path.isabs(path) else os.path.join(self.root, path)
             if not os.path.isfile(full):
                 raise NotFound(f"观察来源文件不存在: {path}")
+            # 只凭"工具成功 + 文件存在"不算来源:必须能证明这个调用产出了它
+            if tool_call_id:
+                tc2 = self.con.execute(
+                    "SELECT stdout_path, result_path, args FROM tool_calls WHERE id=?",
+                    (tool_call_id,)).fetchone()
+                goal = os.path.abspath(full)
+                direct = {os.path.abspath(p) for p in
+                          (tc2["stdout_path"], tc2["result_path"]) if p}
+                if goal not in direct and os.path.basename(full) not in (tc2["args"] or ""):
+                    raise InvariantViolation(
+                        "无法证明该调用产出了这个文件:不是它的 stdout/result,命令参数里也没有")
             sha = _sha256_file(full)
         oid = new_id("O")
         with Tx(self.con) as c:

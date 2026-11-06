@@ -88,6 +88,8 @@
 | **工具结果给模型的那份:有界合法 JSON** | ✅ 真 bug 修复 | 原来 `json.dumps(out)[:8000]` 会**截断在字符串中间** ⇒ 模型收到非法 JSON,且 `tool_call_id`/产物路径被切掉;现 `_bounded_tool_result`:关键字段优先(状态/`db_tool_call_id`/`stdout_path`/`result_path`/哈希/错误/退出码),大字段只给节选+原长度,`_truncated` 标记。内容里**不再放协议 id**(避免与 DB `TC-…` 混用),协议 id 留在消息层。测试 `tests/test_tool_result_payload.py` 3 passed |
 | **observation 跨 run 可见** | ✅ 真缺口 | 原系统提示只注入假设+证据,`observations`(已确认但不足以成假设的逆向事实)既不进提示也没有计数 ⇒ 模型记了也传不下去。现:`derived.observations`、`## 已有研究事实` 注入最近 15 条观察、"产出未入账"提醒同时看 observation/evidence(本 run 起点之后才计入)。测试 `test_cross_run_inheritance.py::test_observation_survives_to_next_run` |
 | **真实规模:观察被挤掉** | ✅ 修 | 实测 QNAP 库(8 假设/21 证据/9 观察)下 `## 已有研究事实` 到 3001 字符被截断,观察 **0 条可见**;改为按类别配额(假设 40% / 证据 28% / 观察 32%,剩余再补),现 7 假设/7 证据/5 观察可见 |
+| **研究来源链:协议 id → DB 记录** | ✅ 真 bug | `_shrink_history` 用消息里的 `call_…` 调 `_artifact_of()`,而它只查主键 `TC-…` ⇒ 检查点截断时**永远拿不到产物路径**。修:`WHERE id=? OR call_key=?`(call_key 存的就是协议 id,461 条真实记录都有);恢复时 `_sanitize_history` 用同一映射补真实 `db_tool_call_id`/`stdout_path`,不编造 |
+| **observation 来源必须可证** | ✅ 收紧 | 原来"工具成功 + 文件存在"就给关联;现要求该文件的绝对路径等于该调用的 stdout/result,或出现在其命令参数里,否则拒绝 |
 | **observation 来源** | ✅ schema v12 | `observations` 增 `tool_call_id/path/sha256`(同 target、状态 ok、文件哈希);旧观察保持 NULL 不补造;`state_add_observation` 透传并回显来源;两库已 rebaseline(备份 `.bak-20261106-113941`) |
 | **旧 checkpoint 非法 JSON** | ✅ 加载修复 | 旧版硬截断的 tool 消息在恢复时包成合法 JSON(`history_corrupt=true` + 原文节选 + "请重新读取产物"),不伪造 tool_call_id |
 | **第三阶段复盘 + 续跑** | ✅ 结论:分析真、落账空 | 原 30 次:36 tool calls 全是**真分析**(`_notes/s3/annotate.py|cfg.py|calls.py|body.py` 反汇编/CFG/调用点,产出 12 份 ann + 9 份 body),但 **0 次 state_* 调用** ⇒ 0 假设/0 证据;续跑 +40 calls(共 70)仍 0 落账 ⇒ 不是工具报错,是模型不落账。**没有编造记录**。下一步(未做):`progress_brief` 在"本 run 有产物但零登记"时给一次提示 |

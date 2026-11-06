@@ -88,11 +88,13 @@ def test_observation_source_is_validated_and_kept(tmp_path):
     tid = con.execute("SELECT id FROM targets").fetchone()["id"]
     con.execute("INSERT INTO runs(id,target_id,state,started_at,updated_at) VALUES(?,?,?,?,?)",
                 (rid, tid, "running", "2026-11-06T00:00:00Z", "2026-11-06T00:00:00Z"))
-    con.execute("INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,created_at)"
-                " VALUES('TC-1','k','R-1','shell_exec','{}','ok','2026-11-06T00:00:01Z')")
     os.makedirs(os.path.join(root, "report", "artifacts"), exist_ok=True)
-    with open(os.path.join(root, "report", "artifacts", "op.txt"), "w", encoding="utf-8") as f:
+    art = os.path.join(root, "report", "artifacts", "op.txt")
+    with open(art, "w", encoding="utf-8") as f:
         f.write("0x19908 CGI_Find_Parameter(\"op\")\n")
+    # 来源必须可证:这条调用的 stdout 就是该文件(shell_exec 的真实形态)
+    con.execute("INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,stdout_path,created_at)"
+                " VALUES('TC-1','call_1','R-1','shell_exec','{}','ok',?,'2026-11-06T00:00:01Z')", (art,))
     oid = dom.add_observation("t1", "0x19908 取 op 后 strtol",
                               tool_call_id="TC-1", path="report/artifacts/op.txt")
     row = con.execute("SELECT tool_call_id,path,sha256 FROM observations WHERE id=?", (oid,)).fetchone()

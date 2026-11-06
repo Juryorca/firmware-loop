@@ -303,8 +303,10 @@ class Runner:
         """恢复用:工具调用 → 产物路径(偏好 stdout,其次 result)。"""
         if not tool_call_id:
             return None
-        row = self.con.execute("SELECT stdout_path, result_path FROM tool_calls WHERE id=?",
-                               (tool_call_id,)).fetchone()
+        # 历史消息里的 id 是**协议** id(call_…),DB 主键是 TC-…;call_key 保存了协议 id
+        row = self.con.execute(
+            "SELECT stdout_path, result_path FROM tool_calls WHERE id=? OR call_key=?",
+            (tool_call_id, tool_call_id)).fetchone()
         if not row:
             return None
         p = row["stdout_path"] or row["result_path"]
@@ -763,7 +765,13 @@ class Runner:
             "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1", (rid,)
         ).fetchone()
         try:
-            history = _sanitize_history(json.loads(ck["messages"])) if ck else []
+            def _lookup(pid):
+                row = self.con.execute(
+                    "SELECT id, stdout_path, result_path FROM tool_calls"
+                    " WHERE id=? OR call_key=?", (pid, pid)).fetchone()
+                return dict(row) if row else None
+
+            history = _sanitize_history(json.loads(ck["messages"]), _lookup) if ck else []
         except (json.JSONDecodeError, TypeError) as e:      # 检查点损坏 ⇒ 从空历史继续(记录事件)
             history = []
             with _db.Tx(self.con) as c:
@@ -930,10 +938,11 @@ def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
     return json.dumps(base, ensure_ascii=False, default=str)
 
 
-def _sanitize_history(history: list[dict]) -> list[dict]:
+def _sanitize_history(history: list[dict], lookup=None) -> list[dict]:
     """旧版硬截断留下的工具回复可能是非法 JSON;加载时包成合法结构,原文节选保留。
 
-    不伪造来源:`history_corrupt=true` + 说明"请用工具重新读取产物",不编 tool_call_id。
+    `lookup(protocol_id) -> {"id","stdout_path","result_path"}` 用**真实** call_key 记录
+    补上 DB id 与产物路径(可追溯),不是编造;查不到就只给说明。
     """
     for m in history:
         if m.get("role") != "tool":
@@ -946,11 +955,22 @@ def _sanitize_history(history: list[dict]) -> list[dict]:
             continue
         except (ValueError, TypeError):
             pass
-        m["content"] = json.dumps({
-            "status": "unknown", "history_corrupt": True,
-            "note": "历史工具回复是旧版硬截断产物(非法 JSON);原始内容需用工具重新读取",
-            "excerpt": c[:1500],
-        }, ensure_ascii=False)
+        rec = {}
+        if lookup:
+            try:
+                rec = lookup(m.get("tool_call_id")) or {}
+            except Exception:
+                rec = {}
+        payload = {"status": "unknown", "history_corrupt": True,
+                   "note": "历史工具回复是旧版硬截断产物(非法 JSON);原始内容需用工具重新读取",
+                   "excerpt": c[:1500]}
+        if rec.get("id"):
+            payload["db_tool_call_id"] = rec["id"]
+        if rec.get("stdout_path"):
+            payload["stdout_path"] = rec["stdout_path"]
+        if rec.get("result_path"):
+            payload["result_path"] = rec["result_path"]
+        m["content"] = json.dumps(payload, ensure_ascii=False)
     return history
 
 
