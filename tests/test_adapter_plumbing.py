@@ -107,3 +107,20 @@ def test_second_paragraph_final_finishes_in_one_call(tmp_path):
     assert res.state == "finished"
     assert len(api.sent) == 1
     assert api.sent[0]["messages"][0]["role"] == "system"
+
+
+def test_reasoning_content_padded_when_env_unset(monkeypatch):
+    """resume 到新进程(env 没继承)也必须补 reasoning_content,否则 DeepSeek thinking 400。"""
+    from fwcore.model_client import to_api_messages
+
+    monkeypatch.delenv("FW_REASONING_CONTENT", raising=False)
+    msgs = [{"role": "assistant", "content": "hi"}]
+    assert to_api_messages(msgs)[0].get("reasoning_content") == ""
+
+
+def test_reasoning_content_can_be_disabled_explicitly(monkeypatch):
+    from fwcore.model_client import to_api_messages
+
+    monkeypatch.setenv("FW_REASONING_CONTENT", "0")
+    msgs = [{"role": "assistant", "content": "hi"}]
+    assert "reasoning_content" not in to_api_messages(msgs)[0]

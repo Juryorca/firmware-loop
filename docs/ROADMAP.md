@@ -17,7 +17,18 @@
 
 ## 最高价值待办(按优先)
 
-### P1 认证控制流:`op` 值 → 分发 → 权限检查 → 失败分支 ⛔ 仅缺授权
+### P1 认证控制流:`op` 值 → 分发 → 权限检查 → 失败分支 🟡 静态审计完成,动态未做
+
+- **本轮结果(2026-11-06,`R-20261105-3518ef1d` 累计 125 calls/138 tools)**:11 个 op 子处理器逐一过门禁,
+  结论 `no_finding`(H-20261106-3fdc40e5),范围写得很窄(main@0xf470 → 5 入口 → 11 handler + 门禁原语库内实现);
+  门禁类型:口令(0x14c50 含 `Check_NAS_*`)、session 三重校验、`device_auth_get_session`、Qtoken DB、
+  verify_code strcasecmp、vc op13 qtoken;库内原语实测为真实秘密比对(sha256 已记)。
+- **记录**:4 条 observation(1 条 `command-write` 弱来源、3 条旧式无来源)、6 条 evidence(3 条 cross-check + 3 条库文件 sha256)。
+- **模型自然落账**:25 次调用里 13 次 `state_*`(obs 4/ev 6/verify 6/attempt 2/conclude 2/hyp 1/mirror 1)⇒ 之前的
+  "只分析不落账"在修好 schema/来源字段/事实注入后**未再出现**。
+- **未判定(如实)**:唯一无门禁入口 `passwordless op=8`(0x12d78,实测只有 `getpwnam`/`device_auth_load_user_config`,
+  无 session/qtoken/password 调用)只读 2FA 配置,模型判为"低危信息暴露/弱枚举面",不构成绕过;是否值得单独成案见 P5。
+- **缺**:运行时/模拟验证(服务端 session/qtoken 状态文件不在样本内);其它 `device_auth_*/auth_*` 助手只按调用点返回值判断。
 
 - **目标**:判定认证前输入能否绕过权限/状态检查抵达受保护行为。
 - **已有**:5 个 handler 入口(0x196d8/0x197d8/0x19908/0x19a68/0x19b08)、`CGI_Find_Parameter("op")`+`strtol`(0x19908)、访客门 `Is_Guest_User`(0xf7cc/0xffdc)、`all_calls.txt` 调用图、`_notes/s3/` 标注。
@@ -35,6 +46,20 @@
 - `observations.relation`(v13):`direct-stdout` / `direct-result` / `command-write`;提示按强度标注;`assess` 的 `provenance_mix` 与 `direct` 检查不被弱来源满足。
 - **权威 Gate 同步(本轮)**:`fw-core gates` 输出 `provenance{direct,weak,unlinked}`;只有完整性复核的 `no_finding` 进 `advisories`(提示,不阻断)。
 - 验收:`tests/test_provenance_strength.py`、`tests/test_gate_provenance.py`;真实 QNAP 库 gates 实测 `direct 10 / weak 8 / unlinked 3`,4 条 no_finding 标为"仅完整性复核"。
+
+### P5 `passwordless op=8` 未认证信息暴露 ✅ 已成立(vulnerable,2026-11-06)
+
+- **结论** `H-20261106-33991ba5` = **vulnerable**,范围写死:样本 authLogin.cgi(sha256 `29eb3bda…`,QTS 5.2.11.3661)的
+  `func=passwordless → 0xffa8 → op==8 @0x19a68 → 0x12d78`,且 `user` 非 guest。
+- **数据流**(模型查 + 我独立 objdump 复核):`CGI_Find_Parameter("func")` → `Is_Guest_User`(0xffdc,**只拦 guest**)
+  → `IsLocalUser`(0xffe8)→ 0x19a68 `cmp w0,#8` `b.eq 0x19ae0` → `b 0x12d78`;handler 内
+  `CGI_Find_Parameter("user")` → `Get_Exact_NAS_User_Name` → `device_auth_load_user_config` → `json_pack`
+  返回 `passwordless_en/qrcode_en/approve_login_en`(+`error_code=0`)。**全程无 session/cookie/凭据判定**。
+- **影响(如实)**:认证前可读任意本地非 guest 账号的 2FA/passwordless 配置 → 二次认证态势泄露 + 账号存在性判据
+  (仅非 0 值可作判据;不存在用户与未写盘配置都返回全 0);不泄露口令/OTP/密钥。
+- **证据**:4 条 verified(`reproduce-attempt`×3 + `cross-check`×1);来源全部 `command-write`(弱),
+  `decisive_attempts_have_direct_evidence` 为 0/10 —— 报告里必须标注"弱来源 + 静态复核"。
+- **未覆盖**:func 其余 op 分支、guest(被拦)、httpd 路由/鉴权配置、运行期 auth.conf 权限位;无真机/仿真动态验证。
 
 ### P4 依赖库/样本边界(可选,需新研究材料)
 

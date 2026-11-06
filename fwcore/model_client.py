@@ -11,15 +11,19 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.error
-import urllib.request
+import http.client
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from typing import Protocol
 
 
 def _emit_reasoning() -> bool:
-    """每次都读环境变量(测试/脚本会在 import 之后才设)。"""
-    return os.environ.get("FW_REASONING_CONTENT") == "1"
+    """thinking 模式下**每个** assistant 消息都必须回传 `reasoning_content`(空串也要)。
+
+    默认就补(这是 DeepSeek thinking 的协议要求);只有显式 `FW_REASONING_CONTENT=0/off`
+    才关掉(给不接受该字段的网关用)。之前是"默认不补",换个进程(env 没继承)就会 400。
+    """
+    return (os.environ.get("FW_REASONING_CONTENT") or "1").lower() not in ("0", "off", "false")
 
 
 class Transport(Protocol):
@@ -46,18 +50,31 @@ def _check_url(url: str) -> None:
         raise ModelHTTPError(0, f"拒绝非 http(s) 端点: {url[:80]}")
 
 
-def urllib_transport(url: str, headers: dict, payload: dict) -> dict:
+def http_transport(url: str, headers: dict, payload: dict) -> dict:
+    """POST JSON 到 http(s) 端点;只用 `http.client`(不接受 URL 被当成任意 scheme 读取)。
+
+    `_check_url` 先做 scheme 白名单;连接/超时/HTTP 错误都转成 `ModelHTTPError`。
+    """
     _check_url(url)
-    # 端点已在 _check_url 里做过 http(s) 白名单校验;这里不接受 file:/自定义 scheme
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers)
-    # 只走 http(s)(_check_url 已验证);用 opener 而不是裸 urlopen,
-    # 避免静态扫描把它当成"任意 scheme 的 URL 读取"
-    opener = urllib.request.build_opener()
+    u = urlsplit(url)
+    path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+    cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    conn = cls(u.hostname, u.port, timeout=180)
     try:
-        with opener.open(req, timeout=180) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:   # 把服务端原文带出来(排查协议问题必须有)
-        raise ModelHTTPError(e.code, e.read().decode("utf-8", errors="replace")) from e
+        conn.request("POST", path, body=json.dumps(payload).encode(), headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status >= 400:                 # 服务端原文要带出来(排查协议问题必须有)
+            raise ModelHTTPError(resp.status, body.decode("utf-8", errors="replace"))
+        return json.loads(body or b"{}")
+    except OSError as e:
+        raise ModelHTTPError(0, f"连接失败: {str(e)[:200]}") from e
+    finally:
+        conn.close()
+
+
+# 兼容旧名(脚本/测试可能还在 import)
+urllib_transport = http_transport
 
 
 def to_api_messages(messages: list[dict]) -> list[dict]:
@@ -118,7 +135,7 @@ class OpenAICompatModel:
     api_key: str = ""
     api_key_env: str = "FW_API_KEY"
     temperature: float = 0.2
-    transport: Transport = urllib_transport
+    transport: Transport = http_transport
     last_request: dict | None = field(default=None, repr=False)
 
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
