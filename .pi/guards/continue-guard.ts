@@ -46,23 +46,13 @@ function statSyncSafe(p: string): number { try { return require0(p); } catch { r
 function require0(p: string): number { try { return Number(statSync(p).size); } catch { return 0; } }
 
 
-/** 是否启用护栏(逐 settle 判定,改动立即生效):
- *  ①env PI_CONTINUE_GUARD=off ⇒ 关;
- *  ②存在 `.pi/guard-off-<本会话id>` ⇒ 关(给开发/复核会话单独关,研究会话不受影响);
- *  ③否则要求"本会话第一条 user 消息是 /fw 研究提示词"(过滤掉非研究窗口)。 */
+/** 是否启用护栏:只看"是否在本工作区"(没有开关、没有豁免文件)。
+ *  这个护栏的存在意义就是**别让研究会话自己停**;给它做"默认关闭/按会话豁免"
+ *  的开关等于让它形同虚设。 */
 export function guardActive(): boolean {
   try {
-    if (!IS_FW_LOOP) { logLine(`active=false: not-fw-loop(root=${ROOT})`); return false; }
-    if ((process.env.PI_CONTINUE_GUARD || "").toLowerCase() === "off") return false;
-    const sid = CTX_SID || process.env.PI_SESSION_ID || "";
-    if (sid && existsSync(`${ROOT}/.pi/guard-off-${sid}`)) { logLine(`active=false: opted-out(${sid.slice(0,8)})`); return false; }
-    if (sid && existsSync(`${ROOT}/.pi/guard-on-${sid}`)) { logLine(`active=true: forced-on(${sid.slice(0,8)})`); return true; }
-    const f = CTX_FILE || process.env.PI_SESSION_FILE || "";
-    if (!f) { logLine(`active=false: no-session-file(sid=${sid.slice(0,8)}, ctx=${CTX_FILE ? "yes" : "no"})`); return false; }
-    // 默认启用(2026-09-29):本工作区内**一律管**,除非存在 `.pi/guard-off-<sid>`;
-    //   (旧逻辑要求会话里出现过研究提示词 ⇒ 用户新开会话只打"继续/看"时被误判为非研究窗口 ✗)
-    if (existsSync(`${ROOT}/tools/queue_state.sh`)) return true;
-    return false;
+    if (!IS_FW_LOOP) return false;
+    return existsSync(`${ROOT}/tools/queue_state.sh`);
   } catch { return false; }
 }
 
@@ -193,11 +183,11 @@ export default function (pi: ExtensionAPI) {
       }
       let pct: number | null = null;
       try { const cu = ctx?.getContextUsage?.(); if (cu && typeof cu.percent === "number") pct = cu.percent; } catch {}
-      const body = on
-        ? `【护栏】已加载 ✓ · 窗口=研究会话(会管) · 队列未处理 ${open} 条${bad ? ` / 降级不合规 ${bad}` : ""} · 上下文 ${pct === null ? "未知" : pct.toFixed(0) + "%"}\n` +
-          `  · 我**只在三种情况出声**:①说"收尾/队列清空"但队列非空 ②降级理由不合规 ③借口句式(需要真机/上下文不足/需工作区外);正常结束一轮 ⇒ **静默** ✓\n` +
-          `  · 提醒带 10 分钟冷却;明细见 .pi/continue-guard.log`
-        : `【护栏】未启用(非研究窗口 / 已豁免:存在 .pi/guard-off-<本会话 id>)—— 不介入本会话 ✓`;
+        const body = `【护栏】已加载 ✓ · 窗口=研究会话(会管) · 队列未处理 ${open} 条`
+                     + `${bad ? ` / 降级不合规 ${bad} 条` : ""}`
+                     + (pct !== null ? ` · 上下文 ${pct.toFixed(1)}%` : "")
+                     + `\n  · 我**只在三种情况出声**:①说"收尾/队列清空"但队列非空 ②降级理由不合规 ③借口句式`
+                     + `\n  · 提醒带 10 分钟冷却;明细见 .pi/continue-guard.log`;
       logLine(`session_start notice on=${on} OPEN=${open}`);
       try { ctx?.ui?.notify?.(body.replace(/\n/g, "  "), "info"); } catch {}
       try { pi.sendMessage({ customType: "continue-guard", content: body, display: true }, { triggerTurn: false }); } catch {}

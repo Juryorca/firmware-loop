@@ -83,7 +83,7 @@
 | **200 次空转根因(已证实)** | ✅ | 读最新 checkpoint(step=437, 656 条消息)发现:模型把 `FINAL:` 写在**第二段**(`本轮已收口…\n\nFINAL: …`),而 `turn()` 只认"内容以 FINAL 开头" ⇒ 当成普通回合 ⇒ 同一段文字被反复追加、循环到预算耗尽。**不是模型能力问题,是识别 bug**;修复后用小预算真实恢复:`state=finished`,**1 次调用**即正确收束(421 calls 累计) |
 | **诊断字段真实链路** | ✅ | `OpenAICompatAdapter.chat()` 与 `_coerce_reply()` 之前丢弃 `finish_reason`/`usage`;已贯通,并用**模拟 HTTP transport**(真实 adapter + 真实响应解析)测到 `model.reply` 事件:`tests/test_adapter_plumbing.py` 4 passed(截断 length / 推理-only 协议往返 / 工具调用不记诊断 / 第二段 FINAL 一次收束) |
 | **token 消耗异常** | ✅ 根因+修复 | 历史**每次请求全量重发**且 run 内无限增长(旧 run checkpoint 491 KB,第二阶段收尾一次 222,238 prompt tokens/222,080 命中缓存);改为请求前 `_bound_history`(默认 160 k 字符预算)+ `model.call` 每次调用记账(usage 缺失标 `usage_known=false`);见 `docs/evidence/token-usage-audit.md` |
-| **上下文策略定稿** | ✅ 默认不裁剪 | 完整会话历史照常发送(缓存命中 ~99.93% 的那次 222,238 prompt 不是费用异常);`max_context_chars` 默认 **0=不裁剪**,显式设置才生效,且收敛说明带工具产物路径;`model.call` 每次调用记账保留。反例测试:`test_context_budget.py` 7 passed(默认不裁剪 / 协议配对 / 恢复) |
+| **上下文策略定稿** | ✅ 不裁剪 | 完整会话历史照常发送(缓存命中 ~99.93% 的 222,238 prompt 不是费用异常);**不设**字符上限旋钮;`model.call` 每次调用记账。测试:`test_context_budget.py`(全量发送 / 协议配对 / 恢复) |
 | **跨 run 继承研究事实** | ✅ 修复 | 之前系统提示只有派生计数,新 run 看不到上一轮的假设/证据;现注入`## 已有研究事实`(最近 25 条假设+范围、25 条证据+来源关系),`test_cross_run_inheritance.py` 锁定 |
 | **第三阶段真实 run(产品能力验证)** | ⚠️ 有结果也有缺口 | `R-20261105-3518ef1d`:30 calls/36 tool calls,未重做 XOR(复用生效),但**0 新假设/0 新证据**即被预算暂停 ⇒ "探索多、落账少";下一步应让研究进度提示更早要求落账,或恢复该 run 继续 |
 | **no_finding 强度** | ✅ 最小约束 | `conclude(no_finding)` 现要求 ≥1 条**经复核**证据;反例测试 `tests/test_conclude_strength.py`(未复核 ⇒ 拒绝) |

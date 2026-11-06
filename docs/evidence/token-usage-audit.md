@@ -43,12 +43,11 @@ completion_tokens_details.reasoning_tokens=871
 
 | 项 | 改动 | 证据 |
 |---|---|---|
-| 请求前收敛 | `_bound_history(history, limits.max_context_chars)`(默认 160,000 字符):从最老开始收窄工具输出(先留头 400 + 尾 200,仍超预算则压成占位),最近 12 条保持全文;只改内容长度,不动 `role`/`tool_call_id` | `tests/test_context_budget.py::test_bound_history_shrinks_oldest_and_keeps_structure` |
-| 预算可配 | `Limits.max_context_chars`(执行边界,不是研究停止规则);`describe()` 暴露 | `tests/test_context_budget.py::test_every_call_logged_and_context_bounded` |
+| 不做字符裁剪 | **定稿:历史全量发送**。缓存命中 99.93% 说明长上下文是正常机制,不是费用异常;不设"字符上限冒充 token 上限"的旋钮 | `tests/test_context_budget.py::test_full_history_is_sent_and_every_call_logged` |
 | 每次调用记账 | `model.call` 事件:step / n_messages / system_chars / history_chars / tool_chars / assistant_chars / usage / usage_known / prompt·completion·cached·reasoning tokens / finish_reason / tool_calls | 同上(7 次调用 = 7 条事件) |
 | 不猜 token | 服务端没给 usage ⇒ `usage_known=false`,`prompt_tokens=null` | 同上(断言全为 false) |
 
-**修复前后对照**(同一构造:6 次大输出工具调用,预算 3000 字符):修复前第 3 次请求即 5,498 字符并持续增长;修复后保持在预算内(测试断言 `history_chars ≤ 预算 + 单条余量`)。
+**定稿**:不裁剪历史(长上下文是资产);仅记录每次请求体积与 usage,用于发现"重复调用/空转"这类真异常。
 
 ## 5. 无效调用 / 真实 API 误触
 
@@ -61,4 +60,4 @@ completion_tokens_details.reasoning_tokens=871
 1. 旧 run 的 421 次调用**没有 usage 记录**,只能给数量级估计,不能给精确值;不补跑、不猜。
 2. Pi/DS 开发会话的 token 账本不可得 ⇒ 无法给出数字;只能确认测试不触发真实付费调用。
 3. 缓存命中率依赖服务端(`prompt_cache_hit_tokens`),本轮之后才有记录;旧数据不可回溯。
-4. `max_context_chars` 是**字符**预算,字符 ≠ token(实测比例随内容变化);真正精确的控制要等每调用 usage 累积后按 token 校准,当前不做。
+4. 没有任何 token/字符上限控制:接近模型上下文上限时由 API 报错(见 §2 的 usage 记录判断),不做猜测式裁剪。
