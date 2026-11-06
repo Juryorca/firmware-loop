@@ -94,3 +94,33 @@ def test_reset_then_remigrate_after_notes_edit(tmp_path):
     again = migrate_target(con, root, "t")
     assert all(v == 0 for k, v in again["stats"].items() if k != "target"), again["stats"]
     assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 3
+
+
+def test_evidence_paths_keep_only_material_files(tmp_path):
+    """目录/命令行/花括号/越界路径都不算证据文件(原文仍在 notes/documents)。"""
+    from fwcore.migrate_all import parse_evidence
+
+    root, _con = _mk(tmp_path)
+    tdir = os.path.join(root, "state", "t")
+    os.makedirs(os.path.join(tdir, "artifacts"), exist_ok=True)
+    with open(os.path.join(tdir, "artifacts", "poc.py"), "w", encoding="utf-8") as f:
+        f.write("x")
+    notes = ("证据: `artifacts/poc.py`\n"
+             "证据: `rootfs/`\n"
+             "证据: `bash artifacts/x.sh`\n"
+             "证据: `artifacts/{a,b}.sh`\n"
+             "证据: `../../../../etc/passwd.txt`\n")
+    ev = parse_evidence(notes, tdir)
+    assert [e["path"] for e in ev] == ["artifacts/poc.py"]
+
+
+def test_verify_flags_evidence_path_escape(tmp_path):
+    """证据路径逃出 state/ ⇒ verify 必须报错(解析器回归保护)。"""
+    root, con = _mk(tmp_path)
+    migrate_target(con, root, "t")
+    tid = con.execute("SELECT id FROM targets WHERE name='t'").fetchone()["id"]
+    with _db.Tx(con) as c:
+        c.execute("INSERT INTO evidence(id,target_id,kind,path,verified,created_at)"
+                  " VALUES('E-x',?,'file','../../outside.txt',0,'2026-01-01')", (tid,))
+    out = verify_target(con, root, "t")
+    assert out["path_escapes"] == 1 and out["ok"] is False

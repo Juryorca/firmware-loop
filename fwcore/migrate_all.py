@@ -299,9 +299,31 @@ def parse_observations(notes: str) -> list[dict]:
 
 
 RE_PATH = re.compile(r"`([^`\n]*(?:artifacts|report|poc|extract|rootfs)[^`\n]*)`")
+_CMD_PREFIX = ("bash ", "sh ", "python", "curl", "qemu", "objdump", "grep", "cat ", "tail ",
+               "unsquashfs", "binwalk", "unblob", "cp ", "mv ", "dd ", "tar ", "find ")
 
 
-def parse_evidence(notes: str) -> list[dict]:
+def _material_path(tdir: str, tok: str) -> str | None:
+    """只把**材料文件**当证据路径:目录/命令行/花括号占位/无扩展名 → 不收(原文仍在 notes)。"""
+    tok = tok.strip()
+    if not tok or tok.startswith(_CMD_PREFIX):
+        return None
+    if any(ch in tok for ch in " \t{}<>|;"):
+        return None
+    if tok.endswith("/"):
+        return None
+    full = tok if os.path.isabs(tok) else os.path.join(tdir, tok)
+    state_root = os.path.realpath(os.path.dirname(os.path.dirname(tdir)))
+    real = os.path.realpath(full)
+    if real != state_root and not real.startswith(state_root + os.sep):
+        return None          # 只接受 state/ 内的路径(notes 里可能写 ../.. 指到宿主文件)
+    if os.path.isfile(full):
+        return tok
+    # 已释放目标:文件可能被清掉;只有"像文件"的才保留为引用
+    return tok if re.search(r"\.[A-Za-z0-9]{1,8}(?:$|:|#)", tok) else None
+
+
+def parse_evidence(notes: str, tdir: str = "") -> list[dict]:
     """带路径的"证据/复核"行;不猜结论,只记材料与关联。"""
     out, cur_h = [], ""
     for i, ln in enumerate(notes.split("\n"), 1):
@@ -311,10 +333,13 @@ def parse_evidence(notes: str) -> list[dict]:
         if not re.search(r"证据|evidence|复核|复现|截图", ln, re.I):
             continue
         for p in RE_PATH.findall(ln):
-            out.append({"path": p.strip(), "text": _clean(ln)[:500],
+            path = _material_path(tdir, p)
+            if not path:
+                continue
+            out.append({"path": path, "text": _clean(ln)[:500],
                         "hypothesis_raw": cur_h, "line": i,
-                        "kind": ("screenshot" if re.search(r"\.(png|jpe?g|gif|webp)$", p, re.I)
-                                 else "poc" if re.search(r"poc|exploit", p, re.I) else "file")})
+                        "kind": ("screenshot" if re.search(r"\.(png|jpe?g|gif|webp)$", path, re.I)
+                                 else "poc" if re.search(r"poc|exploit", path, re.I) else "file")})
     return out
 
 
@@ -485,7 +510,7 @@ def migrate_target(con: sqlite3.Connection, root: str, name: str, dry_run: bool 
 
     # 证据 + 复核
     seen_ev = set()
-    for ev in parse_evidence(notes):
+    for ev in parse_evidence(notes, tdir):
         key = (ev["path"], ev["kind"])
         if key in seen_ev:
             continue
@@ -558,8 +583,11 @@ def migrate_target(con: sqlite3.Connection, root: str, name: str, dry_run: bool 
 def reset_migrated(con: sqlite3.Connection, root: str, only: list[str] | None = None) -> dict:
     """清掉上一次迁移写入的行(重跑用;documents/targets 保留 —— 原文与目标不重复写)。"""
     names = only or list_targets(root)
-    tids = [r["id"] for r in con.execute(
-        "SELECT id FROM targets WHERE name IN (%s)" % ",".join("?" * len(names)), names)] if names else []
+    tids: list[str] = []
+    for name in names:                      # 逐个查(不用拼接 SQL 占位符串)
+        row = con.execute("SELECT id FROM targets WHERE name=?", (name,)).fetchone()
+        if row:
+            tids.append(row["id"])
     # 静态 SQL 白名单(表名不拼接):扫描器与人都能一眼核对
     sql = {
         "conclusions": "DELETE FROM conclusions WHERE target_id=?",
@@ -639,5 +667,15 @@ def verify_target(con: sqlite3.Connection, root: str, name: str) -> dict:
     }
     orphan = n("SELECT COUNT(*) n FROM evidence e WHERE e.target_id=? AND e.hypothesis_id IS NOT NULL"
                " AND NOT EXISTS (SELECT 1 FROM hypotheses h WHERE h.id=e.hypothesis_id)")
-    return {"target": name, "ok": doc is not None and doc["body"].encode() == raw and orphan == 0,
-            "byte_identical": doc is not None, "counts": counts, "orphan_links": orphan}
+    # 证据路径不得逃出 state/(迁移只收工作区内的材料;越界 = 解析器回归)
+    state_root = os.path.realpath(os.path.join(root, "state"))
+    escape = 0
+    for e in con.execute("SELECT path FROM evidence WHERE target_id=? AND path IS NOT NULL", (tid,)):
+        full = e["path"] if os.path.isabs(e["path"]) else os.path.join(tdir, e["path"])
+        real = os.path.realpath(full)
+        if real != state_root and not real.startswith(state_root + os.sep):
+            escape += 1
+    return {"target": name,
+            "ok": doc is not None and doc["body"].encode() == raw and orphan == 0 and escape == 0,
+            "byte_identical": doc is not None, "counts": counts,
+            "orphan_links": orphan, "path_escapes": escape}
