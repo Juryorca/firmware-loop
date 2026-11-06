@@ -405,6 +405,13 @@ def state_add_observation(ctx: ToolContext, args: dict) -> dict:
             "source": {"tool_call_id": args.get("tool_call_id"), "path": args.get("path")}}
 
 
+def state_add_log(ctx: ToolContext, args: dict) -> dict:
+    lid = ctx.domain.add_log(args["target"], args["kind"], args["title"],
+                             args.get("body", ""), source=args.get("source"),
+                             needs_review=1 if args.get("needs_review") else 0)
+    return {"status": "ok", "log_id": lid, "view": "fw-core view <target>"}
+
+
 RELATION_BY_TOOL = {"fs_read": "read", "fs_hash": "hash",
                      "shell_exec": "execution", "ida_query": "decompiled",
                      "ghidra_query": "decompiled", "fw_extract": "extracted"}
@@ -642,6 +649,18 @@ def default_registry() -> Registry:
             "path": {"type": "string", "description": "来源产物路径(相对工作区)"}},
          "required": ["target", "text"]},
         state_add_observation))
+    r.register(ToolSpec(
+        "state_add_log",
+        "登记研究日志(逐轮记录/停止声明/下一步/决策/待核对叙述);研究事实用结构化工具,"
+        "这里只放无法结构化但必须保留的叙述",
+        {"type": "object", "properties": {
+            "target": {"type": "string"},
+            "kind": {"type": "string",
+                     "enum": ["round", "stop", "next", "decision", "note", "needs_review"]},
+            "title": {"type": "string"}, "body": {"type": "string"},
+            "source": {"type": "string"}, "needs_review": {"type": "boolean"}},
+         "required": ["target", "kind", "title"]},
+        state_add_log))
     r.register(ToolSpec(
         "state_add_evidence",
         "登记证据(必须能定位:path 或 capture),自动绑定版本。给 tool_call_id 可把证据"

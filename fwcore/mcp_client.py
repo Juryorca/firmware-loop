@@ -1,4 +1,4 @@
-"""独立 MCP 客户端(stdio):让 fwcore 不依赖 Pi 也能发现/调用 MCP 工具。
+"""独立 MCP 客户端(stdio):发现/调用 MCP 工具(配置来自 fwcore 自己的文件)。
 
 设计
 - **配置来自 fwcore 自己的文件**:`state/mcp.json`(或 `FW_MCP_CONFIG`)→ 用户级 `~/.pi/agent/mcp.json`(过渡期兼容)。

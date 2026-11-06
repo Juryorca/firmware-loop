@@ -195,17 +195,26 @@ def test_mirror_due_and_blocker(tmp_path):
     from fwcore.policy import Policy
     con, dom = _mk(str(tmp_path))
     dom.add_hypothesis("t1", "h")
+    st: dict[str, str | None] = {"aid": None}
+
+    def prep(_payload):                     # 轮内结束尝试(轮计数按"本 turn 推进")
+        if st["aid"]:
+            dom.finish_attempt(st["aid"], "inconclusive", "已排除外层", obs_outcome="none",
+                               obs_reason="外层路由先拒绝,结果在预期内")
+            st["aid"] = None
+        return {}
+
     r = Runner(con, str(tmp_path), ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
-               policy=Policy(allow_high_risk=True))
+               policy=Policy(allow_high_risk=True), prepare=prep)
     hid = dom.add_hypothesis("t1", "轮推进")
     for _ in range(3):
-        aid = dom.start_attempt(hid, "m")
-        dom.finish_attempt(aid, "inconclusive", "已排除外层", obs_outcome="none", obs_reason="外层路由先拒绝,结果在预期内")
+        st["aid"] = dom.start_attempt(hid, "m")
         rid = r.start("t1")
         r.run(rid, "t1")
     assert Research(str(tmp_path), dom).mirror_due("t1") is True
     mid = Research(str(tmp_path), dom).record_mirror("t1", "机制:签名前解析", "作者:校验在解析后", "状态:未测 beta")
     assert mid and Research(str(tmp_path), dom).rounds_since_mirror("t1") == 0
+
 
 
 def test_dual_output_is_enforced_per_attempt_only(tmp_path):
@@ -260,7 +269,10 @@ def test_system_prompt_is_built_from_repo_rules(tmp_path):
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     hid = dom.add_hypothesis("t1", "签名前的解析路径仍要独立判断")
     prompt = Research(repo, dom).system_prompt("t1", goal="验证解析器")
-    assert "不变量" in prompt and "尝试结果六种" in prompt
+    # 静态头不再复述规则(避免与 AGENTS/LOOP 双源);规则只从文件加载一次
+    head = prompt.split("## 规则原文(AGENTS.md)")[0]
+    assert "尝试结果六种" not in head
+    assert "AGENTS.md" in prompt and "FINAL:" in prompt
     assert hid in prompt                                  # 池进了提示
     assert "## 规则原文(AGENTS.md)" in prompt              # 规则从文件读取,不复制进代码
     assert "假设池" in prompt                              # 原文内容真的在里面

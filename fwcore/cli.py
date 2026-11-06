@@ -1,4 +1,4 @@
-"""独立入口:`fw-core <cmd>`(不依赖 Pi)。
+"""独立入口:`fw-core <cmd>`(宿主无关,不依赖任何外部 agent 运行时)。
 
 命令:
   init <target> [--version V] [--vendor X] [--sha256 H]   建目标
@@ -26,7 +26,6 @@ import sys
 
 from . import db as _db
 from .domain import Domain, DomainError
-from .migrate import import_notes, verify
 from .models import build_adapter, load_model_config
 from .runtime import Runner
 
@@ -103,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--older-than", type=float, default=300.0)
     p.add_argument("--include-remote", action="store_true")
     p.add_argument("--remote-factor", type=float, default=6.0)
-    p = sub.add_parser("progress", help="结构化进度快照(只读,给外部监控/Pi 适配器)")
+    p = sub.add_parser("progress", help="结构化进度快照(只读,给外部监控)")
     p.add_argument("run_id")
     p = sub.add_parser("context", help="上下文状态:模型窗口/估算/阈值/最近压缩(只读)")
     p.add_argument("target")
@@ -111,18 +110,23 @@ def main(argv: list[str] | None = None) -> int:
                    help="只看某个 run(默认:该目标全部 run;不同目标互不串)")
     p.add_argument("--context-tokens", type=int, default=None,
                    help="模型上下文窗口(token);不给则读 limits 默认(0=未配置)")
-    p = sub.add_parser("mcp", help="独立 MCP:list / probe / call(不依赖 Pi)")
+    p = sub.add_parser("mcp", help="独立 MCP:list / probe / call")
     p.add_argument("action", choices=["list", "probe", "call"])
     p.add_argument("--server")
     p.add_argument("--tool")
     p.add_argument("--args", default="{}")
-    p = sub.add_parser("gates", help="权威状态版 Gate(覆盖度/收尾/KB/引用;可选 --legacy 对照)")
+    p = sub.add_parser("gates", help="权威状态版 Gate(覆盖度/收尾/KB/引用;只读 SQLite)")
     p.add_argument("target")
-    p.add_argument("--legacy", action="store_true")
     p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
     p = sub.add_parser("status"); p.add_argument("target")
     p = sub.add_parser("derive"); p.add_argument("target")
-    p = sub.add_parser("migrate"); p.add_argument("target"); p.add_argument("--notes")
+    p = sub.add_parser("migrate", help="历史 Markdown → DB(一次性导入;--all 批量/--dry-run 预览)")
+    p.add_argument("target", nargs="?", default=None)
+    p.add_argument("--all", dest="migrate_all", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--verify", action="store_true")
+    p.add_argument("--reset", action="store_true", help="先清掉上次迁移写入的行(重跑用)")
+    p.add_argument("--notes")
     p = sub.add_parser("view"); p.add_argument("target")
     def _wd_args(parser):
         """三条运行类子命令共用:看护默认开(正式路径必须有外层保护)。"""
@@ -329,12 +333,10 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(c.call_tool(args.tool, json.loads(args.args)),
                                      ensure_ascii=False, indent=2))
         elif args.cmd == "gates":
-            from .gates_db import dangling_attachment_refs, evaluate, kb_counts, legacy_compare
+            from .gates_db import dangling_attachment_refs, evaluate, kb_counts
             rep = evaluate(con, args.root, args.target).as_dict()
             rep["kb"] = kb_counts(args.root)
             rep["dangling_refs"] = dangling_attachment_refs(con, args.root, args.target)
-            if args.legacy:
-                rep["legacy"] = legacy_compare(con, args.root, args.target)
             print(json.dumps(rep, ensure_ascii=False, indent=2))
             ok = rep["ok"] and all(x["status"] == "ok" for x in rep["kb"]) and not rep["dangling_refs"]
             return 0 if ok else 1
@@ -346,8 +348,28 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "derive":
             print(json.dumps(dom.derived(args.target), ensure_ascii=False, indent=2))
         elif args.cmd == "migrate":
-            print(json.dumps(import_notes(con, args.root, args.target, args.notes), ensure_ascii=False, indent=2))
-            print(json.dumps(verify(con, args.root, args.target, args.notes), ensure_ascii=False, indent=2))
+            from .migrate_all import migrate_all, reset_migrated, verify_target
+
+            if args.migrate_all:
+                if args.reset and not args.dry_run:
+                    reset_migrated(con, args.root)
+                out = migrate_all(args.root, dry_run=args.dry_run)
+                if args.verify and not args.dry_run:
+                    out["verify"] = [verify_target(con, args.root, r["target"])
+                                     for r in out["results"]]
+                print(json.dumps(out, ensure_ascii=False, indent=2))
+                ok = all(v["ok"] for v in out.get("verify", []))
+                return 0 if (args.dry_run or not out.get("verify") or ok) else 1
+            if not args.target:
+                print("migrate 需要 <target> 或 --all", file=sys.stderr)
+                return 2
+            from .migrate_all import migrate_all as _migrate_all
+            out = _migrate_all(args.root, dry_run=args.dry_run, only=[args.target])
+            if args.verify and not args.dry_run:
+                out["verify"] = [verify_target(con, args.root, args.target)]
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            ok = all(v["ok"] for v in out.get("verify", []))
+            return 0 if (args.dry_run or not out.get("verify") or ok) else 1
         elif args.cmd == "view":
             print(render_view(con, args.root, args.target))
         elif args.cmd in ("run", "resume", "advance"):
@@ -423,6 +445,12 @@ def render_view(con, root: str, target: str) -> str:
     lines.append(f"- 证据: {d['evidence']} 条")
     if d["closure_blockers"]:
         lines += ["", "## 收尾阻塞(程序可核)"] + [f"- {b}" for b in d["closure_blockers"]]
+    logs = con.execute(
+        "SELECT kind,title,created_at FROM research_logs WHERE target_id=?"
+        " ORDER BY created_at DESC LIMIT 12", (t.id,)).fetchall()
+    if logs:
+        lines += ["", "## 最近日志(DB)", ""]
+        lines += [f"- [{r['kind']}] {r['title'][:100]} ({r['created_at'][:10]})" for r in logs]
     rows = con.execute(
         "SELECT id,title,state,verdict,scope_note FROM hypotheses WHERE target_id=? ORDER BY created_at",
         (t.id,)).fetchall()

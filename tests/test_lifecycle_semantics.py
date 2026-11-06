@@ -39,11 +39,18 @@ def test_mirror_rounds_are_target_scoped(tmp_path):
     dom.add_hypothesis("t1", "a")
     dom.add_hypothesis("t2", "b")
     h1 = dom.add_hypothesis("t1", "a-轮推进")
-    r = _runner(con, root, [FINAL])
+    st: dict[str, str | None] = {"aid": None}
+
+    def prep(_payload):                     # 轮内结束尝试(轮计数按"本 turn 推进")
+        if st["aid"]:
+            dom.finish_attempt(st["aid"], "inconclusive", "已排除外层", obs_outcome="none",
+                               obs_reason="外层路由先拒绝,结果在预期内")
+            st["aid"] = None
+        return {}
+
+    r = _runner(con, root, [FINAL], prepare=prep)
     for _ in range(3):
-        aid = dom.start_attempt(h1, "m")
-        dom.finish_attempt(aid, "inconclusive", "已排除外层", obs_outcome="none",
-                           obs_reason="外层路由先拒绝,结果在预期内")
+        st["aid"] = dom.start_attempt(h1, "m")
         r.run(r.start("t1"), "t1")
     res = Research(root, dom)
     assert res.rounds_since_mirror("t1") == 3

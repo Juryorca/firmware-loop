@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 13   # 开发期**基线**:不再逐版本迁移(见 _migrate)
+SCHEMA_VERSION = 14   # 开发期**基线**:不再逐版本迁移(见 _migrate)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -222,11 +222,26 @@ CREATE TABLE IF NOT EXISTS mirror_checks (
   created_at TEXT NOT NULL
 );
 
+-- 研究日志:无法结构化但必须保留的叙述(逐轮记录/停止声明/下一步/决策)
+CREATE TABLE IF NOT EXISTS research_logs (
+  id           TEXT PRIMARY KEY,
+  target_id    TEXT NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
+  kind         TEXT NOT NULL
+     CHECK (kind IN ('round','stop','next','decision','note','needs_review')),
+  title        TEXT NOT NULL,
+  body         TEXT NOT NULL,
+  source       TEXT,
+  needs_review INTEGER NOT NULL DEFAULT 0,
+  created_at   TEXT NOT NULL,
+  UNIQUE (target_id, kind, title, source)
+);
+
 """
 
 
 INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_hyp_target_state ON hypotheses(target_id, state);
+CREATE INDEX IF NOT EXISTS idx_log_target_kind ON research_logs(target_id, kind);
 CREATE INDEX IF NOT EXISTS idx_attempt_hyp ON attempts(hypothesis_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_target ON evidence(target_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_verified ON evidence(target_id, verified);

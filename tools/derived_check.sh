@@ -161,248 +161,60 @@ if os.path.isdir(_att):
     else:
         ok("PoC 依赖: 无 poc/run/exploit 脚本引用目标内路径(跳过)")
 
-# ---------- ② A2 覆盖度 ----------
+# ---------- ② A2 覆盖度(权威 = SQLite;缺库/缺目标 ⇒ FAIL) ----------
 notes = os.path.join(state, "notes.md")
 
-def pool_block(ntext):
-    """取 notes 中最后一处含'假设池'的标题起的块(到下一个同级/更高级标题)"""
-    hs = list(re.finditer(r"(?m)^(#{2,4})[^\n]*假设池[^\n]*$", ntext))
-    if not hs:
-        return ""
-    pref = [x for x in hs if "唯一队列" in x.group(0)]   # 优先规范标签节
-    h = pref[0] if pref else hs[0]; lvl = len(h.group(1)); start = h.end()
-    nxt = re.search(r"(?m)^#{1,%d} " % lvl, ntext[start:])
-    return ntext[start:start + (nxt.start() if nxt else len(ntext))]
-
-def a2_unjudged(asf_path):
-    """A2 表中 disposition=未判定 的行,返回其入口点编号"""
-    if not os.path.isfile(asf_path):
-        return []
-    ids = []
-    for ln in open(asf_path, encoding="utf-8"):
-        if "未判定" in ln and ln.lstrip().startswith("|"):
-            cells = [c.strip().strip("*` ") for c in ln.strip().strip("|").split("|")]
-            if cells and cells[0]:
-                ids.append(cells[0])
-    return ids
-
-def pool_open(blk):
-    """池中未处理条目: 以 - 开头的条目段落内不含任何结论/降级关键词"""
-    ents, cur = [], None
-    for ln in blk.split("\n"):
-        if re.match(r"^\s*[-*]\s", ln):
-            if cur is not None: ents.append(cur)
-            cur = ln
-        elif cur is not None:
-            cur += "\n" + ln
-    if cur: ents.append(cur)
-    kw = ("定论", "No finding", "已排除", "降级", "成立", "Blocked", "结论", "已收口", "MISS", "已并入")
-    out = []
-    for e in ents:
-        m = re.search(r"状态\s*\**\s*[:：]?\s*\**\s*([^\n*]*)", e)
-        st = m.group(1) if m else ""
-        if re.search(r"未处理|进行中|未开始|TODO", st):     # 显式"未处理" ⇒ 队列项
-            handled = False
-        elif re.search(r"定论|已收口|No finding|已排除|降级|Blocked|已并入|完成", st):
-            handled = True
-        else:                                               # 状态行缺结论词 ⇒ 退回关键词扫描
-            handled = any(k in e for k in kw)
-        if not handled:
-            out.append(e.strip().split("\n")[0][:80])
-    return out
-def _db_surface_counts():
-    """权威状态优先:surfaces 表按 disposition 计数;找不到(未迁移)返回 None。"""
-    for _cand in (os.path.join(state, "state", "fwcore.sqlite3"),
-                  os.path.join(root, "state", "fwcore.sqlite3")):
-        if not os.path.isfile(_cand):
+def _open_db():
+    import sqlite3 as _s
+    for cand in (os.path.join(state, "state", "fwcore.sqlite3"),
+                 os.path.join(root, "state", "fwcore.sqlite3")):
+        if not os.path.isfile(cand):
             continue
         try:
-            import sqlite3 as _s
-            _c = _s.connect(_cand)
-            _t = _c.execute("SELECT id FROM targets WHERE name=?", (target,)).fetchone()
-            if not _t:
-                continue
-            _r = _c.execute("SELECT disposition, COUNT(*) FROM surfaces"
-                            " WHERE target_id=? GROUP BY disposition", (_t[0],)).fetchall()
-            if _r:
-                return {d: n for d, n in _r}
+            c = _s.connect(cand); c.row_factory = _s.Row
+            r = c.execute("SELECT id FROM targets WHERE name=?", (target,)).fetchone()
+            if r:
+                return c, r["id"]
         except Exception:
             continue
-    return None
-_dbc = _db_surface_counts()
+    return None, None
 
-def _db_queue():
-    """权威队列:未判定面 / 未收口假设 / 降级理由。未迁移(无表或无目标)返回 None。"""
-    for _cand in (os.path.join(state, "state", "fwcore.sqlite3"),
-                  os.path.join(root, "state", "fwcore.sqlite3")):
-        if not os.path.isfile(_cand):
-            continue
-        try:
-            import sqlite3 as _s
-            _c = _s.connect(_cand)
-            _c.row_factory = _s.Row
-            _t = _c.execute("SELECT id FROM targets WHERE name=?", (target,)).fetchone()
-            if not _t:
-                continue
-            _un = [r["key"] for r in _c.execute(
-                "SELECT key FROM surfaces WHERE target_id=? AND disposition='unjudged'",
-                (_t["id"],))]
-            _op = [dict(r) for r in _c.execute(
-                "SELECT id,title,surface_key FROM hypotheses WHERE target_id=?"
-                " AND state IN ('open','investigating')", (_t["id"],))]
-            _dr = [dict(r) for r in _c.execute(
-                "SELECT id,title,scope_note FROM hypotheses WHERE target_id=?"
-                " AND state='dropped'", (_t["id"],))]
-            return {"unjudged": _un, "open": _op, "dropped": _dr}
-        except Exception:
-            continue
-    return None
-
-a2 = ""
-t = open(notes, encoding="utf-8").read() if os.path.isfile(notes) else ""
-_dbq = _db_queue()
-if _dbq is not None:
-    _un, _op = _dbq["unjudged"], _dbq["open"]
-    _bad = [h["id"] for h in _dbq["dropped"]
-            if not (h["scope_note"] or "").strip()
-            or re.search(r"成本|太重|太贵|复杂|预算|时间不够|工作量大", h["scope_note"] or "")]
-    if _bad:
-        bad(f"降级理由违规/缺失(成本类不算理由,须写判定类 scope_note): {_bad[0]}")
-    elif _dbq["dropped"]:
-        ok("降级理由合规(判定类)")
-    _last = ""
-    for _ln in t.split("\n"):
-        if "下一步第一条" in _ln:
-            _last = _ln
-    if _last and not _op and re.search(r"H-\d+", _last) and not re.search(r"可选|需用户|待用户|裁决", _last):
-        bad(f"状态矛盾: 收尾态但'下一步第一条'仍指向假设池条目 → {_last.strip()[:80]}")
-    elif _last:
-        ok("状态一致性: '下一步第一条'与池状态不矛盾")
+_con, _tid = _open_db()
+buckets = {"Vulnerable": [], "Part": [], "NoFind": [], "Unjudged": [], "Out": [], "UNPARSED": []}
+_un, _op, _dr = [], [], []
+if _con is None:
+    bad(f"缺权威状态: {target} 不在任何 fwcore.sqlite3 里(运行路径只读 SQLite;先 `fw-core migrate`)")
+    print("A2: 无权威状态(FAIL)")
+else:
+    for r in _con.execute("SELECT disposition, COUNT(*) n FROM surfaces WHERE target_id=? "
+                          "GROUP BY disposition", (_tid,)):
+        key = {"vulnerable": "Vulnerable", "no_finding": "NoFind",
+               "out_of_scope": "Out", "unjudged": "Unjudged"}.get(r["disposition"])
+        (buckets[key] if key else buckets["UNPARSED"]).extend([r["disposition"]] * r["n"])
+    _un = [r["key"] for r in _con.execute(
+        "SELECT key FROM surfaces WHERE target_id=? AND disposition='unjudged'", (_tid,))]
+    _op = [dict(r) for r in _con.execute(
+        "SELECT id,title,surface_key FROM hypotheses WHERE target_id=? "
+        "AND state IN ('open','investigating')", (_tid,))]
+    _dr = [dict(r) for r in _con.execute(
+        "SELECT id,title,scope_note FROM hypotheses WHERE target_id=? AND state='dropped'", (_tid,))]
+    total = sum(len(v) for v in buckets.values())
+    print(f"A2 覆盖度(权威 = SQLite surfaces 表;{total} 个面)")
+    for k in ("Vulnerable", "Part", "NoFind", "Unjudged", "Out", "UNPARSED"):
+        print(f"   {k:<10} {len(buckets[k])}")
+    print(f"覆 盖 度 摘 要(可直接粘): Vulnerable={len(buckets['Vulnerable'])} Part={len(buckets['Part'])} "
+          f"NoFind={len(buckets['NoFind'])} Unjudged={len(buckets['Unjudged'])} OutOfScope={len(buckets['Out'])}"
+          + (f" | 未解析={len(buckets['UNPARSED'])}" if buckets["UNPARSED"] else ""))
+    if buckets["UNPARSED"]: bad(f"surfaces.disposition 有非法值: {buckets['UNPARSED'][:3]}")
+    _bad_drop = [h["id"] for h in _dr if not (h["scope_note"] or "").strip()
+                 or re.search(r"成本|太重|太贵|复杂|预算|时间不够|工作量大", h["scope_note"] or "")]
+    if _bad_drop: bad(f"降级理由违规/缺失(成本类不算理由,须写判定类 scope_note): {_bad_drop[0]}")
+    elif _dr: ok(f"降级理由合规(dropped {len(_dr)} 条均有判定类理由)")
     print(f"队列一致性(DB): 未判定面 {len(_un)} / 未收口假设 {len(_op)}"
           + ("(应为 0:未判定面须先入池)" if _un and not _op else ""))
     _mapped = {h["surface_key"] for h in _op if h["surface_key"]}
     _miss = [k for k in _un if k not in _mapped]
-    if _miss:
-        print(f"  ⚠ 未入池的未判定面: {_miss[:8]} (收尾时按 --closure 判定 FAIL)")
-elif os.path.isfile(notes):
-    print("  [legacy] 队列来源 = notes.md(未迁移目标;权威状态请 `fw-core migrate`)")
-    _asf = os.path.join(state, "report", "attack-surface.md")
-    _pb = pool_block(t); _un = a2_unjudged(_asf if os.path.isfile(_asf) else notes)
-    if _pb:
-        _bad = []
-        for _e in re.findall(r"(?ms)^- \*\*H-\d+.*?(?=^- \*\*H-\d+|\Z)", _pb):
-            _st = (re.search(r"状态\s*\**\s*[:：]?\s*\**\s*([^\n*]*)", _e) or [None, ""])[1]
-            if "降级" not in _st:
-                continue
-            _cost = re.search(r"成本|太重|太贵|复杂|预算|时间不够|工作量大", _e)
-            _judg = re.search(r"判据|不可达|上游|设计内|已排除|证伪|需工作区外|需用户|真机", _e)
-            _onlyrounds = re.search(r"(?:\d|两|几)\s*轮", _e) and not re.search(r"判据", _e)
-            if (_cost and not _judg) or _onlyrounds:
-                _bad.append(_e.strip().split("\n")[0][:70])
-        if _bad: bad(f"降级理由违规(成本类不算理由,应保持未处理续做): {_bad[0]}")
-        elif "降级" in _pb: ok("降级理由合规(判定类)")
-        _op = pool_open(_pb)
-        _last = ""
-        for _ln in t.split("\n"):
-            if "下一步第一条" in _ln: _last = _ln
-        if _last and not _op and re.search(r"H-\d+", _last) and not re.search(r"可选|需用户|待用户|裁决", _last):
-            bad(f"状态矛盾: 收尾态但'下一步第一条'仍指向假设池条目 → {_last.strip()[:80]}")
-        elif _last: ok("状态一致性: '下一步第一条'与池状态不矛盾")
-        print(f"队列一致性(notes): A2 未判定 {len(_un)} 行 / 假设池未处理 {len(_op)} 条"
-              + ("(应为 0:未判定面须先入池)" if len(_un) and not _op else ""))
-        miss = [i for i in _un if i not in _pb]
-        if miss: print(f"  ⚠ 未入池的未判定面: {miss[:8]} (收尾时按 --closure 判定 FAIL)")
-    else:
-        print("队列一致性: notes 中未找到「假设池」节(唯一队列缺失)")
-else:
-    print("队列一致性: 无权威状态(未迁移目标)")
-m = re.search(r"^###\s*2\.3\b(.*?)(?=^###\s|\Z)", t, re.M | re.S)
-a2 = m.group(1) if m else ""
-if not a2:  # 收尾后 surface map 已导出到 report/attack-surface.md ⇒ 以它为准
-    _asf2 = os.path.join(state, "report", "attack-surface.md")
-    if os.path.isfile(_asf2):
-        _t2 = open(_asf2, encoding="utf-8").read()
-        _m2 = re.search(r"^###\s*2\.3\b(.*?)(?=^###\s|^##\s|\Z)", _t2, re.M | re.S)
-        a2 = _m2.group(1) if _m2 else _t2
-# 判据: A2 的权威载体必须存在(notes §2.3 或 report/attack-surface.md);两者都缺 ⇒ 无法核对"A2 未判定 0"
-#        ⇒ 直接 FAIL(否则会出现"空集假绿":缺文件时算出 0 行,让会话误以为可以宣布队列清空)
-if not a2.strip() and _dbc is None:
-    bad("缺 A2 载件: 既无权威 surfaces 记录,也无 notes §2.3 / report/attack-surface.md")
-
-buckets = {"Vulnerable": [], "Part": [], "NoFind": [], "Unjudged": [], "Out": [], "UNPARSED": []}
-# 布局自适应:【逐表】解析 —— 每张表按自己的表头认"入口列/判定列"(各目标 attack-surface.md 列序不同:
-# 有的首位是 `#` 序号列;entry 可能叫"入口点/入口/端口/Service/Path")。文本里可能有多张表(A1 服务表 + A2 判定表),
-# 只解析“含判定列”的那些表;全篇都没有判定列 ⇒ 明确报出来(而不是把序号列当判定列误报 UNPARSED ✗)。
-DISP_RE = re.compile(r"disposition|处置|判定", re.I)
-ENTRY_RE = re.compile(r"入口点|入口|端口|服务|service|path|路径|组件|entry", re.I)
-def _rows_by_table(text):
-    """把 markdown 表切分:(header_cells, body_rows) 列表"""
-    out, hdr, body = [], None, []
-    for ln in text.splitlines():
-        if ln.startswith("|"):
-            cells = [c.strip() for c in ln.strip("|").split("|")]
-            if set("".join(cells)) <= set("-: "):        # 分隔行 ⇒ 表体开始
-                continue
-            if hdr is None:
-                hdr = cells
-            else:
-                body.append(cells)
-        else:
-            if hdr is not None:
-                out.append((hdr, body)); hdr, body = None, []
-    if hdr is not None: out.append((hdr, body))
-    return out
-def _parse_rows(text):
-    """从一段 markdown 里抽出 (入口, 判定) 行(只认含判定列的表)"""
-    rows = []
-    for _hdr, _body in _rows_by_table(text):
-        if not any(DISP_RE.search(c) for c in _hdr): continue      # 只认含判定列的表
-        _d = next(k for k, c in enumerate(_hdr) if DISP_RE.search(c))
-        _e = next((k for k, c in enumerate(_hdr) if ENTRY_RE.search(c) and k != _d), None)
-        if _e is None:
-            _e = next((k for k, c in enumerate(_hdr) if c and not c.startswith("#") and k != _d), 0)
-        for cells in _body:
-            if len(cells) <= max(_e, _d): continue
-            if not cells[_e] or not cells[_d]: continue
-            rows.append((cells[_e], cells[_d]))
-    return rows
-_rows = [] if _dbc is not None else _parse_rows(a2)
-if not _rows:      # notes 的 §2.3 表为空/不含判定列(或已收尾改成指针)⇒ 回退到权威文件
-    # 出处:2026-10-04 QNAP-TS-464 收尾 —— notes §2.3 为指针 ⇒ 旧版不回退,覆盖度数成 0,而文件里有 11 行
-    _asf3 = os.path.join(state, "report", "attack-surface.md")
-    if os.path.isfile(_asf3):
-        _rows = _parse_rows(open(_asf3, encoding="utf-8").read())
-
-GROUP_RE = re.compile(r"^\s*(?:见|并入|拆分为|同上|另见|n/?a|—|--|/)")
-_group = 0
-for entry, disp in _rows:
-    _d_plain = re.sub(r"[*`~]", "", disp)          # 去掉 markdown 强调再判
-    if GROUP_RE.search(_d_plain) or re.search(r"见\s*(?:行)?\s*[0-9]", _d_plain) or re.fullmatch(r"[0-9a-z,\s–-]+", _d_plain or ""):
-        _group += 1; continue                       # 分组/指针行(父项,无自身判定)⇒ 不计
-    if   re.search(r"Vulnerable|VR-\d", disp): buckets["Vulnerable"].append(entry)
-    elif re.search(r"Out of scope|范围外|暂缓", disp): buckets["Out"].append(entry)
-    elif re.search(r"部分", disp): buckets["Part"].append(entry)
-    elif re.search(r"No finding|已审", disp): buckets["NoFind"].append(entry)
-    elif re.search(r"未审|未判定", disp): buckets["Unjudged"].append(entry)
-    else: buckets["UNPARSED"].append(entry)
-if _dbc is not None:
-    buckets = {"Vulnerable": [], "Part": [], "NoFind": [], "Unjudged": [], "Out": [], "UNPARSED": []}
-    _map = {"vulnerable": "Vulnerable", "no_finding": "NoFind",
-            "out_of_scope": "Out", "unjudged": "Unjudged"}
-    for _d, _n in _dbc.items():
-        buckets[_map.get(_d, "UNPARSED")] += [_d] * _n
-    print(f"覆盖度来源: 权威 surfaces 表 {_dbc}")
-if a2 or _dbc is not None:
-    total = sum(len(v) for v in buckets.values())
-    print(f"A2 覆盖度(解析 {total} 个入口点行" + (f";另有 {_group} 个分组/指针行未计" if _group else "") + f";权威 = state/{target}/report/attack-surface.md):")
-    for k in ("Vulnerable", "Part", "NoFind", "Unjudged", "Out", "UNPARSED"):
-        print(f"   {k:<10} {len(buckets[k])}" + ("" if not buckets[k] else "  ← " + "; ".join(e[:46] for e in buckets[k])))
-    print(f"覆 盖 度 摘 要(可直接粘): Vulnerable={len(buckets['Vulnerable'])} Part={len(buckets['Part'])} "
-          f"NoFind={len(buckets['NoFind'])} Unjudged={len(buckets['Unjudged'])} OutOfScope={len(buckets['Out'])}"
-          + (f" | 未解析={len(buckets['UNPARSED'])}" if buckets["UNPARSED"] else ""))
-    if buckets["UNPARSED"]: bad("§2.3 有 %d 行判定列无法归类 → 看 disposition 写法是否用了本文档承认的四种(Vulnerable/No finding/Out of scope/未判定)" % len(buckets["UNPARSED"]))
-else:
-    print("A2: 未找到 notes §2.3 表(跳过)")
+    if _miss: print(f"  ⚠ 未入池的未判定面: {_miss[:8]} (收尾时按 --closure 判定 FAIL)")
 
 # ---------- ③ finding 包 ----------
 rd = os.path.join(state, "report")
@@ -453,45 +265,30 @@ for adv in advs:
 # ---------- ④ 收尾前置(仅 --closure) ----------
 if closure:
     asf = os.path.join(rd, "attack-surface.md")
+    if _con is None:
+        bad("收尾检查需要权威状态(DB),当前没有")
+    else:
+        _mapped2 = {h["surface_key"] for h in _op if h["surface_key"]}
+        _miss2 = [k for k in _un if k not in _mapped2]
+        if _miss2: bad(f"队列不变量: 未判定面不在假设池里(未入队): {_miss2[:8]}")
+        else: ok(f"队列不变量(DB): 未判定面 {len(_un)} 个均在假设池内")
+        if _op: bad(f"假设池有 {len(_op)} 条未处理(收尾须逐条给结论或显式降级): {_op[0]['id']}")
+        else: ok("假设池(DB): 无未处理条目")
+    rows = []
     if os.path.isfile(asf):
         t2 = open(asf, encoding="utf-8").read()
-    else:
-        # 收尾前 surface map 还活在 notes 里 ⇒ 也要按它判(否则检查空转)
-        t2 = open(notes, encoding="utf-8").read() if os.path.isfile(notes) else ""
-    rows = [ln for ln in t2.splitlines() if re.match(r"^\|\s*\d+[a-z]?", ln)]
-    unde = [ln[:70] for ln in rows if "未判定" in ln]
-    # 队列不变量: A2 未判定面 ⊆ 假设池(唯一队列);池中未处理条目不许无解释
-    _dbq2 = _db_queue()
-    if _dbq2 is not None:
-        _un2, _op2 = _dbq2["unjudged"], _dbq2["open"]
-        _mapped2 = {h["surface_key"] for h in _op2 if h["surface_key"]}
-        _miss2 = [k for k in _un2 if k not in _mapped2]
-        if _miss2: bad(f"队列不变量: 这些 A2 未判定面不在假设池里(未入队): {_miss2[:8]}")
-        else: ok(f"队列不变量(DB): 未判定面 {len(_un2)} 个均在假设池内")
-        if _op2: bad(f"假设池有 {len(_op2)} 条未处理(收尾须逐条给结论或显式降级): {_op2[0]['id']}")
-        else: ok("假设池(DB): 无未处理条目")
-    else:
-        _pb = pool_block(open(notes, encoding="utf-8").read() if os.path.isfile(notes) else "")
-        _un = a2_unjudged(asf if os.path.isfile(asf) else notes)
-        if not _pb:
-            bad("notes 缺「假设池」节 —— 唯一队列缺失,无法判定'还有没打的'")
-        else:
-            _miss = [i for i in _un if i not in _pb]
-            if _miss: bad(f"队列不变量: 这些 A2 未判定面不在假设池里(未入队): {_miss[:8]}")
-            else: ok(f"队列不变量: A2 未判定 {len(_un)} 行均在假设池内")
-            _op = pool_open(_pb)
-            if _op: bad(f"假设池有 {len(_op)} 条未处理(收尾须逐条给结论或显式降级): {_op[0]}")
-            elif _pb: ok("假设池: 无未处理条目")
+        rows = [ln for ln in t2.splitlines() if re.match(r"^\|\s*\d+[a-z]?", ln)]
+        unde = [ln[:70] for ln in rows if "未判定" in ln]
+        if unde:
+            print(f"  ⚠ attack-surface.md 视图仍有 '未判定' 行({len(unde)})(权威以 DB 为准)")
     stale = [ln[:70] for ln in rows
              if re.search(r"无(任何)?监听|面不存在", ln) and "对账" not in ln]
-    if unde: bad(f"attack-surface.md 仍有 '未判定' 行({len(unde)}) → 三选一必填: {unde[0]}")
-    elif rows: ok(f"attack-surface.md: {len(rows)} 行入口点,无 '未判定'")
     if stale:
         bad(f"误判回溯(谓词: '无监听/面不存在'且无复核引用)命中 {len(stale)} 行未处理: {stale[0]}")
-        if "误判回溯" not in open(notes, encoding="utf-8").read():
+        if not os.path.isfile(notes) or "误判回溯" not in open(notes, encoding="utf-8").read():
             bad("命中误判回溯却缺 notes「误判回溯」节(须记 错误类 + 谓词 + 命中集 + 处置)")
-        elif rows: ok("误判回溯: 命中行已登记谓词与处置")
-    elif rows: ok("误判回溯: 谓词『无监听/面不存在』无未处理命中")
+        else:
+            ok("误判回溯: 命中行已登记谓词与处置")
 
     if advs:
         nt = open(notes, encoding="utf-8").read() if os.path.isfile(notes) else ""
@@ -590,7 +387,10 @@ if os.path.isfile(notes) and not os.path.isfile(os.path.join(state, "report", "C
     for _l3 in _tail3.split("\n"):
         if re.match(r"^\s*三镜\s*[:：]", _l3): _m3 = _l3
     _ok3 = bool(_m3) and all(k in _m3 for k in ("机制", "作者", "状态", "新面"))
-    _pool3h = set(re.findall(r"H-\d+", pool_block(_raw3)))
+    # 池内 H 号从 DB 取(source 保留原编号),不再解析 notes 池块
+    _pool3h = set(re.findall(r"H-\d+", " ".join(
+        (r["source"] or "") for r in (_con.execute(
+            "SELECT source FROM hypotheses WHERE target_id=?", (_tid,)) if _con else []))))
     _dest3 = re.findall(r"H-\d+", _m3) if _m3 else []
     _miss3 = [h for h in _dest3 if h not in _pool3h]
     if not _ok3:

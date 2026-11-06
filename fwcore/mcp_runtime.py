@@ -1,6 +1,6 @@
 """把 MCP 服务器真正接进 Agent Runtime(工具注册 → 模型选择 → 执行 → 记录 → 清理)。
 
-设计要点(对齐 Pi 的工具生命周期)
+设计要点(工具生命周期:注册/调用/超时/取消)
 - **注册即探测**:只有 `initialize` + `tools/list` 成功的服务器才把工具注册进 Registry;
   不可达/未启用的服务器**如实记录状态**,不注册、不影响其它工具。
 - **命名规范**:OpenAI 兼容端点要求 `^[A-Za-z0-9_-]+$` ⇒ 工具名 = `mcp_<server>_<tool>`(非法字符转 `_`)。
@@ -176,7 +176,7 @@ def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | 
 
     if config_paths is None:
         # 只认 fwcore 自己的配置(显式 FW_MCP_CONFIG 或 state/mcp.json);
-        # 不隐式读 Pi 的 ~/.pi/agent/mcp.json —— 那是开发期遗产,不是 fwcore 的契约
+        # 不隐式读外部 agent 运行时的配置 —— fwcore 只认自己的 state/mcp.json / FW_MCP_CONFIG
         env_cfg = os.environ.get("FW_MCP_CONFIG")
         paths = [env_cfg] if env_cfg else [os.path.join(root, "state", "mcp.json")]
     else:

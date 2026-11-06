@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import os
 from dataclasses import dataclass, field
 
@@ -169,20 +168,7 @@ def check_files(con, root: str, target: str) -> list[str]:
     return Domain(con, root).material_check(target)["missing"]
 
 
-def notes_vs_state(con, root: str, target: str) -> dict:
-    """迁移期用来**对比**旧 Markdown 判据与新权威状态是否一致(只读)。"""
-    notes = os.path.join(root, "state", target, "notes.md")
-    out = {"notes_present": os.path.isfile(notes), "notes_bytes": 0, "state_hypotheses": 0}
-    if out["notes_present"]:
-        with contextlib.suppress(OSError):
-            out["notes_bytes"] = os.path.getsize(notes)
-    t = Domain(con, root).target(target)
-    out["state_hypotheses"] = con.execute(
-        "SELECT COUNT(*) n FROM hypotheses WHERE target_id=?", (t.id,)).fetchone()["n"]
-    return out
-
-
-# ---------------- 迁移第二步:KB 条数 / 引用完整性 / legacy 对照 ----------------
+# ---------------- KB 条数 / 引用完整性(只读文件事实,不解析研究状态) ----------------
 
 def kb_counts(root: str) -> list[dict]:
     """knowledge/INDEX.md 声明的条数 vs 文件实际条数(只看文件事实)。"""
@@ -244,22 +230,3 @@ def dangling_attachment_refs(con, root: str, target: str) -> list[str]:
             if not os.path.exists(os.path.join(rdir, rel)):
                 bad.append(f"{n}: {rel}")
     return bad
-
-
-def legacy_compare(con, root: str, target: str) -> dict:
-    """与旧 Markdown 判据(tools/derived_check.sh)对照,仅迁移期核对用。"""
-    import subprocess
-
-    script = os.path.join(root, "tools", "derived_check.sh")
-    out: dict = {"script": script, "available": os.path.isfile(script)}
-    if not out["available"]:
-        return out
-    try:
-        r = subprocess.run(["bash", script, target], capture_output=True, text=True, timeout=180, cwd=root)
-        lines = [ln for ln in r.stdout.splitlines() if ln.startswith(("OK", "FAIL", "==="))]
-        out.update({"returncode": r.returncode,
-                    "fail_lines": [ln for ln in lines if ln.startswith("FAIL")],
-                    "summary": lines[-1] if lines else ""})
-    except (OSError, subprocess.TimeoutExpired) as e:
-        out.update({"error": f"{type(e).__name__}: {e}"})
-    return out

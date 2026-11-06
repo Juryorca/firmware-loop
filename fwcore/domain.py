@@ -390,6 +390,28 @@ class Domain:
         return self.add_hypothesis(t["name"], title, body=row["text"],
                                    source=f"observation:{oid}", priority=priority)
 
+    LOG_KINDS = ("round", "stop", "next", "decision", "note", "needs_review")
+
+    def add_log(self, target: str, kind: str, title: str, body: str, *,
+                source: str | None = None, needs_review: int = 0) -> str:
+        """登记一条研究日志(叙述:逐轮记录/停止声明/下一步/决策)。
+
+        研究事实仍走结构化表;这里只承接**无法结构化的叙述**,避免它只活在 Markdown 里。
+        """
+        if kind not in self.LOG_KINDS:
+            raise InvariantViolation(f"日志 kind 非法: {kind}(允许 {', '.join(self.LOG_KINDS)})")
+        if not (title or "").strip():
+            raise InvariantViolation("日志必须有标题")
+        t = self.target(target)
+        lid = new_id("L")
+        with Tx(self.con) as c:
+            c.execute("INSERT INTO research_logs(id,target_id,kind,title,body,source,needs_review,"
+                      "created_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (lid, t.id, kind, title.strip()[:200], body or "",
+                       source or "agent", 1 if needs_review else 0, _now()))
+            _event(c, "research.log", t.id, {"kind": kind, "id": lid})
+        return lid
+
     def add_evidence(self, target: str, kind: str, *, path: str | None = None,
                      capture: str | None = None, attempt_id: str | None = None,
                      hypothesis_id: str | None = None, version: str | None = None,

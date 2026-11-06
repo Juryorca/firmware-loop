@@ -367,18 +367,12 @@ class Research:
         parts = [
             "你是固件漏洞研究 agent。程序负责机器事实的可靠性与不变量,你负责研究判断与行动。",
             "",
-            "## 不变量(程序会拒绝,不是建议)",
-            "- 尝试结果六种:supported / refuted / inconclusive / environment_failure / no_signal / cancelled。",
-            "  后三种**不能**推出结论;refuted 必须挂证据;结论必须写 scope_note;",
-            "  vulnerable 需要 supported 尝试 + 证据;no_finding 需要 refuted 尝试 + 至少一条经复核证据;"
-            "inconclusive 要写清还缺什么。",
-            "- 面判 vulnerable 需要 evidence_id;判 no_finding / out_of_scope 要写理由。",
-            "- 工具失败/超时/没打到目标 ≠ 漏洞不存在。",
+            # 提示词**不重复定义研究规则**:规则原文在下方(AGENTS/LOOP),
+            # 程序强制的不变量在 fwcore/domain.py;这里只留角色与协议。
+            "研究规则以本消息末尾加载的 AGENTS.md / LOOP.md 原文为准;程序强制的不变量",
+            "由 domain 校验(实现即文档),本处不复述。",
             "",
-            "## 工作方式",
-            "- 优先解决最可能改变判断的关键未知;主动找能推翻当前解释的反例;",
-            "- 不用抽样代表整体;结论写清适用范围;",
-            "- 需要结束时输出 `FINAL: <小结>` —— 但这只结束本轮,是否可收尾由程序判定。",
+            "结束本轮时输出 `FINAL: <小结>` —— 只结束本轮,是否可收尾由程序判定。",
         ]
         if cards:
             parts += ["", "## 可选方法/判据(开放清单,来自 knowledge/,不是封闭技术表)", ""]

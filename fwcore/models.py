@@ -171,7 +171,7 @@ def build_adapter(kind: str = "scripted", **kw) -> Adapter:
 
 
 def load_model_config(root: str | None = None) -> tuple[str, str, str]:
-    """模型配置(fwcore 自己的契约,不是 Pi 的附属)。
+    """模型配置(fwcore 自己的契约)。
 
     优先级:环境变量 `FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME`
             > `state/model.json`(或 `FW_MODEL_CONFIG`)

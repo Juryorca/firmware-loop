@@ -8,8 +8,8 @@
   research    研究载体(规则来自 AGENTS/LOOP/KB,池/三镜/双输出)
   toolkit     把仓库既有研究工具适配成工具描述
   runtime     模型↔工具循环、上下文、检查点与恢复
-  migrate     历史材料迁移(可验证、不丢信息)
-  cli         独立入口(`fw-core …`,不需要 Pi)
+  migrate_all 历史 Markdown → DB 的批量迁移(可验证、幂等、needs_review)
+  cli         独立入口(`fw-core …`)
 """
 
 __version__ = "0.3.0"

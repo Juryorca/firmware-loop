@@ -98,7 +98,7 @@ class Runner:
         self.stall_repeats = stall_repeats
         # 每轮最多模型调用次数:执行层保护(上下文/成本),触发时**暂停**而不是收口研究
         self.limits = limits or Limits()
-        # 对齐 Pi 的 prepareNextTurn:每轮模型调用前可做"准备"(压缩上下文/取外部状态),
+        # 轮前准备:每轮模型调用前可做"准备"(压缩上下文/取外部状态),
         # **必须可取消且有超时**;钩子返回 {"context_note": str} 或 {"cancel": True}
         self.prepare = prepare
         self.prepare_timeout = prepare_timeout
@@ -189,7 +189,7 @@ class Runner:
         self._wd_thread = None
 
     def progress(self, rid: str) -> dict:
-        """结构化进度快照(给外部监控/Pi 适配器用;只读)。"""
+        """结构化进度快照(给外部监控用;只读)。"""
         row = self.con.execute(
             "SELECT r.id,r.state,r.step,r.rounds,r.handback_reason,r.goal,r.heartbeat_at,"
             "       r.model_calls,r.tool_calls,r.elapsed_s,"
@@ -216,7 +216,7 @@ class Runner:
                 "recent_events": events}
 
     def cancel(self, rid: str, reason: str = "用户取消") -> None:
-        """请求取消一次运行(等价 Pi 的 AbortSignal)。
+        """请求取消一次运行(在安全点停下)。
 
         语义:在**安全点**停下(不打断工具内部),停 = paused + handback=user_stop,
         并杀掉该 run 的工具进程组;不写任何研究结论。
@@ -444,7 +444,7 @@ class Runner:
                     self._limit_hit(rid, "prepare_cancel", {"note": str(prep.get("why") or "")[:120]})
                     state = "paused"
                     break
-                # 上下文生命周期(对齐 Pi 的 compaction):接近配置窗口才压缩,保留最近一段;
+                # 上下文生命周期:接近配置窗口才压缩,保留最近一段;
                 # 摘要是一次**模型调用**(计入预算),不是静默丢内容
                 if (run_calls >= self._compact_cooldown_until
                         and should_compact(history, self.limits.context_tokens,
@@ -1166,4 +1166,4 @@ def _epoch(ts: str) -> float:
 def _now() -> str:
     import datetime as _d
 
-    return _d.datetime.now(_d.UTC).isoformat(timespec="seconds")
+    return _d.datetime.now(_d.UTC).isoformat(timespec="microseconds")  # 与 domain 一致

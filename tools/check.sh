@@ -29,9 +29,8 @@ else
 fi
 $PY -c "import mcp,httpx" 2>/dev/null && ok "pwn: mcp+httpx" || bad "pwn: mcp+httpx"
 $PY -c "import angr" 2>/dev/null && ok "pwn: angr" || bad "pwn: angr"
-# 当前 harness = pi(fw.sh 调用它);opencode 仅遗留
-command -v pi >/dev/null && ok "pi(当前 harness)" || bad "pi"
-# DeepSeek 凭据源: pi 的 models.json 优先(当前 harness),回退 opencode.json(遗留)/ 环境变量
+# 开发 harness 是外部工具(不在 fwcore 产品依赖里);这里只查 fwcore 自己的模型配置契约
+# 凭据源: fwcore 的 state/model.json(api_key) → 环境变量(不再读其它 agent 运行时的配置)
 KEY=$($PY -c "
 import json,os
 def get(p,path):
@@ -41,23 +40,22 @@ def get(p,path):
         return d
     except Exception:
         return None
-print(get(os.path.expanduser('~/.pi/agent/models.json'),['providers','deepseek','apiKey'])
-      or get('opencode.json',['provider','deepseek','options','apiKey'])
+print(get('state/model.json',['api_key'])
+      or os.environ.get('FW_MODEL_API_KEY','')
       or os.environ.get('DEEPSEEK_API_KEY',''))
 " 2>/dev/null)
 code=$(curl -s --noproxy '*' --max-time 8 -o /dev/null -w '%{http_code}' https://api.deepseek.com/models -H "Authorization: Bearer $KEY")
 [ "$code" = "200" ] && ok "DeepSeek API" || bad "DeepSeek API(http $code)"
 # 文档口径防回归:已废弃的措辞不许回来(2026-10-30 提交功能上线时清掉的)
-_stale=$(grep -l "只备料不提交\|禁登任何账号" AGENTS.md LOOP.md .pi/prompts/fw.md tools/templates/report.md 2>/dev/null | tr '\n' ' ')
+_stale=$(grep -l "只备料不提交\|禁登任何账号" AGENTS.md LOOP.md tools/templates/report.md 2>/dev/null | tr '\n' ' ')
 [ -z "$_stale" ] && ok "文档口径: 无废弃措辞" || bad "文档口径: 出现废弃措辞($_stale)"
 # 提交面:探针可执行 + MCP 配置可解析(配置在用户级,读不到就跳过)
 [ -x tools/chrome-live-probe.py ] && ok "提交探针可执行" || bad "提交探针缺失/不可执行 tools/chrome-live-probe.py"
 $PY - <<'EOF' >/dev/null 2>&1 && ok "MCP 配置可解析" || info "MCP 配置缺失/不可解析(仅提示)"
 import json,os
-d=json.load(open(os.path.expanduser("~/.pi/agent/mcp.json"),encoding="utf-8"))
-assert all("command" in v or "url" in v for v in d["mcpServers"].values())
-cl=d["mcpServers"].get("chrome-live")
-assert cl is None or cl.get("enabled", True), "chrome-live 被禁用了(提交流程会卡在 disabled)" 
+p=os.environ.get("FW_MCP_CONFIG") or "state/mcp.json"
+d=json.load(open(p,encoding="utf-8"))
+assert all("command" in v or "url" in v for v in d["mcpServers"].values()) 
 EOF
 
 # 报告不放 Timeline 节(2026-10-30:一行"发现并验证"= 零信息,用户明确否掉)
@@ -66,7 +64,7 @@ _tl=$(grep -rlE "^[[:space:]]*##[[:space:]]*(Timeline|时间线)[[:space:]]*$" s
 
 # 框架文件版本控制:有未提交改动就提示(不是错误,只是提醒 commit)
 if [ -d .git ]; then
-  _dirty=$(git status --porcelain -- AGENTS.md LOOP.md .pi tools knowledge prompts 2>/dev/null | wc -l | tr -d ' ')
+  _dirty=$(git status --porcelain -- AGENTS.md LOOP.md tools knowledge prompts 2>/dev/null | wc -l | tr -d ' ')
   if [ "$_dirty" = "0" ]; then ok "框架改动已全部提交"; else
     info "框架有 $_dirty 处未提交改动(建议 commit;git diff 可核对)"; fi
 else info "非 git 仓库(框架改动无法回滚)"; fi

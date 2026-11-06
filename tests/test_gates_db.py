@@ -6,7 +6,7 @@ import os
 
 from fwcore import db as _db
 from fwcore.domain import Domain
-from fwcore.gates_db import evaluate, notes_vs_state
+from fwcore.gates_db import evaluate
 
 
 def _mk(tmp_path):
@@ -30,7 +30,7 @@ def test_coverage_and_closure_from_state_only(tmp_path):
     assert rep.surfaces.get("unjudged") == 1
     assert any("未判定" in b for b in rep.blockers)
     # 没有任何 notes.md 也能算(证明不依赖 Markdown)
-    assert notes_vs_state(con, root, "t1")["notes_present"] is False
+    assert not os.path.isfile(os.path.join(root, "state", "t1", "notes.md"))
 
 
 def test_findings_require_evidence(tmp_path):
@@ -83,14 +83,6 @@ def test_dangling_attachment_refs(tmp_path):
     assert any("缺/p.bin" in b for b in dangling_attachment_refs(con, root, "t1"))
 
 
-def test_legacy_compare_reports_unavailable_honestly(tmp_path):
-    from fwcore.gates_db import legacy_compare
-
-    con, dom, root = _mk(tmp_path)
-    out = legacy_compare(con, root, "t1")
-    assert out["available"] is False and "error" not in out
-
-
 def test_evidence_version_mismatch_is_a_blocker(tmp_path):
     from fwcore.gates_db import evaluate
 
@@ -117,22 +109,3 @@ def test_vulnerable_without_linked_evidence_is_blocker(tmp_path):
     rep = evaluate(con, root, "t1")
     assert any("没有挂自己的证据" in b for b in rep.blockers)
 
-
-def test_legacy_compare_against_real_script(tmp_path):
-    """迁移期桥接:用**仓库里真实的** tools/derived_check.sh 跑一次,验证能拿到 summary。
-
-    （合成目标不需要真实研究现场;脚本会如实报 FAIL,但 summary 必须存在且 exit 码可读）
-    """
-    import os as _os
-
-    from fwcore import db as _db2
-    from fwcore.domain import Domain as _D
-    from fwcore.gates_db import legacy_compare
-
-    repo = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    con = _db2.connect(_os.path.join(str(tmp_path), "l.sqlite3"))
-    _D(con, repo).create_target("legacy-probe", version="t")
-    out = legacy_compare(con, repo, "legacy-probe")
-    assert out["available"] is True
-    assert "returncode" in out and out["returncode"] in (0, 1)
-    assert out["summary"].startswith("=== derived_check:"), out

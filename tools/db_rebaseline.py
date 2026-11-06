@@ -23,7 +23,7 @@ from fwcore.db import BASELINE_COLUMNS, INDEXES, SCHEMA, SCHEMA_VERSION
 
 TABLES = ("targets", "surfaces", "hypotheses", "attempts", "observations",
           "evidence", "evidence_checks", "conclusions", "tool_calls", "runs",
-          "checkpoints", "events", "documents", "mirror_checks")
+          "checkpoints", "events", "documents", "mirror_checks", "research_logs")
 
 
 def counts(con: sqlite3.Connection) -> dict[str, int]:

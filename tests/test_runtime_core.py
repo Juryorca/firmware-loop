@@ -10,7 +10,7 @@ import pytest
 
 from fwcore import db as _db
 from fwcore.domain import Domain
-from fwcore.migrate import extract_pool_entries, import_notes, verify
+from fwcore.migrate_all import migrate_target, parse_pool, verify_target
 from fwcore.runtime import Runner, ScriptedModel
 from fwcore.policy import Policy
 from fwcore.tools import Registry, ToolContext, default_registry
@@ -160,7 +160,7 @@ def test_step_limit_pauses_not_concludes(setup):
     assert res["state"] == "paused" and res["steps"] == 2
 
 
-# ---------------- 迁移:不丢信息、幂等 ----------------
+# ---------------- 迁移:不丢信息、幂等、只映射显式状态 ----------------
 
 NOTES = """# t1
 
@@ -168,6 +168,7 @@ NOTES = """# t1
 
 - **H-01** 未认证可读配置 | 状态: **未处理**
 - **H-02** 命令注入 | 状态: **定论:No finding**(判据: 逐条读过)
+- **H-03** 待定的口令门 | 状态: 部分完成
 
 ## §1 轮
 
@@ -181,32 +182,34 @@ def test_migrate_is_lossless_and_idempotent(setup, tmp_path):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(NOTES, encoding="utf-8")
 
-    r1 = import_notes(con, root, "t1", str(p))
-    v1 = verify(con, root, "t1", str(p))
-    assert r1["pool_entries"] == 2 and r1["hypotheses_created"] == 2
-    assert v1["byte_identical"] and v1["ok"]
-
-    r2 = import_notes(con, root, "t1", str(p))       # 幂等
-    assert r2["documents_added"] == 0 and r2["hypotheses_created"] == 0
+    r1 = migrate_target(con, root, "t1")
+    assert r1["stats"]["documents"] == 1 and r1["stats"]["hypotheses"] == 3
+    assert verify_target(con, root, "t1")["ok"]
+    r2 = migrate_target(con, root, "t1")                  # 幂等
+    assert sum(v for k, v in r2["stats"].items() if k != "target") == 0
     assert con.execute("SELECT COUNT(*) n FROM documents").fetchone()["n"] == 1
 
 
-def test_migration_does_not_infer_completion(setup, tmp_path):
-    """历史条目里的"定论"字样不得被自动当成已完成(那是旧设计的问题)。"""
+def test_migration_maps_only_explicit_status(setup, tmp_path):
+    """显式"定论:No finding"⇒ concluded;模糊"部分完成"⇒ 仍 open + needs_review。"""
     con, dom, root = setup
     p = tmp_path / "state" / "t1" / "notes.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(NOTES, encoding="utf-8")
-    import_notes(con, root, "t1", str(p))
-    rows = con.execute("SELECT title,state,source FROM hypotheses").fetchall()
-    assert all(r["state"] == "open" for r in rows)
-    assert all("needs_review" in r["source"] for r in rows)
+    migrate_target(con, root, "t1")
+    rows = list(con.execute("SELECT title,state,verdict FROM hypotheses"))
+    assert any(r["state"] == "open" for r in rows)                      # H-01/H-03
+    assert any(r["state"] == "concluded" and r["verdict"] == "no_finding" for r in rows)
+    assert con.execute("SELECT COUNT(*) n FROM research_logs"
+                       " WHERE kind='needs_review'").fetchone()["n"] >= 1
 
 
-def test_pool_entry_extraction_prefers_unique_queue():
-    text = "## 假设池(唯一队列)\n- **H-01** a\n\n## 假设池(旧)\n- **H-09** b\n"
-    ent = extract_pool_entries(text)
-    assert [e[0] for e in ent] == ["H-01"]
+def test_pool_dedupes_same_id_across_blocks():
+    text = ("## 假设池(唯一队列)\n- **H-01** a\n  状态: 未处理\n\n"
+            "## 旧池\n- **H-01** a\n  状态: 未处理\n")
+    pool, _conflicts = parse_pool(text)
+    assert sum(1 for e in pool if e["raw_id"] == "H-01") == 1
+
 
 
 def test_tool_names_match_openai_pattern(tmp_path):

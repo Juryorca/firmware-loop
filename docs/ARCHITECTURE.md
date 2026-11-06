@@ -26,7 +26,7 @@ fwcore/  db.py(SCHEMA v13/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变
          compact.py(压缩)                        contextinfo.py(上下文状态)
          mcp_runtime.py(MCP 桥)                  adapters_ida.py + winenv(IDA/Windows)
          gates_db.py(权威 Gate)                  models/model_client(适配器/协议)
-         policy.py(Authz)  limits.py(边界)  watchdog.py  migrate.py  cli.py
+         policy.py(Authz)  limits.py(边界)  watchdog.py  migrate_all.py  cli.py
 fwloop/  兼容入口        scripts/ 演练与 e2e        eval/ 答案隔离评测
 tools/registry/*.json  仓库工具 manifest(8 个)
 ```
@@ -50,10 +50,11 @@ tools/registry/*.json  仓库工具 manifest(8 个)
 | finding/收尾时 | `report/`(advisory/INDEX/attack-surface/CLOSURE/复现包) | 材料门读 |
 
 **唯一权威**:研究事实只认 SQLite;`notes.md`/`attack-surface.md` 是叙述与导出视图。
-未迁移目标(`fw-core migrate` 之前)由 `derived_check` 显式标注 `[legacy]` 后回退解析 notes,不静默。
+运行路径**不读 Markdown**:缺库/缺目标 ⇒ `derived_check`/`gates` 直接 FAIL(没有 legacy 回退);
+旧目标由 `fw-core migrate --all` 一次性导入(`documents` 保原文,结构化内容进各表,模糊内容标 `needs_review`)。
 
 表:`targets surfaces hypotheses attempts observations evidence evidence_checks
-conclusions runs checkpoints tool_calls events mirror_checks documents meta`。
+conclusions runs checkpoints tool_calls events mirror_checks research_logs documents meta`。
 
 保留机制:`checkpoints_keep=120`/run(写时裁剪)→ `_shrink_history`(老工具输出 200 字符 +
 保留路径/`tool_call_id`)→ 库超 `max_db_bytes=256MB` 删最老 checkpoint 仍超则暂停。
@@ -88,10 +89,11 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   或任一块为空 ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
 - 摘要调用与普通调用同一条**调用前**预算检查,计入 `run_calls` 与 `model.call(kind=summarize)`。
 
-## 6. 与 Pi 的关系:参考架构,不是依赖
+## 6. 外部开发工具的历史对照(不是依赖,不再扩展)
 
-Pi 是外部开发工具(`.pi/` 不入库);fwcore 独立运行、不调用 Pi。
-Pi 侧只读结论:会话是 append-only entries + projection;system 静态、动态上下文作为消息注入;
+fwcore 独立运行,不调用也不适配任何外部 agent 运行时(`.pi/` 不入库、无 Adapter/Hook/Bridge)。
+下面只是当年读 Pi 源码得到的**工程对照**,保留作历史参考,不构成产品契约:
+会话是 append-only entries + projection;system 静态、动态上下文作为消息注入;
 阈值/溢出 compaction(keepRecentTokens 20k + 结构化摘要);usage 字段 `input/cacheRead/cacheWrite/output/reasoning`。
 DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定并读 usage)。
 实测:Pi 命中 98.96%(n=11,561,均值 423k);fwcore 31 次(均值 12k)89.8%;
