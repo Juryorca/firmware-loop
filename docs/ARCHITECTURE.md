@@ -33,12 +33,24 @@ tools/registry/*.json  仓库工具 manifest(8 个)
 
 ## 3. 存储:DB 是权威,文件是叙述/材料(不是双写)
 
+**职责四分**(`state/<目标>/` 下的东西):
+
+| 类别 | 存什么 | 谁读 | 进 Git |
+|---|---|---|---|
+| **SQLite**(`state/fwcore.sqlite3`) | 目标/面/假设/尝试/观察/证据/结论;runs/tool_calls/events/usage/checkpoints | 程序判定(`gates`/`derive`/`context`/`derived_check`) | 否 |
+| **Artifacts**(`artifacts/`) | 固件/反汇编/原始工具输出/截图/PoC 等原始材料;DB 用 `tool_calls.output_path` 关联回查 | 人复核 + 复现包引用 | 否 |
+| **Markdown**(`notes.md`/`report/`) | `notes.md`=叙述/理由/下一步指针;`report/`=最终交付(advisory/INDEX/attack-surface/CLOSURE/复现包) | 人 | 只有 `report/` 里经过筛选的材料进 `state/`(不进库) |
+| **临时**(`state/_scratch/`) | 演练/E2E/评测输出、一次性报告 | 当次会话 | 否(有保留期,结束可删) |
+
 | 谁写 | 写什么 | 参与判定 |
 |---|---|---|
 | 模型的 `state_*` 工具 | 假设/尝试/观察/证据/复核/结论/面处置 | ✅ |
 | runtime | `runs`(预算)、`checkpoints`(恢复)、`tool_calls`(产物/来源)、`events`(审计) | ✅ |
 | 模型/人 | `notes.md`(叙述、理由、下一步指针) | ❌ |
 | finding/收尾时 | `report/`(advisory/INDEX/attack-surface/CLOSURE/复现包) | 材料门读 |
+
+**唯一权威**:研究事实只认 SQLite;`notes.md`/`attack-surface.md` 是叙述与导出视图。
+未迁移目标(`fw-core migrate` 之前)由 `derived_check` 显式标注 `[legacy]` 后回退解析 notes,不静默。
 
 表:`targets surfaces hypotheses attempts observations evidence evidence_checks
 conclusions runs checkpoints tool_calls events mirror_checks documents meta`。
