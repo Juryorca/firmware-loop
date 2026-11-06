@@ -17,6 +17,7 @@ from fwcore.compact import (
     estimate_tokens,
     find_cut,
     should_compact,
+    summarize_chunks,
     summarize_covered,
     threshold_tokens,
 )
@@ -260,3 +261,18 @@ def test_resume_after_compaction_keeps_prefix_and_pairs(tmp_path):
                 summarizer=lambda old: "摘要:继续")
     res = r2.resume(rid, "继续")
     assert res.state in ("finished", "paused")
+
+
+def test_merge_calls_share_chunk_budget():
+    """分块摘要与归并摘要共用 max_calls(旧实现给归并私加 2x 额度)。"""
+    hist = _history_for_tokens(8_000)
+    old = hist[:find_cut(hist, 500)]
+    chunks = summarize_chunks(old, chunk_tokens=500)
+    n = len(chunks)
+    assert n >= 2, n
+    with pytest.raises(SummarizationIncomplete):
+        summarize_covered(old, lambda c: "s", chunk_tokens=500, max_calls=n)
+    summary, info = summarize_covered(old, lambda c: "s", chunk_tokens=500, max_calls=n + 5)
+    assert summary == "s"
+    assert info["merge_calls"] >= 1
+    assert info["calls"] == n + info["merge_calls"] <= n + 5

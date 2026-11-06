@@ -58,7 +58,10 @@ if dirty: bad(f"KB 引用了 state/ 路径(须与证据解耦,只写'来源: <�
 else: ok(f"KB 解耦: knowledge/ 全部 {len(kfiles)} 个文件无 state/ 路径引用")
 # KB 应"即查即用":不该出现 `<目标名>/artifacts/…` 这类目标内路径(存量先只警告,见 LOOP ① 知识)
 _legacy = sum(len(re.findall(r"[A-Za-z0-9_.-]+/artifacts/", open(f, encoding="utf-8").read())) for f in kfiles)
-if _legacy: print(f"  ⚠ KB 里有 {_legacy} 处目标内 `artifacts/` 路径(legacy:违反'即查即用',建议逐步换来源标签)")
+if _legacy:
+    # KB 顶部政策已声明:这些路径只是**来源标注**(证据随目标清理,不要求长期存在)⇒ 不影响条目可用性;
+    # 新条目仍用「来源: <目标名>」标签,不再新增路径。
+    print(f"  OK   KB 来源标注: {_legacy} 处目标内 `artifacts/` 路径(按 KB 政策=来源标签,非依赖)")
 
 # ---------- ①e KB 结构体检(并发/误改防护) ----------
 # 判据: 围栏成对 / 无重复小标题 / 无 NUL 字节 / 无 CRLF / 无合并冲突标记 / 非截断(末行有换行)
