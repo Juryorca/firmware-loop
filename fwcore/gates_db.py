@@ -32,6 +32,8 @@ class GateReport:
     blockers: list = field(default_factory=list)
     findings: list = field(default_factory=list)
     evidence_version_mismatch: list = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)     # direct / weak / unlinked 计数
+    advisories: list = field(default_factory=list)      # 不阻断、但报告必须如实标注
 
     def ok(self) -> bool:
         return not self.blockers
@@ -53,6 +55,8 @@ class GateReport:
             "blockers": self.blockers,
             "findings": self.findings,
             "evidence_version_mismatch": self.evidence_version_mismatch,
+            "provenance": self.provenance,
+            "advisories": self.advisories,
         }
 
 
@@ -123,6 +127,30 @@ def evaluate(con, root: str, target: str) -> GateReport:
     if unverified:
         rep.blockers.append(f"{len(unverified)} 条 vulnerable 结论只有未复核证据(工具输出)"
                             f"⇒ 先复核再收: {unverified[:3]}")
+
+    # ④b 来源强度(报告要能分开呈现:直接产出 vs 命令里提到过)
+    prov = {"direct": 0, "weak": 0, "unlinked": 0}
+    for r in con.execute("SELECT link_relation FROM evidence WHERE target_id=?", (t.id,)):
+        rel = r["link_relation"] or ""
+        if rel.startswith("direct"):
+            prov["direct"] += 1
+        elif rel.startswith("command-write"):
+            prov["weak"] += 1
+        else:
+            prov["unlinked"] += 1
+    rep.provenance = prov
+    # no_finding 允许完整性复核,但如果**只有**完整性复核,报告要标注(不阻断)
+    integrity_nf = [r["id"] for r in con.execute(
+        "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='no_finding'"
+        "   AND EXISTS (SELECT 1 FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1)"
+        "   AND NOT EXISTS (SELECT 1 FROM evidence_checks c JOIN evidence e ON e.id=c.evidence_id"
+        "                   WHERE c.method IN ('reproduce-attempt','cross-check') AND e.verified=1"
+        "                     AND (e.hypothesis_id=h.id OR e.attempt_id IN"
+        "                          (SELECT id FROM attempts WHERE hypothesis_id=h.id)))", (t.id,))]
+    if integrity_nf:
+        rep.advisories.append(
+            f"{len(integrity_nf)} 条 no_finding 只有**完整性**复核(recheck-sha256):"
+            f"哈希没变 ≠ 阴性结论已独立验证;报告里要如实标注: {integrity_nf[:3]}")
 
     # ⑤ findings = 判为 vulnerable 且带证据的假设
     for r in con.execute(

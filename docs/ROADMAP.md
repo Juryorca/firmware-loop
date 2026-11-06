@@ -17,36 +17,36 @@
 
 ## 最高价值待办(按优先)
 
-### P1 认证控制流:`op` 值 → 分发 → 权限检查 → 失败分支**(需真实模型续跑授权)
+### P1 认证控制流:`op` 值 → 分发 → 权限检查 → 失败分支 ⛔ 仅缺授权
 
-- 目标:判定认证前输入能否绕过权限/状态检查抵达受保护行为;
-- 已有:入口地址(0x19908 等 5 个)、`Is_Guest_User` 门在 0xf7cc/0xffdc、`op` 解析 `strtol`、`all_calls.txt` 调用图、`_notes/s3/` 12+9 份标注;
-- 缺:`op` 取值范围与异常处理、各 handler 内权限检查点、失败分支可达性;
-- 验收:地址级链路 + ≥1 条带来源的 observation;无法判定时写清缺口(inconclusive);
-- 预算:`R-20261105-3518ef1d` 累计 100 calls ⇒ 上限 **200 calls / 7200 s**(run 级累计),耗尽即暂停;
-- 需你批准才启动。
+- **目标**:判定认证前输入能否绕过权限/状态检查抵达受保护行为。
+- **已有**:5 个 handler 入口(0x196d8/0x197d8/0x19908/0x19a68/0x19b08)、`CGI_Find_Parameter("op")`+`strtol`(0x19908)、访客门 `Is_Guest_User`(0xf7cc/0xffdc)、`all_calls.txt` 调用图、`_notes/s3/` 标注。
+- **缺**:`op` 取值范围与异常处理、各 handler 内权限检查点、失败分支可达性。
+- **验收**:地址级链路 + ≥1 条带来源 observation;判不了就写清缺口(inconclusive)。
+- **预算**:`R-20261105-3518ef1d` run 级累计上限 **200 calls / 7200 s**,耗尽即暂停(非完成)。
+- **阻塞**:需用户批准付费模型续跑。离线部分已做完,没有其它可自主推进的分支。
 
-### P2 工具结果→研究的转化率**(无需付费,可用 fake transport)
-- 目标:验证"大输出 → 模型引用产物 → 记录 observation/evidence → 下一 run 复用"整链;
-- 依赖:P1 的 observation 来源字段(v12)已就绪;
-- 验收:fake transport 端到端用例 + 真实库离线测量。
+### P2 工具结果 → 研究状态 → 下一 run 复用 ✅ 完成(2026-11-06)
 
-### P3 证据强度分层**(无需付费)
-- 目标:`command-write` 弱来源与 `direct-*` 在报告/结论里始终分开呈现;
-- 依赖:`link_relation`、`assess` 的 info 级检查;
-- 验收:报告生成路径的断言测试。
+- 验收:`tests/test_research_e2e_chain.py`(大文件 `fs_read` → `db_tool_call_id` → `state_add_observation(带来源)` → 下一 run 提示可见);`tests/test_cross_run_inheritance.py`(观察跨 run、来源可证/缺文件拒绝);`tests/test_tool_result_payload.py`(50 KB 仍合法 JSON、协议/DB id 分离);`tests/test_context_budget.py`(旧坏 JSON 修复、配对完整、advance 续跑恢复历史)。
 
-- **P2 验收证据**:`tests/test_research_e2e_chain.py`(大文件 `fs_read` → 模型读 `db_tool_call_id` → `state_add_observation(带来源)` → 下一 run 提示可见);`tests/test_cross_run_inheritance.py`(观察跨 run、来源需可证、缺文件拒绝);`tests/test_tool_result_payload.py`(50 KB 字段仍合法 JSON、协议/DB id 分离);`tests/test_context_budget.py`(旧 checkpoint 非法 JSON 修复、配对完整)。
-- **P3 验收证据**:`tests/test_provenance_strength.py`(observation 关系分 direct-stdout / command-write;提示里标强度;`assess` 的 direct 检查不被弱来源满足;关系落库重开仍在);`assess` 新增 `provenance_mix`(direct/weak/unlinked 计数);gates 对 vulnerable 的"仅完整性复核"阻断保持。
+### P3 证据强度分层 ✅ 完成(2026-11-06)
 
-### P4 依赖库/样本边界(可选)**
-- 目标:缺失库或动态入口导致无法判定时,给出明确边界说明而非猜测;
-- 验收:边界写进结论 `scope_note`,并有对应证据。
+- `observations.relation`(v13):`direct-stdout` / `direct-result` / `command-write`;提示按强度标注;`assess` 的 `provenance_mix` 与 `direct` 检查不被弱来源满足。
+- **权威 Gate 同步(本轮)**:`fw-core gates` 输出 `provenance{direct,weak,unlinked}`;只有完整性复核的 `no_finding` 进 `advisories`(提示,不阻断)。
+- 验收:`tests/test_provenance_strength.py`、`tests/test_gate_provenance.py`;真实 QNAP 库 gates 实测 `direct 10 / weak 8 / unlinked 3`,4 条 no_finding 标为"仅完整性复核"。
 
-- **advance 续跑丢历史**(本轮修):`advance(run_id=…)` 以前把 `history` 当空列表交给 `turn()`,
-  ⇒ 模型只看到新 goal,之前所有工具结果/结论"消失"(`resume` 一直是加载检查点的)。
-  现抽出 `Runner._load_history()`(与 resume 共用,含旧坏 JSON 修复),advance 续跑自动恢复;
-  测试 `test_advance_resumes_history_from_checkpoint`。
+### P4 依赖库/样本边界(可选,需新研究材料)
+
+- **目标**:缺失库或动态入口导致无法判定时,给出明确边界说明而非猜测。
+- **依赖**:P1 的实际运行结果(哪些库/符号确实缺)。
+- **验收**:边界写进结论 `scope_note`,并有对应证据。
+
+## 本轮修复(2026-11-06,里程碑)
+
+- **advance 续跑丢历史**:`advance(run_id=…)` 把空 history 交给 `turn()` ⇒ 模型只看到新 goal;现与 `resume` 共用 `Runner._load_history()`。
+- **`state_add_observation` schema 缺来源参数**:handler 收了 `tool_call_id/path`,schema 没声明 ⇒ 调用被"未知参数"拒绝(端到端测试抓到)。
+- **`domain._count` 动态 SQL**:改字面量分支,静态扫描不再报注入(误报也一并消除)。
 
 ## 已取消(不属于产品)
 

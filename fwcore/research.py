@@ -119,7 +119,7 @@ def _facts_lines(hyps, evs, obs, budget: int = 2900) -> list[str]:
     def o_lines():
         return [f"- 观察 {o['id']}: {_clip(o['text'], 150)}"
                 + (f" (来源 {o['tool_call_id']})" if o["tool_call_id"] else "")
-                + (f" [{o['relation'] or 'unlinked'}]" if o["tool_call_id"] else "")
+                + (f" [{o['relation'] or 'linked'}]" if o["tool_call_id"] else " [no-source]")
                 + (f" 文件 {_clip(o['path'], 50)}" if o["path"] else "")
                 for o in obs]
 
