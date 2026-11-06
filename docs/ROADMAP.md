@@ -47,6 +47,17 @@
 - **权威 Gate 同步(本轮)**:`fw-core gates` 输出 `provenance{direct,weak,unlinked}`;只有完整性复核的 `no_finding` 进 `advisories`(提示,不阻断)。
 - 验收:`tests/test_provenance_strength.py`、`tests/test_gate_provenance.py`;真实 QNAP 库 gates 实测 `direct 10 / weak 8 / unlinked 3`,4 条 no_finding 标为"仅完整性复核"。
 
+### P7 Agent Runtime 架构对照与上下文生命周期 ✅ 完成(2026-11-06)
+
+- **对照 Pi**(只读):append-only entries + projection、system 静态 + 动态更新消息、阈值 compaction(`keepRecentTokens 20000` + 结构化摘要);
+  fwcore 现状与差异见 `docs/ARCHITECTURE-RUNTIME.md`(含 7 问复核)。
+- **本轮新增**:`fwcore/compact.py`(估算/安全切点/压缩)、`Limits.context_tokens`(显式窗口,0=不压缩)、
+  `Runner(summarizer=…)`;到阈值时把较早历史压成摘要(默认调模型、**计入预算**),保留最近 `keep_recent_tokens`;
+  事件 `run.compacted` 记录 before/after。测试 `tests/test_compaction.py` 4 passed。
+- **缓存调整复核**:动态状态不进 history、不累积、只在请求尾部;加了"程序生成,不是用户新指令"标注;
+  resume/advance 共用 `_load_history`。
+- **已知限制**:checkpoint 每步全量快照(未改)、磁盘保护截断旧输出(设计选择)、`model_calls` 与事件差 1(失败调用)。
+
 ### P6 Token 用量审计 ✅ 完成(2026-11-06)
 
 - **数据**:`R-…3518ef1d` prompt 10.75M / 命中 4.91M(45.7%) / 未命中 5.84M / completion 71.6k(推理 43.7k);

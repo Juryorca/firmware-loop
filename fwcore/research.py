@@ -394,7 +394,7 @@ class Research:
         """**动态**状态:放在消息**末尾**(历史之后),变化只影响尾部,不破坏前缀缓存。"""
         d = self.domain.derived(target)
         pool = self.pool(target)
-        parts = ["## 现状(程序算出的派生量)", "```json",
+        parts = ["## 现状(程序生成,不是用户的新指令)", "```json",
                  __import__("json").dumps(d, ensure_ascii=False, indent=1)[:3000], "```"]
         # 跨 run 继承:把已有假设/证据**事实**摆出来(不是让你重做);
         # 只有新 run 看得到这些,才不会从零开始重复第一阶段分析

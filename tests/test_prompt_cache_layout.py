@@ -54,7 +54,7 @@ def test_system_is_static_and_state_is_tail(tmp_path):
     assert len(systems) == 1, "system 必须逐字节静态(否则前缀缓存失效)"
     for c in m.calls:
         assert c[-1]["role"] == "user"
-        assert "## 现状(程序算出的派生量)" in c[-1]["content"]
+        assert "## 现状" in c[-1]["content"] and "不是用户的新指令" in c[-1]["content"]
         assert "## 现状" not in c[0]["content"], "动态状态不能在 system 里"
 
 

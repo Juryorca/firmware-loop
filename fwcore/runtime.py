@@ -22,6 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from . import db as _db
+from .compact import compact_history, estimate_tokens, should_compact
 from .domain import Domain, new_id
 from .limits import Limits
 from .models import Adapter, Reply, ScriptedAdapter, assistant_message  # noqa: F401 (对外兼容)
@@ -80,7 +81,8 @@ class Runner:
                  watchdog: bool = False, watchdog_poll_s: float = 5.0,
                  watchdog_heartbeat_timeout: float = 900.0,
                  mcp: bool = False, mcp_config_paths: list[str] | None = None,
-                 mcp_timeout: float = 20.0, mcp_call_timeout: float = 120.0):
+                 mcp_timeout: float = 20.0, mcp_call_timeout: float = 120.0,
+                 summarizer: Callable[[list[dict]], str] | None = None):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -111,6 +113,8 @@ class Runner:
         self._mcp_config_paths = mcp_config_paths
         self._mcp_timeout = mcp_timeout
         self._mcp_call_timeout = mcp_call_timeout
+        # 上下文压缩的摘要器(测试注入 fake;默认用模型,计入预算)
+        self.summarizer = summarizer
         self.mcp_bridge = None
         self.mcp_skipped_reason: str | None = None
         # 注意:**构造时不启动 MCP**。MCP 服务器启动本身就有副作用(子进程/外网/登录态),
@@ -435,6 +439,32 @@ class Runner:
                     self._limit_hit(rid, "prepare_cancel", {"note": str(prep.get("why") or "")[:120]})
                     state = "paused"
                     break
+                # 上下文生命周期(对齐 Pi 的 compaction):接近配置窗口才压缩,保留最近一段;
+                # 摘要是一次**模型调用**(计入预算),不是静默丢内容
+                if should_compact(history, self.limits.context_tokens):
+                    before = estimate_tokens(history)
+
+                    def _summarize(old):
+                        nonlocal run_calls
+                        if self.summarizer:
+                            return self.summarizer(old)
+                        run_calls += 1
+                        text = _render_for_summary(old)
+                        reply = _coerce_reply(self.model.chat(
+                            [{"role": "user", "content": text}], []))
+                        _event(self.con, "model.call", rid, {
+                            "kind": "summarize", "n_messages": 1,
+                            "usage_known": bool(reply.usage), "usage": reply.usage or {},
+                            "prompt_tokens": (reply.usage or {}).get("prompt_tokens"),
+                            "completion_tokens": (reply.usage or {}).get("completion_tokens"),
+                        })
+                        return reply.content or ""
+
+                    history, _info = compact_history(
+                        history, _summarize, self.limits.keep_recent_tokens)
+                    _event(self.con, "run.compacted", rid,
+                           {"before_tokens": before,
+                            "after_tokens": estimate_tokens(history), **_info})
                 # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
                 # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
                 _sys = self.research.rules_prompt(target)
@@ -908,6 +938,25 @@ def _context_stats(system: str, history: list[dict]) -> dict:
             other += n
     return {"system": len(system), "tool": tool, "assistant": assistant,
             "other": other, "total": tool + assistant + other}
+
+
+def _render_for_summary(messages: list[dict], limit: int = 60_000) -> str:
+    """把要压缩的旧消息渲染成摘要请求(保留事实/地址/路径与 tool_call_id,不编造)。"""
+    lines = ["把下面这段固件研究对话压成**结构化摘要**,保留:目标、已确认的技术事实(地址/字段/结论)、"
+             "未解决问题、关键产物路径与 db_tool_call_id;不要添加原文没有的结论。只输出摘要。"]
+    for m in messages:
+        role = m.get("role")
+        c = m.get("content") or ""
+        if role == "assistant" and m.get("tool_calls"):
+            names = [((tc.get("function") or {}).get("name") or tc.get("name")) for tc in m["tool_calls"]]
+            lines.append(f"[assistant] 调用工具: {names}")
+            if c:
+                lines.append(f"[assistant] {c[:1500]}")
+        elif role == "tool":
+            lines.append(f"[tool {m.get('tool_call_id')}] {c[:1500]}")
+        else:
+            lines.append(f"[{role}] {c[:1500]}")
+    return "\n".join(lines)[:limit]
 
 
 def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
