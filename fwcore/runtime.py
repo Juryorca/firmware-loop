@@ -370,6 +370,12 @@ class Runner:
                  -1 if row["pid_starttime"] is None else row["pid_starttime"]))
             if not cur.rowcount:
                 raise RuntimeError("run 已被其他进程接管(状态已变化);拒绝继续")
+        with _db.Tx(self.con) as c:
+            # 旧 owner 崩溃时留下的 running 工具行:没有进程会再更新它 ⇒ 标 cancelled,
+            # 否则恢复后重放同一 call_key 会永远撞"正在运行",状态也永远失真
+            c.execute("UPDATE tool_calls SET status='cancelled',"
+                      " note=COALESCE(note,'') || ' [owner taken over]'"
+                      " WHERE run_id=? AND status='running'", (rid,))
         dead_owner = bool(row["pid"]) and (row["host"] or "") == _host() and not _pid_alive(row["pid"])
         if dead_owner:
             # 旧 owner 已死 ⇒ 它启动的工具进程组是孤儿,接管时一并清掉(防重复副作用/孤儿 fuzz)
@@ -1047,6 +1053,9 @@ class Runner:
                     with contextlib.suppress(Exception):
                         from .watchdog import Watchdog
                         Watchdog(self.con, self.root)._kill_pgids(r["id"])
+                c.execute("UPDATE tool_calls SET status='cancelled',"
+                          " note=COALESCE(note,'') || ' [recovered stale]'"
+                          " WHERE run_id=? AND status='running'", (r["id"],))
                 _event(c, "run.recovered_stale", r["id"],
                        {"age_s": round(age, 1), "pid_alive": alive, "host": r["host"],
                         "pid_starttime": r["pid_starttime"]})

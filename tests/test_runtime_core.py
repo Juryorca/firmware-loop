@@ -387,3 +387,20 @@ def test_request_user_input_ignored_on_finished_run(setup):
     dom.request_user_input(rid, "需要工作区外的东西")
     after = con.execute("SELECT handback_reason FROM runs WHERE id=?", (rid,)).fetchone()[0]
     assert after == before
+
+
+def test_resume_cancels_stale_running_tool_calls(setup):
+    """崩溃 owner 留下的 running 工具行:接管时必须标 cancelled(否则状态永远失真/重放被挡)。"""
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    r.run(rid, "t1")
+    con.execute("INSERT INTO tool_calls(id,run_id,tool,args,status,created_at)"
+                " VALUES('TC-stale',?,'shell_exec','{}','running','2026-01-01')", (rid,))
+    con.execute("UPDATE runs SET state='paused', pid=999999, pid_starttime=1 WHERE id=?", (rid,))
+    r2 = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: y", "tool_calls": []}]),
+                policy=Policy(allow_high_risk=True))
+    r2.resume(rid)
+    st = con.execute("SELECT status FROM tool_calls WHERE id='TC-stale'").fetchone()[0]
+    assert st == "cancelled"
