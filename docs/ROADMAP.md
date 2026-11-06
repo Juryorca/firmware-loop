@@ -16,7 +16,9 @@
   分块摘要**覆盖全部被丢弃历史**,失败保留原历史 + 冷却;摘要调用计入预算。
 - **研究质量门**:`vulnerable` 需 supported + 因果复核;`no_finding` 需 ≥1 条已复核证据;面处置需证据/理由;
   `assess` 区分 completed/partial 与来源强度。
-- **验证**:`bash tools/fwcore_verify.sh` = pytest(57 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + git clean。
+- **存储边界**:研究事实只认 SQLite;运行产物只写 `state/_scratch/`(不进 Git);`docs/evidence/` 只收长期工程资料;
+  `notes.md` 是叙述/指针,`report/` 是交付;上下文/覆盖度/队列判定 DB 优先。
+- **验证**:`bash tools/fwcore_verify.sh` = pytest(59 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + git clean。
 
 ## 待办
 
@@ -43,6 +45,7 @@
 | P6 Token 用量审计 | `docs/evidence/token-audit.md`(两个真实 run + 分类 A/B/C/D) |
 | P7 Runtime 架构对照 | `docs/ARCHITECTURE.md`(与 Pi 逐项对照 + 生命周期) |
 | P8 上下文生命周期 + 上下文感知 | `compact.py`/`contextinfo.py`;`test_compaction*.py`、`test_context_awareness.py`;CLI `context` |
+| P10 存储与 Git 边界规范 | `eval/run.py`(默认不写仓库);`fwcore_verify`「运行产物边界」;`docs/ARCHITECTURE.md` §3;`tests/test_cli_context_scope.py`、`test_state_authority.py` |
 | P9 Pi 真实基准 + 分层缓存对比 + 压缩验收纠偏 | `docs/ARCHITECTURE.md` §6/§7;`scripts/pi_cache_stats.py`;`test_compaction_sim.py` |
 
 ## 已取消(不属于产品)
