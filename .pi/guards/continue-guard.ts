@@ -46,13 +46,34 @@ function statSyncSafe(p: string): number { try { return require0(p); } catch { r
 function require0(p: string): number { try { return Number(statSync(p).size); } catch { return 0; } }
 
 
-/** 是否启用护栏:只看"是否在本工作区"(没有开关、没有豁免文件)。
- *  这个护栏的存在意义就是**别让研究会话自己停**;给它做"默认关闭/按会话豁免"
- *  的开关等于让它形同虚设。 */
+/** 是否启用护栏:只认**本会话的类型**(第一条 user 消息是不是 /fw 研究提示词)。
+ *  工作区里同时有框架开发/复核会话 ⇒ 不能拿"工作区里有某个文件"当判据。 */
+const FW_PROMPT_MARK = "你是固件漏洞研究主循环 agent";
+
+function firstUserText(file: string): string {
+  try {
+    const lines = readFileSync(file, "utf8").split("\n").slice(0, 40);
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let rec: any;
+      try { rec = JSON.parse(line); } catch { continue; }
+      const m = rec?.message ?? rec;
+      if (m?.role !== "user") continue;
+      const c = m.content;
+      if (typeof c === "string") return c;
+      if (Array.isArray(c)) return c.map((x: any) => x?.text || "").join("");
+      return "";
+    }
+  } catch { /* 读不到就当非研究会话 */ }
+  return "";
+}
+
 export function guardActive(): boolean {
   try {
     if (!IS_FW_LOOP) return false;
-    return existsSync(`${ROOT}/tools/queue_state.sh`);
+    const f = CTX_FILE || process.env.PI_SESSION_FILE || "";
+    if (!f) return false;
+    return firstUserText(f).includes(FW_PROMPT_MARK);
   } catch { return false; }
 }
 

@@ -84,6 +84,8 @@
 | **诊断字段真实链路** | ✅ | `OpenAICompatAdapter.chat()` 与 `_coerce_reply()` 之前丢弃 `finish_reason`/`usage`;已贯通,并用**模拟 HTTP transport**(真实 adapter + 真实响应解析)测到 `model.reply` 事件:`tests/test_adapter_plumbing.py` 4 passed(截断 length / 推理-only 协议往返 / 工具调用不记诊断 / 第二段 FINAL 一次收束) |
 | **token 消耗异常** | ✅ 根因+修复 | 历史**每次请求全量重发**且 run 内无限增长(旧 run checkpoint 491 KB,第二阶段收尾一次 222,238 prompt tokens/222,080 命中缓存);改为请求前 `_bound_history`(默认 160 k 字符预算)+ `model.call` 每次调用记账(usage 缺失标 `usage_known=false`);见 `docs/evidence/token-usage-audit.md` |
 | **上下文策略定稿** | ✅ 不裁剪 | 完整会话历史照常发送(缓存命中 ~99.93% 的 222,238 prompt 不是费用异常);**不设**字符上限旋钮;`model.call` 每次调用记账。测试:`test_context_budget.py`(全量发送 / 协议配对 / 恢复) |
+| **第三阶段复盘 + 续跑** | ✅ 结论:分析真、落账空 | 原 30 次:36 tool calls 全是**真分析**(`_notes/s3/annotate.py|cfg.py|calls.py|body.py` 反汇编/CFG/调用点,产出 12 份 ann + 9 份 body),但 **0 次 state_* 调用** ⇒ 0 假设/0 证据;续跑 +40 calls(共 70)仍 0 落账 ⇒ 不是工具报错,是模型不落账。**没有编造记录**。下一步(未做):`progress_brief` 在"本 run 有产物但零登记"时给一次提示 |
+| **checkpoint 截断可追溯** | ✅ | `_shrink_history` 截断时带 `stdout_path`(shell_exec 输出)/`result_path` 与 `tool_call_id`;顺带修真 bug:keep_full=0 时 `[:-0]` 什么都不压 |
 | **跨 run 继承研究事实** | ✅ 修复 | 之前系统提示只有派生计数,新 run 看不到上一轮的假设/证据;现注入`## 已有研究事实`(最近 25 条假设+范围、25 条证据+来源关系),`test_cross_run_inheritance.py` 锁定 |
 | **第三阶段真实 run(产品能力验证)** | ⚠️ 有结果也有缺口 | `R-20261105-3518ef1d`:30 calls/36 tool calls,未重做 XOR(复用生效),但**0 新假设/0 新证据**即被预算暂停 ⇒ "探索多、落账少";下一步应让研究进度提示更早要求落账,或恢复该 run 继续 |
 | **no_finding 强度** | ✅ 最小约束 | `conclude(no_finding)` 现要求 ≥1 条**经复核**证据;反例测试 `tests/test_conclude_strength.py`(未复核 ⇒ 拒绝) |

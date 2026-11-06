@@ -299,6 +299,19 @@ class Runner:
         events.reverse()
         return {"derived": d, "recent_events": events}
 
+    def _artifact_of(self, tool_call_id: str | None) -> str | None:
+        """恢复用:工具调用 → 产物路径(偏好 stdout,其次 result)。"""
+        if not tool_call_id:
+            return None
+        row = self.con.execute("SELECT stdout_path, result_path FROM tool_calls WHERE id=?",
+                               (tool_call_id,)).fetchone()
+        if not row:
+            return None
+        p = row["stdout_path"] or row["result_path"]
+        if not p:
+            return None
+        return os.path.relpath(p, self.root) if os.path.isabs(p) else p
+
     def _checkpoint(self, rid: str, step: int, history: list[dict]) -> None:
         """存检查点。
 
@@ -307,7 +320,8 @@ class Runner:
         - **保留上限**:只留最近 `limits.checkpoints_keep` 条;
         - **库体积硬顶**:超过 `limits.max_db_bytes` 继续删最老的检查点,仍超 ⇒ 暂停 run(不写结论)。
         """
-        payload = json.dumps(_shrink_history(history), ensure_ascii=False)
+        payload = json.dumps(_shrink_history(history, artifact_of=self._artifact_of),
+                             ensure_ascii=False)
         with _db.Tx(self.con) as c:
             c.execute("INSERT INTO checkpoints(id,run_id,step,messages,created_at) VALUES(?,?,?,?,?)",
                       (new_id("CK"), rid, step, payload, _now()))
@@ -873,16 +887,26 @@ def _context_stats(system: str, history: list[dict]) -> dict:
             "other": other, "total": tool + assistant + other}
 
 
-def _shrink_history(history: list[dict], keep_full: int = 20) -> list[dict]:
-    """把历史里较老的 tool 输出截断(保留结构),避免检查点持有全量原文。"""
+def _shrink_history(history: list[dict], keep_full: int = 20, artifact_of=None) -> list[dict]:
+    """把历史里较老的 tool 输出截断(保留结构),避免检查点持有全量原文。
+
+    这是**磁盘保护**(不是请求裁剪):截断时保留 tool_call_id 与原产物路径,
+    恢复后仍能回到全文继续验证。artifact_of(tool_call_id) 返回可追溯路径。
+    """
     tool_idx = [i for i, m in enumerate(history) if m.get("role") == "tool"]
-    cutoff = set(tool_idx[:-keep_full]) if len(tool_idx) > keep_full else set()
+    # keep_full=0 表示"全压"(--0 会变成 [:0] 什么都不压,是个真 bug)
+    cutoff = set(tool_idx[:-keep_full] if keep_full > 0 else tool_idx)
     out = []
     for i, m in enumerate(history):
         if i in cutoff:
             c = m.get("content")
             if isinstance(c, str) and len(c) > 200:
-                out.append({**m, "content": c[:200] + f"…(截断,原 {len(c)} 字节)"})
+                note = f"…(检查点截断,原 {len(c)} 字符"
+                if artifact_of:
+                    p = artifact_of(m.get("tool_call_id"))
+                    if p:
+                        note += f",全文: {p}"
+                out.append({**m, "content": c[:200] + note + ")"})
                 continue
         out.append(m)
     return out

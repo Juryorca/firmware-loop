@@ -80,3 +80,29 @@ def test_tool_pairing_survives_checkpoint_resume(tmp_path):
             assert m["tool_call_id"] in pending, "tool 消息必须能对上前面的 tool_call"
             pending.discard(m["tool_call_id"])
     assert res.state in ("finished", "paused")
+
+
+def test_checkpoint_shrink_keeps_stdout_path(tmp_path):
+    """磁盘保护式截断:shell_exec 的输出文件要走 stdout_path,恢复后能回原文。"""
+    from fwcore.runtime import _shrink_history
+
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    tgt = dom.create_target("t1", version="1")
+    tid = getattr(tgt, "id", tgt)
+    rid = "R-test"
+    con.execute("INSERT INTO runs(id,target_id,state,started_at,updated_at) VALUES(?,?,?,?,?)",
+                (rid, tid, "running", "2026-11-06T00:00:00Z", "2026-11-06T00:00:00Z"))
+    stdout = os.path.join(root, "state", "artifacts", "TC-1.stdout.txt")
+    os.makedirs(os.path.dirname(stdout), exist_ok=True)
+    with open(stdout, "w", encoding="utf-8") as f:
+        f.write("x" * 500)
+    con.execute("INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,stdout_path,created_at)"
+                " VALUES(?,?,?,?,?,'ok',?,?)",
+                ("TC-1", "k1", rid, "shell_exec", "{}", stdout, "2026-11-06T00:00:01Z"))
+    r = Runner(con, root, _Chatty(0), limits=Limits(max_model_calls=1))
+    history = [{"role": "tool", "tool_call_id": "TC-1", "content": "y" * 400}]
+    out = _shrink_history(history, keep_full=0, artifact_of=r._artifact_of)
+    assert "state/artifacts/TC-1.stdout.txt" in out[0]["content"]
+    assert out[0]["tool_call_id"] == "TC-1"
