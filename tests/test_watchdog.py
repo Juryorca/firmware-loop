@@ -35,7 +35,7 @@ def test_watchdog_pauses_stalled_run_and_kills_tool_process_group(tmp_path):
         art = os.path.join(root, "state", "artifacts", rid)
         os.makedirs(art, exist_ok=True)
         with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
-            f.write(f"{os.getpgid(child.pid)}\n")
+            f.write(f"{os.getpgid(child.pid)} {_proc_starttime(child.pid) or 0}\n")
         con.execute("UPDATE runs SET heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
 
         acts = Watchdog(con, root, Limits(), heartbeat_timeout_s=60).scan_once()
@@ -264,5 +264,41 @@ def test_recover_stale_does_not_kill_pgids_cross_host(tmp_path):
         assert fixed == [rid]
         time.sleep(0.3)
         assert child.poll() is None, "跨主机的 run 不能杀本机 pgid"
+    finally:
+        child.kill()
+
+
+def test_kill_pgids_skips_entries_without_starttime(tmp_path):
+    """旧格式 .pgids(只有 pgid)无法证明未被复用 ⇒ 看护不得 kill(防误伤无关进程)。"""
+    con, dom, root, rid, hid = _mk(tmp_path)
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        art = os.path.join(root, "state", "artifacts", rid)
+        os.makedirs(art, exist_ok=True)
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{os.getpgid(child.pid)}\n")       # 无 starttime
+        con.execute("UPDATE runs SET heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+        Watchdog(con, root, Limits(), heartbeat_timeout_s=60).scan_once()
+        time.sleep(0.3)
+        assert child.poll() is None, "无 starttime 的 pgid 不允许杀"
+    finally:
+        child.kill()
+
+
+def test_recover_stale_does_not_kill_without_recorded_pid(tmp_path):
+    """同主机但 run 没有 pid 记录(旧库):没有 owner 证据 ⇒ 只暂停,不杀 pgid。"""
+    con, dom, root, rid, hid = _mk(tmp_path)
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        art = os.path.join(root, "state", "artifacts", rid)
+        os.makedirs(art, exist_ok=True)
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{os.getpgid(child.pid)}\n")
+        con.execute("UPDATE runs SET pid=NULL, heartbeat_at='2000-01-01T00:00:00+00:00'"
+                    " WHERE id=?", (rid,))
+        fixed = Runner(con, root, ScriptedAdapter(script=[])).recover_stale(older_than_s=1)
+        assert fixed == [rid]
+        time.sleep(0.3)
+        assert child.poll() is None, "没有 pid 证据时不能杀"
     finally:
         child.kill()

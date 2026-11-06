@@ -1041,7 +1041,9 @@ class Runner:
                     continue          # 扫描后已被 resume 接管 ⇒ 不能停它
                 # 只有**同主机**的孤立工具才杀:pgid 是主机本地概念,跨主机按同名 pgid 杀
                 # 可能误伤本机无关进程(.pgids 是别的主机写的)
-                if same_host:
+                # 只有"同主机 + 记录到 pid 且已死"才杀:pid 为空的旧行没有 owner 证据,
+                # .pgids 可能是旧格式/被复用 ⇒ 不杀更安全
+                if same_host and r["pid"] and alive is False:
                     with contextlib.suppress(Exception):
                         from .watchdog import Watchdog
                         Watchdog(self.con, self.root)._kill_pgids(r["id"])

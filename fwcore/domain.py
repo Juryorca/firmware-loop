@@ -743,8 +743,11 @@ class Domain:
         if len((reason or "").strip()) < 8:
             raise InvariantViolation("请求用户输入必须写清:要什么 / 卡在哪一步")
         with Tx(self.con) as c:
-            c.execute("UPDATE runs SET handback_reason=?, updated_at=? WHERE id=?",
-                      ("needs_user_input: " + reason, _now(), run_id))
+            cur = c.execute("UPDATE runs SET handback_reason=?, updated_at=?"
+                            " WHERE id=? AND state='running'",
+                            ("needs_user_input: " + reason, _now(), run_id))
+            if not cur.rowcount:
+                return          # run 已结束/被接管:迟到的"请求输入"不能改现状
             _event(c, "run.request_user_input", run_id, {"reason": reason[:300]})
 
     # ---------------- 派生量(程序算,不靠文字) ----------------

@@ -325,8 +325,9 @@ def test_resume_kills_orphan_tool_pgids_of_dead_owner(setup):
     try:
         art = os.path.join(root, "state", "artifacts", rid)
         os.makedirs(art, exist_ok=True)
+        from fwcore.watchdog import _proc_starttime as _pst
         with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
-            f.write(f"{os.getpgid(child.pid)}\n")
+            f.write(f"{os.getpgid(child.pid)} {_pst(child.pid) or 0}\n")
         con.execute("UPDATE runs SET state='paused', pid=999999, pid_starttime=1,"
                     " handback_reason='watchdog_paused: owner_dead' WHERE id=?", (rid,))
         r2 = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: y", "tool_calls": []}]),
@@ -373,3 +374,16 @@ def test_owner_loss_cancels_remaining_tool_batch(setup):
     assert res.handback == "owner_lost"
     assert con.execute("SELECT COUNT(*) n FROM observations").fetchone()["n"] == 0
     assert con.execute("SELECT pid FROM runs WHERE id=?", (rid,)).fetchone()["pid"] == 999999
+
+
+def test_request_user_input_ignored_on_finished_run(setup):
+    """迟到的'请求用户输入'不能改已结束 run 的 handback。"""
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    r.run(rid, "t1")
+    before = con.execute("SELECT handback_reason FROM runs WHERE id=?", (rid,)).fetchone()[0]
+    dom.request_user_input(rid, "需要工作区外的东西")
+    after = con.execute("SELECT handback_reason FROM runs WHERE id=?", (rid,)).fetchone()[0]
+    assert after == before

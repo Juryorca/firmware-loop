@@ -85,11 +85,13 @@ class Watchdog:
             except OSError:
                 entries = []
         for pg, start in entries:
-            if start is not None:
-                cur = _proc_starttime(pg)
-                if cur is None or cur != start:
-                    continue          # pid 已被复用(或进程已死)⇒ 不能杀,避免误伤别人的进程
-
+            if start is None:
+                # 没有 starttime 的记录无法证明 pgid 没被复用 ⇒ 宁可不杀(防误伤);
+                # 当前 writer 总是写 starttime,这只影响旧格式残留
+                continue
+            cur = _proc_starttime(pg)
+            if cur is None or cur != start:
+                continue              # pid 已被复用(或进程已死)⇒ 不能杀
             try:
                 os.killpg(pg, signal.SIGKILL)
                 killed.append(pg)
