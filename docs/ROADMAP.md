@@ -16,6 +16,9 @@
   分块摘要**覆盖全部被丢弃历史**,失败保留原历史 + 冷却;摘要调用计入预算。
 - **研究质量门**:`vulnerable` 需 supported + 因果复核;`no_finding` 需 ≥1 条已复核证据;面处置需证据/理由;
   `assess` 区分 completed/partial 与来源强度。
+- **生命周期/并发**:run 有**单 owner 租约**(CAS 接管;活主存在则拒绝并发 resume);
+  心跳 CAS(不抢回所有权);接管死亡 owner 时清孤儿进程组与遗留 `running` 工具行;
+  看护的 hard/stale 两分支都先赢下 `state='running'` 竞争再 kill/写事件。
 - **存储边界**:研究事实只认 SQLite;运行产物只写 `state/_scratch/`(不进 Git);`docs/evidence/` 只收长期工程资料;
   `notes.md` 是叙述/指针,`report/` 是交付;上下文/覆盖度/队列判定 DB 优先。
 - **全量迁移**:14 个历史目标的 notes/attack-surface 已导入 DB(`documents` 保原文;
@@ -36,9 +39,11 @@
 - **缺**:动态验证须由 agent 在受控 run 内完成(本机手工 `qemu-user` 报 SIGILL,不作为准绳);
   各 handler 门禁表的动态复核。
 - **验收**:地址级链路 + ≥1 条带来源 observation;判不了写 inconclusive。
-- **预算**:`R-20261105-3518ef1d` 已用 **130 calls / 571.9 s**;`runs.budget_note` 现持久化每次生效边界
-  (start/resume/limit_hit)。历史未存旧边界 —— 旧记的 **7200 s 无从核对**,按默认 **200 calls / 1800 s 累计**
-  计 ⇒ 余 ~70 calls / ~1228 s;不得新建 run 绕开预算。
+- **预算**:`R-20261105-3518ef1d` 已用 **130 calls / 571.9 s**;`runs.budget_note` 持久化生效边界
+  (实测 resume 后 `via=resume`、limits=200 calls/1800 s);按此 ⇒ 余 ~70 calls / ~1228 s;
+  不得新建 run 绕开预算。
+- **恢复就绪**:租约/心跳/看护竞态已修,`resume` 在 drill 库副本实测:计数从 130 延续、状态 finished、
+  `handback=awaiting_user_close`(修复前会被误判 owner_dead 暂停)。
 - **阻塞**:续跑需用户批准付费模型(离线静态已完成并入库:观察 + 2 条 static-note 证据)。
 
 ### P4 依赖库/样本边界(需 P1 运行结果)
