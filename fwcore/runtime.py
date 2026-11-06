@@ -152,6 +152,13 @@ class Runner:
                      {"roots": len(az.roots), "active": az.active(),
                       "mcp": az.allow_mcp, "external_mcp": az.allow_external_mcp})
 
+    def _budget_snapshot(self) -> dict:
+        """本次调用生效的执行边界(持久化到 runs.budget_note,resume 时可核对)。"""
+        return {"max_model_calls": self.limits.max_model_calls,
+                "max_seconds": self.limits.max_seconds,
+                "max_tool_seconds": self.limits.max_tool_seconds,
+                "context_tokens": self.limits.context_tokens}
+
     def start(self, target: str, goal: str | None = None) -> str:
         t = self.domain.target(target)
         self._load_authorization(target)
@@ -159,13 +166,16 @@ class Runner:
         self._ensure_mcp()
         rid = new_id("R")
         now = _now()
+        note = json.dumps({"limits": self._budget_snapshot(), "set_at": now, "via": "start"},
+                          ensure_ascii=False)
         with _db.Tx(self.con) as c:
             c.execute("INSERT INTO runs(id,target_id,state,step,rounds,goal,pid,pid_starttime,host,"
-                      "model,heartbeat_at,started_at,updated_at)"
-                      " VALUES(?,?,'running',0,0,?,?,?,?,?,?,?,?)",
+                      "model,heartbeat_at,started_at,updated_at,budget_note)"
+                      " VALUES(?,?,'running',0,0,?,?,?,?,?,?,?,?,?)",
                       (rid, t.id, goal, os.getpid(), _proc_starttime(os.getpid()), _host(),
-                       getattr(self.model, "name", None), now, now, now))
-            _event(c, "run.started", rid, {"target": target, "goal": goal})
+                       getattr(self.model, "name", None), now, now, now, note))
+            _event(c, "run.started", rid, {"target": target, "goal": goal,
+                                            "limits": self._budget_snapshot()})
         return rid
 
     def _watchdog_start(self) -> None:
@@ -192,7 +202,7 @@ class Runner:
         """结构化进度快照(给外部监控用;只读)。"""
         row = self.con.execute(
             "SELECT r.id,r.state,r.step,r.rounds,r.handback_reason,r.goal,r.heartbeat_at,"
-            "       r.model_calls,r.tool_calls,r.elapsed_s,"
+            "       r.model_calls,r.tool_calls,r.elapsed_s,r.budget_note,"
             "       t.name AS target FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
             (rid,)).fetchone()
         if not row:
@@ -213,6 +223,7 @@ class Runner:
                 "watchdog": (self.watchdog.health() if self.watchdog is not None else None),
                 "mcp": self.mcp_health(), "mcp_skipped": self.mcp_skipped_reason,
                 "limits": self.limits.describe(),
+                  "budget": _safe_json(row["budget_note"]),
                 "recent_events": events}
 
     def cancel(self, rid: str, reason: str = "用户取消") -> None:
@@ -388,7 +399,14 @@ class Runner:
     def _limit_hit(self, rid: str, reason: str, detail: dict | None = None) -> None:
         """记录"执行边界触发"。**只暂停**,不写任何研究结论。"""
         with _db.Tx(self.con) as c:
-            c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), rid))
+            row = c.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()
+            try:
+                note = json.loads(row["budget_note"]) if row and row["budget_note"] else {}
+            except (TypeError, ValueError):
+                note = {}
+            note["last_limit"] = {"reason": reason, "detail": detail or {}, "at": _now()}
+            c.execute("UPDATE runs SET state='paused', updated_at=?, budget_note=? WHERE id=?",
+                      (_now(), json.dumps(note, ensure_ascii=False), rid))
             _event(c, "run.limit_hit", rid, {"reason": reason, **(detail or {})})
 
     # ---------------- 一轮 = 一个模型-工具交互序列 ----------------
@@ -870,8 +888,10 @@ class Runner:
         self._ensure_mcp()
         with _db.Tx(self.con) as c:
             # 接管:清掉上一次的 handback(否则 _handback 会把旧的 watchdog_paused 当现状)
-            c.execute("UPDATE runs SET state='running', handback_reason=NULL, updated_at=?"
-                      " WHERE id=?", (_now(), rid))
+            c.execute("UPDATE runs SET state='running', handback_reason=NULL, budget_note=?,"
+                      " updated_at=? WHERE id=?",
+                      (json.dumps({"limits": self._budget_snapshot(), "set_at": _now(),
+                                   "via": "resume"}, ensure_ascii=False), _now(), rid))
             _event(c, "run.resumed", rid, {"step": row["step"],
                                            "mcp": bool(self.mcp_bridge and not self.mcp_bridge.closed)})
         try:
@@ -1170,6 +1190,13 @@ def _epoch(ts: str) -> float:
         return _d.datetime.fromisoformat(ts).timestamp()
     except Exception:
         return 0.0
+
+
+def _safe_json(s: str | None):
+    try:
+        return json.loads(s) if s else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _now() -> str:

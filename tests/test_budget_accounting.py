@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 from fwcore import db as _db
@@ -149,3 +150,27 @@ def test_no_tool_no_final_replies_pause_instead_of_burning_budget(tmp_path):
     assert ad.calls == 3, f"连续 3 次空转就应停,实际 {ad.calls}"
     kinds = [row["kind"] for row in con.execute("SELECT kind FROM events")]
     assert "run.stalled" in kinds
+
+
+def test_run_budget_is_persisted_and_exposed(tmp_path):
+    """预算边界要落 runs.budget_note(否则"还剩多少"只能靠记忆/文档,已发生漂移)。"""
+    con, dom, root = _setup(tmp_path)
+    r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               limits=Limits(max_model_calls=3, max_seconds=123.0),
+               policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+    rid = r.start("t1")
+    note = json.loads(con.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()[0])
+    assert note["via"] == "start" and note["limits"]["max_model_calls"] == 3
+    assert r.progress(rid)["budget"]["limits"]["max_seconds"] == 123.0
+
+    r2 = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: y", "tool_calls": []}]),
+                limits=Limits(max_model_calls=5, max_seconds=456.0),
+                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
+    r2.resume(rid)
+    note = json.loads(con.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()[0])
+    assert note["via"] == "resume" and note["limits"]["max_seconds"] == 456.0
+
+    r2._limit_hit(rid, "max_model_calls", {"calls": 5, "limit": 5})
+    note = json.loads(con.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()[0])
+    assert note["last_limit"]["reason"] == "max_model_calls"
+    assert note["last_limit"]["detail"]["limit"] == 5
