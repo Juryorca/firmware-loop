@@ -297,9 +297,12 @@ class Runner:
         return None
 
     def _heartbeat(self, rid: str) -> None:
+        # pid_starttime 必须一起刷新:看护用"pid 存活 + starttime 一致"判 owner,
+        # 只改 pid 不改 starttime ⇒ 接管后被误判 owner_dead(resume 立刻被 pause)
         with _db.Tx(self.con) as c:
-            c.execute("UPDATE runs SET heartbeat_at=?, pid=?, host=?, updated_at=? WHERE id=?",
-                      (_now(), os.getpid(), _host(), _now(), rid))
+            c.execute("UPDATE runs SET heartbeat_at=?, pid=?, pid_starttime=?, host=?, updated_at=?"
+                      " WHERE id=?",
+                      (_now(), os.getpid(), _proc_starttime(os.getpid()), _host(), _now(), rid))
 
     def context(self, target: str) -> dict:
         d = self.domain.derived(target)
@@ -402,9 +405,9 @@ class Runner:
             if not (row and (row["handback_reason"] or "").startswith("user_stop")):
                 with _db.Tx(self.con) as c:
                     c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
-        self._watchdog_start()
+        self._heartbeat(rid)        # 先接管 owner(pid+starttime),再起看护
+        self._watchdog_start()      # 否则 resume 时看护先看到旧 pid ⇒ 误判 owner_dead
         self._ensure_mcp()          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
-        self._heartbeat(rid)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
         # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
         row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
@@ -719,9 +722,13 @@ class Runner:
         - `closed`:用户已显式确认收尾(main 的确认原则)
         """
         row = self.con.execute(
-            "SELECT r.handback_reason, t.name AS target FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
-            (rid,)).fetchone()
-        if row and row["handback_reason"]:
+            "SELECT r.state, r.handback_reason, t.name AS target FROM runs r JOIN targets t"
+            " ON t.id=r.target_id WHERE r.id=?", (rid,)).fetchone()
+        reason = row["handback_reason"] if row else None
+        # watchdog_paused 描述"上一次被谁停下";run 已 finished/resumed 时是过期值
+        if reason and reason.startswith("watchdog_paused") and row["state"] != "paused":
+            reason = None
+        if reason:
             return row["handback_reason"]          # needs_user_input 等
         if not blockers:
             if self.domain.is_close_confirmed(row["target"]):
@@ -862,7 +869,9 @@ class Runner:
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._ensure_mcp()
         with _db.Tx(self.con) as c:
-            c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
+            # 接管:清掉上一次的 handback(否则 _handback 会把旧的 watchdog_paused 当现状)
+            c.execute("UPDATE runs SET state='running', handback_reason=NULL, updated_at=?"
+                      " WHERE id=?", (_now(), rid))
             _event(c, "run.resumed", rid, {"step": row["step"],
                                            "mcp": bool(self.mcp_bridge and not self.mcp_bridge.closed)})
         try:

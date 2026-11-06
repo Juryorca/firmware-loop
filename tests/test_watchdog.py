@@ -201,3 +201,15 @@ def test_runner_progress_exposes_watchdog_health(tmp_path):
     assert prog["watchdog"] is not None
     assert prog["watchdog"]["alive"] is True and prog["watchdog"]["scans"] >= 1
     assert res.state in ("finished", "paused")
+
+
+def test_watchdog_does_not_clobber_finished_run(tmp_path):
+    """扫描到更新之间 run 已 finished ⇒ 看护不能把它改成 paused(条件更新保护)。"""
+    con, dom, root, rid, hid = _mk(tmp_path)
+    con.execute("UPDATE runs SET state='finished', pid=999999, pid_starttime=1,"
+                " heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+    acts = Watchdog(con, root, Limits(), heartbeat_timeout_s=60).scan_once()
+    row = con.execute("SELECT state,handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["state"] == "finished"
+    assert not (row["handback_reason"] or "").startswith("watchdog_paused")
+    assert not [a for a in acts if a.get("run") == rid], acts

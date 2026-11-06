@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 
 import pytest
@@ -11,9 +9,10 @@ import pytest
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.migrate_all import migrate_target, parse_pool, verify_target
-from fwcore.runtime import Runner, ScriptedModel
+from fwcore.models import Reply
 from fwcore.policy import Policy
-from fwcore.tools import Registry, ToolContext, default_registry
+from fwcore.runtime import Runner, ScriptedModel
+from fwcore.tools import ToolContext, default_registry
 
 
 @pytest.fixture()
@@ -116,13 +115,15 @@ class Boom(Exception):
 
 
 class ExplodingModel:
+    name = "exploding"
+
     def __init__(self):
         self.n = 0
 
-    def chat(self, messages, tools):
+    def chat(self, messages, tools) -> Reply:
         self.n += 1
         if self.n == 1:
-            return {"content": "先看看状态", "tool_calls": []}
+            return Reply(content="先看看状态", tool_calls=[])
         raise Boom("模拟进程中断")
 
 
@@ -224,3 +225,25 @@ def test_tool_names_match_openai_pattern(tmp_path):
     with pytest.raises(ValueError):
         reg.register(__import__("fwcore.tools", fromlist=["ToolSpec"]).ToolSpec(
             "bad.name", "d", {"type": "object", "properties": {}}, lambda c, a: {}))
+
+
+def test_resume_reowns_run_and_clears_stale_handback(setup):
+    """resume 必须接管 owner(pid+starttime)并清掉旧 handback,否则看护会误判 owner_dead 立刻暂停。"""
+    from fwcore.watchdog import _proc_starttime
+
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    r.run(rid, "t1")
+    with _db.Tx(con) as c:
+        c.execute("UPDATE runs SET state='paused', pid=999999, pid_starttime=1,"
+                  " handback_reason='watchdog_paused: owner_dead' WHERE id=?", (rid,))
+    r2 = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: y", "tool_calls": []}]),
+                policy=Policy(allow_high_risk=True))
+    r2.resume(rid)
+    row = con.execute("SELECT pid,pid_starttime,handback_reason FROM runs WHERE id=?",
+                      (rid,)).fetchone()
+    assert row["pid"] == os.getpid()
+    assert row["pid_starttime"] == _proc_starttime(os.getpid())
+    assert not (row["handback_reason"] or "").startswith("watchdog_paused")
