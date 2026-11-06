@@ -632,10 +632,15 @@ def default_registry() -> Registry:
             "priority": {"type": "number"}}, "required": ["target", "title"]},
         state_add_hypothesis))
     r.register(ToolSpec(
-        "state_add_observation", "登记一条观察(可绑定某次尝试)",
+        "state_add_observation",
+        "登记一条**已确认但还不足以成假设**的技术事实(地址/字符串/调用关系);"
+        "可带来源:tool_call_id 用工具结果里的 db_tool_call_id,path 指向该调用产出的文件",
         {"type": "object", "properties": {
             "target": {"type": "string"}, "text": {"type": "string"},
-            "attempt_id": {"type": "string"}}, "required": ["target", "text"]},
+            "attempt_id": {"type": "string"},
+            "tool_call_id": {"type": "string", "description": "来源:db_tool_call_id(TC-…)"},
+            "path": {"type": "string", "description": "来源产物路径(相对工作区)"}},
+         "required": ["target", "text"]},
         state_add_observation))
     r.register(ToolSpec(
         "state_add_evidence",
