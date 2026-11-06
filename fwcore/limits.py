@@ -30,6 +30,9 @@ class Limits:
     output_reserve_tokens: int = 8_000
     # 压缩失败后的冷却(模型调用次数):避免每轮重试烧预算
     compact_retry_cooldown_calls: int = 5
+    # 分块摘要:每块 token 上限 / 单次压缩最多几次摘要调用(超限=失败,不丢历史)
+    summarize_chunk_tokens: int = 60_000
+    summarize_max_calls: int = 20
     # 单轮最多执行多少个工具调用(模型可能一次发很多;这是执行边界,不是研究规则)
     max_tool_calls_per_turn: int = 8
     # 硬边界:**永远生效**,不受 unbounded 影响

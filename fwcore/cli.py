@@ -264,13 +264,19 @@ def main(argv: list[str] | None = None) -> int:
                               "ORDER BY ts DESC LIMIT 1").fetchone()
             lu = (json.loads(last["payload"]).get("usage") or {}) if last else {}
             _k, _b, _m = load_model_config(args.root)
+            from .research import Research
+
+            _research = Research(args.root, dom)
+            _sys = _research.rules_prompt(args.target)
+            _st = json.dumps(_research.state_prompt(args.target), ensure_ascii=False)
             st = build_status(
                 model=_m or str(os.environ.get("FW_MODEL", "") or "unknown"),
                 window=lim.context_tokens or None, messages=hist,
                 output_reserve=lim.output_reserve_tokens,
                 context_tokens=lim.context_tokens,
                 last_prompt_tokens=lu.get("prompt_tokens"),
-                last_cached_tokens=(lu.get("prompt_tokens_details") or {}).get("cached_tokens"))
+                last_cached_tokens=(lu.get("prompt_tokens_details") or {}).get("cached_tokens"),
+                system=_sys, state=_st, schema="")
             comp = con.execute("SELECT payload FROM events WHERE kind IN "
                                "('run.compacted','run.compact_failed') ORDER BY ts DESC LIMIT 1").fetchone()
             out = st.as_dict()

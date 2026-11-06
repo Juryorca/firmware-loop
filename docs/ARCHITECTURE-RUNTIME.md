@@ -143,3 +143,63 @@ Pi 的 98.36% 不是"Pi 有客户端缓存算法",而是它的请求结构天然
 - >500k tokens 长历史下的稳态命中率(本轮未跑到该规模);
 - 多轮压缩后的真实 API 缓存重建行为(只做了离线模拟);
 - 第三方网关下的缓存行为(本机实测走官方 `api.deepseek.com`)。
+
+## 8. P9 验收纠偏(2026-11-06 补充)
+
+### 8.1 缓存对比必须按请求规模分层(否则不可比)
+
+同一 Provider/模型(`deepseek/deepseek-flash`),按 **prompt_tokens 分层**:
+
+| 请求规模(prompt tokens) | Pi 命中率(n) | fwcore 命中率 |
+|---|---|---|
+| < 20k | **88.47%**(338) | **89.8%**(31 次受控实验,mean 12k) |
+| 20k–60k | 95.37%(389) | 无 post-fix 数据(修复前 54.2%) |
+| 60k–150k | 99.10%(1,352) | 无 post-fix 数据(修复前 26.9%) |
+| 150k–300k | 98.61%(2,235) | — |
+| > 300k | 99.01%(7,248) | —(Pi 均值 585k,与 fwcore 31 次不可直接比) |
+
+结论:**此前"98.36% vs 89.8%"是规模差异**;同规模(<20k)下两者持平(88.5% vs 89.8%)。
+Pi 的 98.96% 总体值来自均值 423k 的长历史;fwcore 尚无 post-fix 大历史实测 —— 如实标注为未验证。
+
+**可复核口径**:`scripts/pi_cache_stats.py`(只读、脱敏,输出只有数字;支持 `--provider/--model/--by-size`)。
+命中率定义 `cacheRead/(input+cacheRead)`;不混用不同 Provider/模型,不把 UI 占用率当命中率。
+
+### 8.2 摘要覆盖保证(P0,已修)
+
+旧实现:每条消息 `[:1500]`、整段 `[:60000]` ⇒ 接近 1M 上下文时只摘要最早一小段,却删掉远多于此的历史。
+现在 `compact.summarize_covered()`:
+- 以**协议组**为单位装块(每块 ≤ `summarize_chunk_tokens`,默认 60k);
+- 单条超大消息按内容**切片**,每一片都送进摘要;
+- 多块摘要再**归并**(最多 `summarize_max_calls`,默认 20 次);超过上限 ⇒ `SummarizationIncomplete`;
+- 任何一块返回空 ⇒ 失败;失败时**历史原样保留** + `run.compact_failed` + 冷却。
+覆盖可核对:`info = {chunks, messages(原始条数), pieces(切片数), calls, merge_calls}`,
+测试断言 `messages == len(dropped)` 且 `pieces >= messages`。
+
+### 8.3 摘要预算(P0,已修)
+
+默认 summarizer 在**发起请求前**执行与普通调用相同的 `calls_exhausted(run_calls+1)` 检查;
+超出预算 ⇒ 抛错 ⇒ 压缩失败(保留历史),不会越过 run 级授权上限。摘要调用计入 `run_calls` 与
+`model.call{kind:"summarize"}`(含 prompt/cached/completion/reasoning,缺失为 unknown)。
+
+### 8.4 上下文估算口径(P1,已修)
+
+`build_status()` 的 `estimated_input` 现在包含**整个请求**:system + history + 尾部 state +
+工具 schema + 协议开销(每条消息 8 tokens 保守常数),并在状态块里给出分解
+`(system … + history … + state … + tools … + protocol …)`。
+早期版本只估 history、却标成 `estimated_input`,会把"可用空间"报大 —— 已改。
+
+### 8.5 阈值语义(P1,已明确)
+
+阈值 = `window − max(output_reserve, 10% window)`:
+
+- 生产(1M 窗口,8k 预留):**900,000 = 90%**;
+- 小窗口(30k 窗口,8k 预留):22,000 = **73.3%**(固定预留生效,不是 90%)。
+
+测试 `test_threshold_proportional_vs_fixed_reserve` 分别覆盖两种情形;模拟测试不再把 85% 当成生产触发点。
+
+### 8.6 多轮压缩序列(P1,已重做)
+
+`test_three_compactions_across_resume_and_advance`:增长 → 压缩#1 → 追加 → 压缩#2 →
+**模拟进程退出后 resume** → 追加 → 压缩#3 → `advance`。每次断言压缩计数**实际增加**
+(不满足即失败,不静默跳过),并断言配对完整、hypothesis/evidence 未变。
+仍属**离线模拟**:真实 1M 级历史的多轮压缩未验证。

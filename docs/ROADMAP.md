@@ -47,6 +47,19 @@
 - **权威 Gate 同步(本轮)**:`fw-core gates` 输出 `provenance{direct,weak,unlinked}`;只有完整性复核的 `no_finding` 进 `advisories`(提示,不阻断)。
 - 验收:`tests/test_provenance_strength.py`、`tests/test_gate_provenance.py`;真实 QNAP 库 gates 实测 `direct 10 / weak 8 / unlinked 3`,4 条 no_finding 标为"仅完整性复核"。
 
+### P9 验收纠偏(2026-11-06)✅ 离线部分完成
+
+- **缓存对比分层**:同 Provider/模型下按 prompt 规模分层 —— <20k:Pi 88.47%(n=338) vs fwcore 89.8%(31 次),
+  **持平**;20k–150k:Pi 95.4–99.1%,fwcore 无 post-fix 数据(修复前 26.9–54.2%,受 system churn 影响)。
+  98.96% 是 Pi 均值 423k 长历史的数字,与 fwcore 均值 12k 不可直接比。可复核脚本
+  `scripts/pi_cache_stats.py`(只读/脱敏/可过滤/可按规模分层)。
+- **摘要覆盖(P0)**:`summarize_covered` 按协议组装块 + 超大消息切片 + 归并;超过 `summarize_max_calls` 或
+  任一块为空 ⇒ 失败(历史保留),不再是"摘要最早一段、删掉其余"。
+- **摘要预算(P0)**:摘要调用与普通调用同一条**调用前**预算检查,计入 `run_calls`/`model.call(kind=summarize)`。
+- **上下文估算口径(P1)**:`estimated_input` 含 system+history+state+工具 schema+协议开销,并给出分解。
+- **阈值语义(P1)**:生产 1M 窗口 → 90%(10% 预留);小窗口用固定预留(73.3%),两种情形分别测试。
+- **多轮压缩(P1)**:真实序列(压缩→追加→压缩→进程退出/resume→压缩→advance),每步断言压缩实际发生。
+- **仍未验证**:真实 >500k 长历史的稳态命中率、真实多轮压缩后的 API 缓存重建。
 ### P9 Pi 真实基准 + fwcore 缓存对齐 + 压缩模拟 ✅ 完成(2026-11-06)
 
 - **Pi 实测(只读)**:pi 1.5.0;usage 字段 `input/cacheRead/cacheWrite/output/reasoning`;命中率

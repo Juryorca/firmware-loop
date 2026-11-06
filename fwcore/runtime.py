@@ -452,25 +452,32 @@ class Runner:
                         and _find_cut(history, self.limits.keep_recent_tokens) > 0):
                     before = estimate_tokens(history)
 
-                    def _summarize(old):
+                    def _summarize(chunk):
                         nonlocal run_calls
                         if self.summarizer:
-                            return self.summarizer(old)
+                            return self.summarizer(chunk)
+                        # 预算检查必须在**发起请求之前**(与普通调用同一条规则)
+                        if self.limits.calls_exhausted(run_calls + 1):
+                            raise RuntimeError("预算不足:拒绝摘要调用(历史保持原样)")
                         run_calls += 1
-                        text = _render_for_summary(old)
+                        text = _render_for_summary(chunk)
                         reply = _coerce_reply(self.model.chat(
                             [{"role": "user", "content": text}], []))
                         _event(self.con, "model.call", rid, {
-                            "kind": "summarize", "n_messages": 1,
+                            "kind": "summarize", "n_messages": len(chunk),
                             "usage_known": bool(reply.usage), "usage": reply.usage or {},
                             "prompt_tokens": (reply.usage or {}).get("prompt_tokens"),
                             "completion_tokens": (reply.usage or {}).get("completion_tokens"),
+                            "cached_tokens": ((reply.usage or {}).get("prompt_tokens_details")
+                                              or {}).get("cached_tokens"),
                         })
                         return reply.content or ""
 
                     try:
                         new_history, _info = compact_history(
-                            history, _summarize, self.limits.keep_recent_tokens)
+                            history, _summarize, self.limits.keep_recent_tokens,
+                            chunk_tokens=self.limits.summarize_chunk_tokens,
+                            max_calls=self.limits.summarize_max_calls)
                         if not _info.get("compacted"):        # 切不出东西 ⇒ 不动历史
                             raise RuntimeError("没有可压缩的完整协议组(keep_recent 过大)")
                     except Exception as e:
@@ -486,6 +493,7 @@ class Runner:
                 # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
                 # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
                 _sys = self.research.rules_prompt(target)
+                _state = self.research.state_prompt(target, goal, rid)
                 _status = build_status(
                     model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
                     window=self.limits.context_tokens or None,
@@ -493,9 +501,10 @@ class Runner:
                     output_reserve=self.limits.output_reserve_tokens,
                     context_tokens=self.limits.context_tokens,
                     last_prompt_tokens=self._last_usage.get("prompt_tokens"),
-                    last_cached_tokens=self._last_usage.get("cached_tokens"))
-                _state = self.research.state_prompt(target, goal, rid,
-                                                    context_note=_status.render())
+                    last_cached_tokens=self._last_usage.get("cached_tokens"),
+                    system=_sys, state=_state,
+                    schema=json.dumps(self.registry.describe(), ensure_ascii=False))
+                _state = _state + "\n\n" + _status.render()
                 _note = self._prepare_state.get("context_note")
                 if _note:
                     _state += "\n\n## 轮前准备(程序注入)\n" + _note
@@ -971,7 +980,7 @@ def _context_stats(system: str, history: list[dict]) -> dict:
             "other": other, "total": tool + assistant + other}
 
 
-def _render_for_summary(messages: list[dict], limit: int = 60_000) -> str:
+def _render_for_summary(messages: list[dict], limit: int = 2_000_000) -> str:
     """把要压缩的旧消息渲染成摘要请求(保留事实/地址/路径与 tool_call_id,不编造)。"""
     lines = ["把下面这段固件研究对话压成**结构化摘要**,保留:目标、已确认的技术事实(地址/字段/结论)、"
              "未解决问题、关键产物路径与 db_tool_call_id;不要添加原文没有的结论。只输出摘要。"]
@@ -982,11 +991,11 @@ def _render_for_summary(messages: list[dict], limit: int = 60_000) -> str:
             names = [((tc.get("function") or {}).get("name") or tc.get("name")) for tc in m["tool_calls"]]
             lines.append(f"[assistant] 调用工具: {names}")
             if c:
-                lines.append(f"[assistant] {c[:1500]}")
+                lines.append(f"[assistant] {c}")
         elif role == "tool":
-            lines.append(f"[tool {m.get('tool_call_id')}] {c[:1500]}")
+            lines.append(f"[tool {m.get('tool_call_id')}] {c}")
         else:
-            lines.append(f"[{role}] {c[:1500]}")
+            lines.append(f"[{role}] {c}")
     return "\n".join(lines)[:limit]
 
 

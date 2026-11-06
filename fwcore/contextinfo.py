@@ -18,6 +18,8 @@ class ContextStatus:
     model: str = ""
     window: int | None = None            # 模型上下文窗口(token);None = 未知
     estimated_input: int | None = None   # 本次请求估算(字符/2.0)
+    # 估算口径:system + history + state + tool schema + 协议开销(全部计入)
+    parts: dict = field(default_factory=dict)
     output_reserve: int = 0
     threshold: int = 0                   # 压缩触发阈值(0 = 关闭)
     compaction_enabled: bool = False
@@ -45,8 +47,11 @@ class ContextStatus:
             last = f"last reply usage: prompt {self.last_prompt_tokens:,}{cached}"
         else:
             last = "last reply usage: unknown"
+        scope = (f" (system {self.parts.get('system', 0):,} + history {self.parts.get('history', 0):,}"
+                 f" + state {self.parts.get('state', 0):,} + tools {self.parts.get('schema', 0):,}"
+                 f" + protocol {self.parts.get('protocol', 0):,})") if self.parts else ""
         lines = [
-            f"[Context status] model={model} window={window} estimated_input={est} "
+            f"[Context status] model={model} window={window} estimated_input={est}{scope} "
             f"output_reserve={self.output_reserve:,} available={avail} "
             f"auto_compact={'on' if self.compaction_enabled else 'off'} threshold={thr}.",
             f"{last}. estimated_input is an estimate (chars/2.0), not provider usage.",
@@ -71,14 +76,25 @@ class ContextStatus:
             "compaction_enabled": self.compaction_enabled, "prepare": self.prepare,
             "last_prompt_tokens": self.last_prompt_tokens,
             "last_cached_tokens": self.last_cached_tokens,
+            "parts": self.parts,
         }
 
 
 def build_status(*, model: str, window: int | None, messages: list[dict],
                  output_reserve: int, context_tokens: int,
                  last_prompt_tokens: int | None = None,
-                 last_cached_tokens: int | None = None) -> ContextStatus:
-    est = estimate_tokens(messages) if messages else 0
+                 last_cached_tokens: int | None = None,
+                 system: str = "", state: str = "", schema: str = "") -> ContextStatus:
+    """estimated_input **包含整个请求**:system + history + 尾部 state + 工具 schema + 协议开销。
+
+    只估 history 会把容量报大(实际请求还有 system/工具定义),这里统一计入并给出分解。
+    """
+    hist = estimate_tokens(messages) if messages else 0
+    sys_t = estimate_tokens([{"role": "system", "content": system}]) if system else 0
+    state_t = estimate_tokens([{"role": "user", "content": state}]) if state else 0
+    schema_t = estimate_tokens([{"role": "user", "content": schema}]) if schema else 0
+    protocol = 8 * max(0, len(messages))        # 每条消息的角色/分隔/工具协议开销(保守常数)
+    est = hist + sys_t + state_t + schema_t + protocol
     thr = threshold_tokens(context_tokens, output_reserve)
     enabled = context_tokens > 0
     prepare = bool(thr) and est >= int(thr * 0.9)
@@ -86,4 +102,6 @@ def build_status(*, model: str, window: int | None, messages: list[dict],
                          output_reserve=output_reserve, threshold=thr,
                          compaction_enabled=enabled, prepare=prepare,
                          last_prompt_tokens=last_prompt_tokens,
-                         last_cached_tokens=last_cached_tokens)
+                         last_cached_tokens=last_cached_tokens,
+                         parts={"system": sys_t, "history": hist, "state": state_t,
+                                "schema": schema_t, "protocol": protocol})

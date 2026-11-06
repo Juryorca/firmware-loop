@@ -29,8 +29,10 @@ def test_status_reports_numbers_and_prepare():
     st = build_status(model="m", window=1_000_000, messages=msgs,
                       output_reserve=8_000, context_tokens=1_000_000,
                       last_prompt_tokens=1234, last_cached_tokens=1000)
-    assert st.estimated_input == 850_000
-    assert st.available == 1_000_000 - 850_000 - 8_000
+    # 口径 = history + 协议开销(每条 8 tokens,保守常数)
+    assert st.estimated_input == 850_000 + 8 * 1
+    assert st.parts["history"] == 850_000
+    assert st.available == 1_000_000 - st.estimated_input - 8_000
     assert st.threshold == threshold_tokens(1_000_000, 8_000) == 900_000
     assert st.prepare is True
     txt = st.render()
