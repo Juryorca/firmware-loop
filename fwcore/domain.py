@@ -327,13 +327,37 @@ class Domain:
             _event(c, "attempt.finished", aid, {"result": result, "hypothesis": row["hypothesis_id"]})
 
     # ---------------- 观察 / 证据 ----------------
-    def add_observation(self, target: str, text: str, *, attempt_id: str | None = None) -> str:
+    def add_observation(self, target: str, text: str, *, attempt_id: str | None = None,
+                        tool_call_id: str | None = None, path: str | None = None) -> str:
+        """登记一条**已确认**的技术观察(可带来源)。
+
+        来源校验与证据同一条规则:同 target、状态 ok;有 path 就算 sha256。
+        旧观察没有来源时保持 NULL(如实标注,不补造)。
+        """
         t = self.target(target)
+        sha = None
+        if tool_call_id:
+            tc = self.con.execute(
+                "SELECT t.id, t.status, r.target_id FROM tool_calls t"
+                " LEFT JOIN runs r ON r.id=t.run_id WHERE t.id=?", (tool_call_id,)).fetchone()
+            if not tc:
+                raise NotFound(f"工具调用不存在: {tool_call_id}")
+            if tc["target_id"] and tc["target_id"] != t.id:
+                raise InvariantViolation("观察与工具调用不属于同一个目标")
+            if tc["status"] != "ok":
+                raise InvariantViolation(f"工具调用状态是 {tc['status']} ⇒ 不能作为观察来源")
+        if path:
+            full = path if os.path.isabs(path) else os.path.join(self.root, path)
+            if not os.path.isfile(full):
+                raise NotFound(f"观察来源文件不存在: {path}")
+            sha = _sha256_file(full)
         oid = new_id("O")
         with Tx(self.con) as c:
-            c.execute("INSERT INTO observations(id,target_id,attempt_id,text,created_at) VALUES(?,?,?,?,?)",
-                      (oid, t.id, attempt_id, text, _now()))
-            _event(c, "observation.added", oid, {"attempt": attempt_id})
+            c.execute("INSERT INTO observations(id,target_id,attempt_id,text,tool_call_id,path,sha256,"
+                      "created_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (oid, t.id, attempt_id, text, tool_call_id, path, sha, _now()))
+            _event(c, "observation.added", oid,
+                   {"attempt": attempt_id, "tool_call": tool_call_id, "path": path})
         return oid
 
     def promote_observation(self, oid: str, title: str, *, priority: int = 100) -> str:

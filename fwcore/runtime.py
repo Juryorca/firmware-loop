@@ -763,7 +763,7 @@ class Runner:
             "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1", (rid,)
         ).fetchone()
         try:
-            history = json.loads(ck["messages"]) if ck else []
+            history = _sanitize_history(json.loads(ck["messages"])) if ck else []
         except (json.JSONDecodeError, TypeError) as e:      # 检查点损坏 ⇒ 从空历史继续(记录事件)
             history = []
             with _db.Tx(self.con) as c:
@@ -901,7 +901,7 @@ def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
         # 数据库 TC-… 与协议 tool_call_id(模型给的 call_…)不是一回事:
         # 内容里只保留 db_tool_call_id,协议 id 留在消息层,避免模型拿错
         out["db_tool_call_id"] = out.pop("tool_call_id")
-    full = json.dumps(out, ensure_ascii=False)
+    full = json.dumps(out, ensure_ascii=False, default=str)
     if len(full) <= limit:
         return full
     keep = ("status", "db_tool_call_id", "result_path", "stdout_path",
@@ -913,7 +913,7 @@ def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
            if isinstance(v, str) and len(v) > 200 and k not in base}
     base["_truncated"] = True
     base["_omitted"] = {k: len(v) for k, v in big.items()}
-    budget = limit - len(json.dumps(base, ensure_ascii=False)) - 100
+    budget = limit - len(json.dumps(base, ensure_ascii=False, default=str)) - 100
     excerpt = {}
     for k, v in big.items():
         if budget <= 0:
@@ -923,11 +923,35 @@ def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
         budget -= take
     if excerpt:
         base["excerpt"] = excerpt
-    s = json.dumps(base, ensure_ascii=False)
+    s = json.dumps(base, ensure_ascii=False, default=str)
     if len(s) <= limit:
         return s
     base.pop("excerpt", None)          # 极端情况:只留结构化元数据,保证不越界且合法
-    return json.dumps(base, ensure_ascii=False)
+    return json.dumps(base, ensure_ascii=False, default=str)
+
+
+def _sanitize_history(history: list[dict]) -> list[dict]:
+    """旧版硬截断留下的工具回复可能是非法 JSON;加载时包成合法结构,原文节选保留。
+
+    不伪造来源:`history_corrupt=true` + 说明"请用工具重新读取产物",不编 tool_call_id。
+    """
+    for m in history:
+        if m.get("role") != "tool":
+            continue
+        c = m.get("content")
+        if not isinstance(c, str):
+            continue
+        try:
+            json.loads(c)
+            continue
+        except (ValueError, TypeError):
+            pass
+        m["content"] = json.dumps({
+            "status": "unknown", "history_corrupt": True,
+            "note": "历史工具回复是旧版硬截断产物(非法 JSON);原始内容需用工具重新读取",
+            "excerpt": c[:1500],
+        }, ensure_ascii=False)
+    return history
 
 
 def _shrink_history(history: list[dict], keep_full: int = 20, artifact_of=None) -> list[dict]:

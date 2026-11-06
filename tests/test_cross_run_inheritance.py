@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.limits import Limits
@@ -75,3 +77,26 @@ def test_observation_survives_to_next_run(tmp_path):
     r.run(r.start("t1", "继续"), "t1", goal="继续")
     assert oid in model.prompts[0]
     assert "0x19908" in model.prompts[0]
+
+
+def test_observation_source_is_validated_and_kept(tmp_path):
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    rid = "R-1"
+    tid = con.execute("SELECT id FROM targets").fetchone()["id"]
+    con.execute("INSERT INTO runs(id,target_id,state,started_at,updated_at) VALUES(?,?,?,?,?)",
+                (rid, tid, "running", "2026-11-06T00:00:00Z", "2026-11-06T00:00:00Z"))
+    con.execute("INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,created_at)"
+                " VALUES('TC-1','k','R-1','shell_exec','{}','ok','2026-11-06T00:00:01Z')")
+    os.makedirs(os.path.join(root, "report", "artifacts"), exist_ok=True)
+    with open(os.path.join(root, "report", "artifacts", "op.txt"), "w", encoding="utf-8") as f:
+        f.write("0x19908 CGI_Find_Parameter(\"op\")\n")
+    oid = dom.add_observation("t1", "0x19908 取 op 后 strtol",
+                              tool_call_id="TC-1", path="report/artifacts/op.txt")
+    row = con.execute("SELECT tool_call_id,path,sha256 FROM observations WHERE id=?", (oid,)).fetchone()
+    assert row["tool_call_id"] == "TC-1" and row["path"].endswith("op.txt") and len(row["sha256"]) == 64
+    from fwcore.domain import InvariantViolation, NotFound
+    with pytest.raises((InvariantViolation, NotFound)):
+        dom.add_observation("t1", "x", tool_call_id="TC-1", path="report/artifacts/missing.txt")

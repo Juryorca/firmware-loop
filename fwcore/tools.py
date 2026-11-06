@@ -398,8 +398,11 @@ def state_add_hypothesis(ctx: ToolContext, args: dict) -> dict:
 
 
 def state_add_observation(ctx: ToolContext, args: dict) -> dict:
-    oid = ctx.domain.add_observation(args["target"], args["text"], attempt_id=args.get("attempt_id"))
-    return {"status": "ok", "observation_id": oid}
+    oid = ctx.domain.add_observation(
+        args["target"], args["text"], attempt_id=args.get("attempt_id"),
+        tool_call_id=args.get("tool_call_id"), path=args.get("path"))
+    return {"status": "ok", "observation_id": oid,
+            "source": {"tool_call_id": args.get("tool_call_id"), "path": args.get("path")}}
 
 
 RELATION_BY_TOOL = {"fs_read": "read", "fs_hash": "hash",

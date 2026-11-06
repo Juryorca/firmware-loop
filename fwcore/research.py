@@ -91,6 +91,64 @@ def kb_titles(root: str) -> list[str]:
     return out
 
 
+def _clip(s, n: int) -> str:
+    return (s or "").strip().replace("\n", " ")[:n]
+
+
+def _facts_lines(hyps, evs, obs, budget: int = 2900) -> list[str]:
+    """按**类别配额**呈现研究事实:任何一类都不能被别的类别挤到完全看不见。
+
+    只给"索引 + 关键内容":标题/范围截断、证据给路径与来源、观察给文本与来源;
+    全文仍在数据库与磁盘(模型可用 fs_read 按路径取)。
+    """
+    def h_lines():
+        out = []
+        for h in hyps:
+            line = f"- {h['id']} [{h['state']}/{h['verdict'] or '-'}] {_clip(h['title'], 70)}"
+            if h["scope_note"]:
+                line += f"\n  范围: {_clip(h['scope_note'], 60)}"
+            out.append(line)
+        return out
+
+    def e_lines():
+        return [f"- {e['id']} {_clip(e['path'] or '(capture)', 70)}"
+                f" [{e['link_relation'] or 'unlinked'}]"
+                + (f" (来源 {e['tool_call_id']})" if e["tool_call_id"] else "")
+                for e in evs]
+
+    def o_lines():
+        return [f"- 观察 {o['id']}: {_clip(o['text'], 150)}"
+                + (f" (来源 {o['tool_call_id']})" if o["tool_call_id"] else "")
+                + (f" 文件 {_clip(o['path'], 50)}" if o["path"] else "")
+                for o in obs]
+
+    cats = [("假设", h_lines(), 0.40), ("证据", e_lines(), 0.28), ("观察", o_lines(), 0.32)]
+    picked = {name: [] for name, _, _ in cats}
+    left = budget
+    for name, lines, share in cats:
+        quota = int(budget * share)
+        used = 0
+        for ln in lines:
+            if used + len(ln) + 1 > quota:
+                break
+            picked[name].append(ln)
+            used += len(ln) + 1
+        left -= used
+    # 剩余预算再按顺序补(前面的类别先补),避免某一类明明还有内容却被饿死
+    for name, lines, _ in cats:
+        for ln in lines[len(picked[name]):]:
+            if len(ln) + 1 > left:
+                break
+            picked[name].append(ln)
+            left -= len(ln) + 1
+    out: list[str] = []
+    for name, _, _ in cats:
+        if picked[name]:
+            out.append(f"### {name}")
+            out += picked[name]
+    return out
+
+
 @dataclass
 class Research:
     """研究循环的载体:构建系统提示 + 管理池/三镜/双输出。"""
@@ -325,26 +383,16 @@ class Research:
             "SELECT id,state,verdict,title,scope_note FROM hypotheses"
             " WHERE target_id=? ORDER BY updated_at DESC LIMIT 25", (t.id,)))
         evs = list(self.domain.con.execute(
-            "SELECT id,path,link_relation FROM evidence WHERE target_id=?"
+            "SELECT id,path,link_relation,tool_call_id FROM evidence WHERE target_id=?"
             " ORDER BY created_at DESC LIMIT 25", (t.id,)))
         # 观察 = 已确认但还不足以成假设的技术事实;不注入的话跨 run 就丢了
         obs = list(self.domain.con.execute(
-            "SELECT id,text FROM observations WHERE target_id=?"
+            "SELECT id,text,tool_call_id,path FROM observations WHERE target_id=?"
             " ORDER BY created_at DESC LIMIT 15", (t.id,)))
         if hyps or evs or obs:
-            facts = ["", "## 已有研究事实(程序从数据库读出;先复用,不要重做)"]
-            for h in hyps:
-                facts.append(f"- {h['id']} [{h['state']}/{h['verdict'] or '-'}] "
-                             f"{h['title'][:110]}")
-                if h["scope_note"]:
-                    facts.append(f"  范围: {h['scope_note'][:110]}")
-            for e in evs:
-                facts.append(f"- {e['id']} {e['path'] or '(capture)'} "
-                             f"[{e['link_relation'] or 'unlinked'}]")
-            for o in obs:
-                facts.append(f"- 观察 {o['id']}: {(o['text'] or '').strip()[:220]}")
-            parts += ["\n".join(facts)[:3000]]
-
+            facts = ["## 已有研究事实(程序从数据库读出;先复用,不要重做)"]
+            facts += _facts_lines(hyps, evs, obs)
+            parts += ["\n".join(facts)[:3200]]
         brief = self.progress_brief(target, run_id)
         if brief:
             parts += ["", "## 研究进度(程序按数据库事实生成;这些是待办,不是必须按顺序执行的脚本)",

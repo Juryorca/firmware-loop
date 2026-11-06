@@ -106,3 +106,17 @@ def test_checkpoint_shrink_keeps_stdout_path(tmp_path):
     out = _shrink_history(history, keep_full=0, artifact_of=r._artifact_of)
     assert "state/artifacts/TC-1.stdout.txt" in out[0]["content"]
     assert out[0]["tool_call_id"] == "TC-1"
+
+
+def test_sanitize_history_repairs_legacy_truncated_json(tmp_path):
+    """旧 checkpoint 里的非法 JSON 工具回复:加载时包成合法结构,原文节选保留。"""
+    from fwcore.runtime import _sanitize_history
+
+    history = [{"role": "tool", "tool_call_id": "call_1",
+                "content": '{"status": "ok", "text": "AAAA…(截断'}]
+    out = _sanitize_history(history)
+    d = json.loads(out[0]["content"])
+    assert d["history_corrupt"] is True and "AAAA" in d["excerpt"]
+    # 合法 JSON 不动
+    ok = [{"role": "tool", "tool_call_id": "c2", "content": '{"status":"ok"}'}]
+    assert _sanitize_history(ok)[0]["content"] == '{"status":"ok"}'
