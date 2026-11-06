@@ -352,7 +352,19 @@ else:
 rd = os.path.join(state, "report")
 SKIP = {"INDEX.md", "CVE-request-mitre.md", "attack-surface.md", "CLOSURE.md"}
 NEED = ["Summary", "Root Cause", "Steps to Reproduce", "Evidence"]
-advs = [f for f in sorted(os.listdir(rd)) if f.endswith(".md") and f not in SKIP] if os.path.isdir(rd) else []
+# 只有"advisory 文档"才按骨架核:VR-* 命名或含 `## Summary`;
+# 研究记录(report.md / *-findings.md)是内部材料,不冒充 advisory(与 gates_db 同一规则)
+advs = []
+if os.path.isdir(rd):
+    for _f in sorted(os.listdir(rd)):
+        if not _f.endswith(".md") or _f in SKIP:
+            continue
+        try:
+            _body = open(os.path.join(rd, _f), encoding="utf-8").read()
+        except OSError:
+            continue
+        if _f.startswith("VR-") or "## Summary" in _body:
+            advs.append(_f)
 if not advs: print("finding: 0 个 advisory(本轮无 finding)")
 for adv in advs:
     name = adv[:-3]
