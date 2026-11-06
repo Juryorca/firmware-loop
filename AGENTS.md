@@ -19,27 +19,24 @@
    自研改写多 ⇒ 厂商特有缺陷概率高,**优先**;纯上游拼装 ⇒ 期望值低,注意力放到**厂商接线处**(配置/权限映射/插件);
    上游本体深挖(需源码 + fuzz 预算)**列为高成本备选**。
 2. **提取**: `binwalk -Me` / `unblob`(**两者产出都查**)→ rootfs 工作副本;必查 `LOOP.md`「扫面 / 提取」
-3. **面枚举 A1**: init/配置/监听 socket/二进制网络字符串(**含代理型入口**)→ surface map(入口 × 属性,含 `disposition`)→ notes
-   ⚠️ **清点必须在就绪态**(判据由目标自带,与取值一起留证)→ 枚举完整性以"**就绪态实测清单**"为输入,不靠事后对账
-   ⚠️ **入口清点必须分层全量导出**(别"看到就记":监听 socket **与** 反向代理 location / 运行时生成路由表都要导,
-      **以及收报文非 socket(NFQUEUE/raw)与非网络触发入口**、**顶层封装应用包**;
-      **且在该面存在的状态下**导,并留就绪/状态判据)—— **细则见 `LOOP.md`「扫面 / 提取」**。
+3. **面枚举 A1**: init/配置/监听 socket/二进制网络字符串(**含代理型入口**)→ surface map(`surfaces` 表:入口 × 属性 × `disposition`)
+   ⚠️ 清点必须在**就绪态**、**分层全量导出**(三态入口 / 代理 location / 运行时路由 / 封装应用包);静态 ⊖ 就绪 = 待查漏项
+   —— **细则见 `LOOP.md`「扫面 / 提取」**(本文件不重复)。
    ⚠️ **单一漏斗**:surface map 只登记"面 × 属性 × disposition",**不承载待办**;任何"要打的东西"(未判定面、机制复发、
    新观察升成的假设、误判回溯的新方向)**唯一下游 = 假设池**(= 队列);**禁止另立清单**(Lead/重开/起点清单都是历史事故)
 4. **选工作项**: 从 **假设池(唯一队列)**的"未处理"条目按排序因子**取队首**(模板见 `LOOP.md`「假设池」);面的属性(可达性/输入可控性/
    未理解度)只作**过滤与排序因子**;来源限 `disposition=未判定` 的面或**未收口的线索**
-5. **理解该面(建模,硬;跨轮累积)**: 更新组件卡与"未收口线索表"(不是每轮从零写);产出 3–5 行 —— ①**信任边界**在哪 ②**输入可控点**(谁能控制什么)③**决定安全的判定点**(位置/函数/条件)
-   ④已知保护 ⑤**推翻它需要什么**(攻击者视角)**⑥若我是作者,这里最可能漏检查的是 …**(作者视角,一句话 + 具体位置)。
-   判据层级见 `LOOP.md`「结论的依据层级」;**没有这一步不许进"构造"**(它是"预测漏洞位置"的依据)
+5. **理解该面(建模,硬;跨轮累积)**: 更新组件卡与"未收口线索表"(不是每轮从零写);产出模板见 `LOOP.md`「建模模板」
+   (信任边界/输入可控点/判定点/已知保护/推翻条件/作者视角)。依据层级见 `LOOP.md`「结论的依据层级」;
+   **没有这一步不许进"构造"**(它是"预测漏洞位置"的依据)。
 6. **建场**: 把前置状态在本地造出来(主体/证书/配置/会话/IdP)+ `pristine vs 预设` 差分;必查 methodology「建场 + 双实例差分」
 7. **构造与验证**: 按第 5 步的模型**预测位置** → 构造**利用形态** → 机械化 oracle 验证;对照能做就做;**必查** `knowledge/vuln-patterns.md` + `misreports.md`
 8. **记录与沉淀**: 每轮 notes 追加"停止声明"(三行)+ 失败与**否证留门**;更新**假设池(唯一队列)**与**论点—证据表**(对外每条断言挂最强证据,可跨轮);
    可复用经验按准入归位 `knowledge/`;必查「文件准入与归属」
    **轮的定义(硬;细则见 `LOOP.md`「假设池 = 唯一队列」内的「轮的声明格式」)**: 每轮声明 = 开头一行 `本轮目标: H-xx` + 收尾**两行** `本轮: H-xx → <定论/降级> + 证据` 与 `新观察: <与预期不符的事实 | 无(判据: …)>`(**双输出的后半**:新观察 ≠ 无 ⇒ 同轮升成 `H` 入池);**一条 H 一轮**(一轮内出现 ≥2 个 `本轮目标`、或出现"没有 `本轮目标` 的 `本轮:` 收口" = 轮结构违规,闸门会核)且 **finding 即收口**(出了"本轮新成立 finding" ⇒ 本轮到此结束、停下汇报,后续工作**另起一轮**)。
-8b. **三镜刷新(再入 A1)**: **在一个面/格收口时**(面推到 disposition 或一个技法格跑完;**下限:至少每 3 轮一次**;写法 = 一行固定格式,见 `LOOP.md`「三镜刷新」)带机制/作者/状态三镜回到第 3 步(机制镜=同机制复发面 / 作者镜=若我是作者最可能漏检查哪 /
-    状态镜=换状态·站点·配置·主体·版本)⇒ **新面/新假设先找齐 → 全部入假设池(带偏差陈述+可证伪判据,排入队列)
-    → 继续取队首**(默认自动继续;误判回溯不受此限,必做);
-    只有给出"无新面 + 判据"才允许收尾(就绪态清点见第 3 步;细则见 `LOOP.md`)
+8b. **三镜刷新(再入 A1)**: 一个面/格收口时做(机制/作者/状态;**下限每 3 轮**),格式与判据见 `LOOP.md`「三镜刷新」;
+    **新面/新假设先找齐 → 全部入池(偏差陈述 + 可证伪判据)→ 继续取队首**(默认自动继续;误判回溯不受此限);
+    只有给出"无新面 + 判据"才允许收尾。
 9. **收尾**: 按「Exit Criteria」判定 → **假设池每项有结论或显式降级**(不许留无解释的"未处理")→ **论点—证据表无"缺口"**(每条断言补到 L2/L3 或降级措辞)→ 清理 + 复核 →
    advisory / INDEX / attack-surface / CLOSURE;必查模板 + `derived_check.sh`
 
@@ -104,28 +101,9 @@
 - apt install <pkg>(本机为 **Kali rolling** 源;`sudo` 可用)
 - 已装(2026-09-21): **`afl++` 5.02c**(含 `afl-fuzz`/`showmap`/`tmin`/`cmin`/`clang-fast`;**不含** qemu/frida 模式)、
   `libglib2.0-dev` `libpixman-1-dev` `ninja-build`(构建 afl++ qemu_mode 的依赖); **`lld`**(交叉编译垫片用:`clang --target=aarch64-linux-gnu -shared -nostdlib -fuse-ld=lld` ✓)系统自带 `qemu-system-x86_64`/`qemu-x86_64`
-- 自建 fuzz 组件(无 apt 包 ⇒ 源码构建;产物**按架构分目录**,不都放 `/usr/local/bin/`):
-  **`afl-qemu-trace`**(2,718,448 B;**只编了 x86_64**) + **`libqasan.so`**(81,984 B)。
-  ⚠️ **跨架构未验证**:当时的冒烟(`afl-showmap -Q -- /bin/cat`,109 tuples)用的是 **x86_64** 二进制 ⇒ **aarch64 guest 不可用**
-  (`Invalid ELF image for this architecture`)⇒ 本工作区绝大多数目标(ARM)的 fuzz 格**默认不可用**;先验:`afl-qemu-trace -h | head -2`。
-  ❌ **更正(2026-11-04 探针实测)**:`~/.local/bin/afl-aarch64/afl-qemu-trace` **实际是 x86-64** ✗
-  (`file` 判定 x86-64;`fw-core capabilities` 报 `arch_mismatch`)⇒ **本机当前没有可用的 aarch64 tracer**,
-  ARM 目标 fuzz 不可用,需按下面的配方**重建**后才能用 ✓(原记载的"已补 aarch64"不成立)
-  ~~✅ 已补(2026-09-29 实测):aarch64 版 trace 已构建并装到 `~/.local/bin/afl-aarch64/afl-qemu-trace`(4,661,184 B;
-  `/usr/local/bin` 那份 x86_64 未动,两者并存)。冒烟:AFL_PATH 指向它 ⇒ `Using QEMU binary: <该路径>` + aarch64 `busybox cat` **168 tuples**、
-  aarch64 `7z l` **2696 tuples**;不设 AFL_PATH(用 x86_64 那份)**0 tuples** ⇒ A/B 成立。
-  ⚠️ **偏差**:aarch64 构建**未产出 `libqasan.so`**(脚本报 `Cross compiler aarch64-pc-linux-gnu-gcc could not be found`)
-  ⇒ aarch64 上 **ASan 模式不可用**(不要设 `AFL_USE_QASAN`);上面 `{afl-qemu-trace,libqasan.so}` 的写法只对 x86_64 那份成立。
-  **源码树已删**(`~/opt/AFLplusplus-stable/` 不存在 ✗)。**补装/换架构**(二选一):
-  ① 自建(≈10 分钟;峰值 ~1.1 GB,编完删树只留 ~4.5 MB):重取 `codeload.github.com/AFLplusplus/AFLplusplus/tar.gz/refs/heads/stable`
-     → **⚠️ 先编本体**(qemu 脚本依赖 `../afl-showmap`,否则报 `../afl-showmap not found`):`cd AFLplusplus-stable && make -j$(nproc) source-only`
-     → `cd qemu_mode && PATH=$HOME/ENTER/envs/pwn/bin:$PATH CPU_TARGET=aarch64 ./build_qemu_support.sh`;
-     **装法与多架构并存(实测过)**:AFL 找的是**写死文件名** `afl-qemu-trace` ⇒ **按架构分目录,用 `AFL_PATH` 选**
-     (实测 `AFL_PATH=<dir>` 会顶替 PATH,它自己打印 `Using QEMU binary: <dir>/afl-qemu-trace`)——
-     例:`~/.local/bin/afl-aarch64/afl-qemu-trace`(**aarch64 那份没有 `libqasan.so`** ✓)⇒ 用时 `AFL_PATH=$HOME/.local/bin/afl-aarch64 afl-fuzz -Q …`;
-     `/usr/local/bin` 那份(x86_64)保持不动,两者并存 ✓(**别只放 `/usr/lib/afl/`**:实测**不生效** ⇒ 见 `tool-quirks.md`);
-  ② 容器镜像 `aflplusplus/aflplusplus`(qemu 模式已构建 ✓ 零编译;用完删容器/镜像 ✓)。
-  细节与判读见 `knowledge/tool-quirks.md`「`afl-qemu-trace` 可能只编译了单一架构」。
+- 自建 fuzz 组件(产物按架构分目录,`AFL_PATH` 选):x86_64 `afl-qemu-trace`(2.7MB)+`libqasan.so` 在 `/usr/local/bin`;
+  **aarch64 无可用 tracer**(`~/.local/bin/afl-aarch64/…` 实测是 x86-64 ⇒ `arch_mismatch`)⇒ **ARM 目标 fuzz 默认不可用**;
+  重建/换架构配方与判读见 `knowledge/tool-quirks.md`「`afl-qemu-trace` 可能只编译了单一架构」。
 - **补丁版 qemu-user(解 netlink 白名单)**: `qemu-aarch64-patched`(49 MB 静态,装于 `~/.local/bin/`)—— 上游 qemu-user 对 netlink 协议是**硬编码白名单**
   (只放行 ROUTE/KOBJECT_UEVENT/AUDIT)⇒ `NETLINK_NETFILTER`(NFQUEUE 类 daemon)/`SOCK_DIAG`/`XFRM`/`GENERIC` 全被拒。
   **已装好,各轮直接用**:`qemu-aarch64-patched -L <rootfs> <guest_bin>`;判读探针在 `tools/qemu-nl-probe/`,
