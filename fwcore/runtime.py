@@ -545,7 +545,9 @@ class Runner:
                         out = self._exec_tool_call(ctx, call, rid)
                         history.append({"role": "tool", "tool_call_id": call.get("id"),
                                         "name": call["name"],
-                                        "content": json.dumps(out, ensure_ascii=False)[:8000]})
+                                        # 有界且**始终合法**的 JSON:硬截断会把大字段切在中间,
+                                        # 模型收到坏 JSON、并丢掉后面的 tool_call_id/产物路径
+                                        "content": _bounded_tool_result(out)})
                         _event(self.con, "tool.called", out.get("tool_call_id"),
                                {"tool": call["name"], "status": out.get("status")})
                         if out.get("needs_user_input"):
@@ -885,6 +887,47 @@ def _context_stats(system: str, history: list[dict]) -> dict:
             other += n
     return {"system": len(system), "tool": tool, "assistant": assistant,
             "other": other, "total": tool + assistant + other}
+
+
+def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
+    """工具结果给模型看的版本:整体 JSON 合法,关键字段优先保留。
+
+    - `db_tool_call_id`:数据库 TC-…(state_add_evidence 认这个,不是协议 id)
+    - 产物路径/哈希/状态/错误/退出码/摘要一律保留;大字段只给节选 + 原长度
+    - 完整输出仍在磁盘(`stdout_path`/`result_path`)与数据库
+    """
+    out = dict(out)
+    if out.get("tool_call_id"):
+        # 数据库 TC-… 与协议 tool_call_id(模型给的 call_…)不是一回事:
+        # 内容里只保留 db_tool_call_id,协议 id 留在消息层,避免模型拿错
+        out["db_tool_call_id"] = out.pop("tool_call_id")
+    full = json.dumps(out, ensure_ascii=False)
+    if len(full) <= limit:
+        return full
+    keep = ("status", "db_tool_call_id", "result_path", "stdout_path",
+            "stderr_path", "result_sha256", "sha256", "exit_code", "error", "note",
+            "path", "bytes", "truncated", "duration_ms", "replayed", "next",
+            "needs_user_input", "provider", "capability")
+    base = {k: out[k] for k in keep if k in out}
+    big = {k: v for k, v in out.items()
+           if isinstance(v, str) and len(v) > 200 and k not in base}
+    base["_truncated"] = True
+    base["_omitted"] = {k: len(v) for k, v in big.items()}
+    budget = limit - len(json.dumps(base, ensure_ascii=False)) - 100
+    excerpt = {}
+    for k, v in big.items():
+        if budget <= 0:
+            break
+        take = min(len(v), max(0, budget))
+        excerpt[k] = v[:take]
+        budget -= take
+    if excerpt:
+        base["excerpt"] = excerpt
+    s = json.dumps(base, ensure_ascii=False)
+    if len(s) <= limit:
+        return s
+    base.pop("excerpt", None)          # 极端情况:只留结构化元数据,保证不越界且合法
+    return json.dumps(base, ensure_ascii=False)
 
 
 def _shrink_history(history: list[dict], keep_full: int = 20, artifact_of=None) -> list[dict]:

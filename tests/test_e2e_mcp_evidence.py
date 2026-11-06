@@ -70,9 +70,9 @@ class ChainModel:
                 data = json.loads(m.get("content") or "{}")
             except json.JSONDecodeError:
                 continue
-            if m.get("name") == "mcp_fake_decompile" and data.get("tool_call_id"):
+            if m.get("name") == "mcp_fake_decompile" and data.get("db_tool_call_id"):
                 # 只认 MCP 那次调用的 id:所有工具结果都带自己的 tool_call_id,别被后来者覆盖
-                self.ids["tool_call_id"] = data["tool_call_id"]
+                self.ids["tool_call_id"] = data["db_tool_call_id"]
             for key in ("hypothesis_id", "attempt_id", "evidence_id", "check_id"):
                 if data.get(key):
                     self.ids[key] = data[key]

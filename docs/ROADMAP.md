@@ -25,15 +25,15 @@
 | 恢复/幂等 | ✅ | 死 pid 立即回收、活进程绝不回收、跨主机保守、`call_key` 幂等;新增 `tests/test_recovery_idempotency.py` 2 条 0.41s ✓(删检查点+step 回退模拟"副作用已生效但未落盘" ⇒ 恢复不重复执行;running 工具状态如实可见) |
 | 权限 vs 沙箱 | ✅(诚实标注) | `Authz` 增加 `isolation`(当前 `none`)与 `describe()`;`fw-core authz` 输出口径;`test_authz_reports_isolation_none_by_default` + `test_authz_root_check_does_not_sandbox_process` 证明"路径检查 ≠ 沙箱"(进程仍可访问 root 之外) |
 | Provider 可信度分级 | ✅ | `Probe.evidence`(discovered/configured/reachable/verified);`tests/test_providers.py` |
-| 研究评测(除 Pi 线对比) | ✅ | `eval/scoring.py`:对照组(安全实现)抓**假阳性**、`vulnerable` 结论必须有**挂在自己名下**的证据;新增 `eval/tasks/safe-control/`(先验签+全量 MAC+深度上限的安全实现);`tests/test_eval_scoring.py` 3 条 0.48s ✓;诱饵任务 `decoy-comment`(注释与实现相反)已加,score 4 条 0.81s ✓;待:与 Pi 线对比 |
+| 研究评测 | ✅ | `eval/scoring.py`:对照组(安全实现)抓**假阳性**、`vulnerable` 结论必须有**挂在自己名下**的证据;新增 `eval/tasks/safe-control/`(先验签+全量 MAC+深度上限的安全实现);`tests/test_eval_scoring.py` 3 条 0.48s ✓;诱饵任务 `decoy-comment`(注释与实现相反)已加,score 4 条 0.81s ✓;待:与 Pi 线对比 |
 
 ## 第三阶段:主线(按依赖)
 
 | 项 | 状态 | 下一步 |
 |---|---|---|
-| **Gate 迁移到权威状态**(除 Pi 侧调用) | ✅ | `fwcore/gates_db.py`:覆盖度/收尾/三镜/材料 + **KB 条数 / 附件引用完整性 / legacy 对照**;CLI `fw-core gates <target> [--legacy]`;`tests/test_gates_db.py` 6 条 0.81s ✓;第三步完成:证据**版本一致性**与"结论必须挂自己证据"已进 gate(`evidence_version_mismatch` / unlinked 阻塞),`tests/test_gates_db.py` 9 条 1.24s ✓(含用**真实** `tools/derived_check.sh` 的 legacy 集成);下一步(需授权):Pi 侧调用同一 gate |
+| **Gate 迁移到权威状态** | ✅ | `fwcore/gates_db.py`:覆盖度/收尾/三镜/材料 + **KB 条数 / 附件引用完整性 / legacy 对照**;CLI `fw-core gates <target> [--legacy]`;`tests/test_gates_db.py` 6 条 0.81s ✓;第三步完成:证据**版本一致性**与"结论必须挂自己证据"已进 gate(`evidence_version_mismatch` / unlinked 阻塞),`tests/test_gates_db.py` 9 条 1.24s ✓(含用**真实** `tools/derived_check.sh` 的 legacy 集成);下一步(需授权):Pi 侧调用同一 gate |
 | **最终验证命令(可外部重跑)** | ✅ | `bash tools/fwcore_verify.sh`(cwd=仓库根;`PYTHONPATH` 由脚本设;临时目录 `.tmp/verify`,跑完自删);覆盖 8 个测试文件 + capabilities + gates 三项 |
-| Pi hook 接线 | ⏸ 待授权 | 需在**研究会话**里启用扩展(会改变 live harness 行为)⇒ 需用户明确同意后再做;桥本体已可用 | 
+| ~~Pi hook 接线~~ | ❌ 取消(不属于产品) | fwcore 不依赖 Pi Hook;Pi 是开发工具,其桥接代码已删除 |
 | 独立 MCP 客户端 | ✅ | `fwcore/mcp_client.py`(initialize/tools.list/tools.call;select 等超时;关闭时 killpg)+ `fw-core mcp list|probe|call`;`tests/test_mcp_client.py` 6 条 1.06s ✓(含"server 起不来必须 unreachable") |
 | 结构化研究工具 | ✅ | `fwcore/toolkit.py` 加 `OBSERVERS`(derived/queue/signal/fuzz/emu → 字段;解析不出标 `unparsed`)+ `tool_calls` 记录 provider/capability/arch/env;`tests/test_toolkit_structured.py` 4 条 0.53s ✓;IDA `ida_query`、Ghidra `ghidra_query`(能力缺失如实报错)已完成,测试 8 条 1.03s ✓ |
 | 研究评测加难 | ✅ | 三个任务:`safe-control`(安全实现测假阳性)、`decoy-comment`(注释与实现相反)、`decoy-log`(过期日志);`eval/scoring.py` 要求 vulnerable 结论挂**自己名下**证据;`tests/test_eval_scoring.py` 5 条 1.30s ✓ |
@@ -85,6 +85,7 @@
 | **上下文策略定稿** | ✅ 不裁剪 | 完整会话历史照常发送(缓存命中 ~99.93% 的 222,238 prompt 不是费用异常);**不设**字符上限旋钮;`model.call` 每次调用记账。测试:`test_context_budget.py`(全量发送 / 协议配对 / 恢复) |
 | **架构边界:Pi 是开发工具,不是产品** | ✅ | `fwcore` 独立运行:模型调用/工具执行/研究状态/证据/Watchdog/checkpoint/resume 全在产品内;**不依赖** Pi 会话、Pi Hook、continue-guard 或用户配置。已删除 `fwcore/pi_bridge.py`、`fwcore/pi_hook.py`、CLI `pi-event`(及对应测试);`.pi/` 进 `.gitignore` 并从版本管理移除(本地文件保留) |
 | **第三阶段产出复盘** | ✅ 有真分析,无落账 | `_notes/s3/` 有 12 份 `ann_*.txt`、9 份 `body_*.txt`、`all_calls.txt`(38 KB)与 4 个分析脚本(annotate/cfg/calls/body),均针对 op 子处理器反汇编;但 70 calls 内 **0 次 state_*** 调用 ⇒ 未入账。已在 Research 层加**提醒**(非配额):本 run ≥10 次工具调用却零证据挂账时提示"有可追溯产物就登记,纯探索不必" |
+| **工具结果给模型的那份:有界合法 JSON** | ✅ 真 bug 修复 | 原来 `json.dumps(out)[:8000]` 会**截断在字符串中间** ⇒ 模型收到非法 JSON,且 `tool_call_id`/产物路径被切掉;现 `_bounded_tool_result`:关键字段优先(状态/`db_tool_call_id`/`stdout_path`/`result_path`/哈希/错误/退出码),大字段只给节选+原长度,`_truncated` 标记。内容里**不再放协议 id**(避免与 DB `TC-…` 混用),协议 id 留在消息层。测试 `tests/test_tool_result_payload.py` 3 passed |
 | **第三阶段复盘 + 续跑** | ✅ 结论:分析真、落账空 | 原 30 次:36 tool calls 全是**真分析**(`_notes/s3/annotate.py|cfg.py|calls.py|body.py` 反汇编/CFG/调用点,产出 12 份 ann + 9 份 body),但 **0 次 state_* 调用** ⇒ 0 假设/0 证据;续跑 +40 calls(共 70)仍 0 落账 ⇒ 不是工具报错,是模型不落账。**没有编造记录**。下一步(未做):`progress_brief` 在"本 run 有产物但零登记"时给一次提示 |
 | **checkpoint 截断可追溯** | ✅ | `_shrink_history` 截断时带 `stdout_path`(shell_exec 输出)/`result_path` 与 `tool_call_id`;顺带修真 bug:keep_full=0 时 `[:-0]` 什么都不压 |
 | **跨 run 继承研究事实** | ✅ 修复 | 之前系统提示只有派生计数,新 run 看不到上一轮的假设/证据;现注入`## 已有研究事实`(最近 25 条假设+范围、25 条证据+来源关系),`test_cross_run_inheritance.py` 锁定 |
@@ -154,7 +155,7 @@
 
 | 项 | 状态 | 阻塞原因 | 解锁条件 |
 |---|---|---|---|
-| Pi hook 接线(在 `.pi/extensions/` 启用桥) | ⏸ 待授权 | 会改变**研究会话**的 live 行为(每条工具事件都写状态) | 用户明确同意后启用;桥本体(`fw-core pi-event` + 幂等)已可用 ✓ |
+| ~~Pi hook 接线~~ | ❌ 取消(不属于产品) | fwcore 不依赖 Pi Hook;Pi 是开发工具,其桥接代码已删除 |
 | 与 Pi 研究线对比(同一目标双跑) | ⏸ 待外部条件 | 需要真实的 Pi 研究会话产出与算力/时间窗口 | 用户指定一个目标并允许跑双线;评分器 `eval/scoring.py` 已可复用 ✓ |
 
 > 这两项**不是**"已完成",也不因本轮迭代结束而消失;它们挡住的是 ROADMAP 的"全部验收完成"。

@@ -478,7 +478,7 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
             out["note"] = ("未建立来源关联(弱线索);如需确定来源,补充 tool_call_id 或"
                            "用产生该文件的那次调用的产物路径")
             out["next"] = ("补来源:state_add_evidence(..., tool_call_id=<产生该文件的那次调用 id>);"
-                           "工具结果里带 tool_call_id 字段")
+                           "工具结果里的字段是 db_tool_call_id(数据库 id,不是协议 call_…)")
     return out
 
 
