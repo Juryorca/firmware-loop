@@ -13,7 +13,7 @@ from fwcore.limits import Limits
 from fwcore.models import ScriptedAdapter
 from fwcore.policy import Policy
 from fwcore.runtime import Runner
-from fwcore.watchdog import Watchdog
+from fwcore.watchdog import Watchdog, _proc_starttime
 
 
 def _mk(tmp_path):
@@ -213,3 +213,36 @@ def test_watchdog_does_not_clobber_finished_run(tmp_path):
     assert row["state"] == "finished"
     assert not (row["handback_reason"] or "").startswith("watchdog_paused")
     assert not [a for a in acts if a.get("run") == rid], acts
+
+
+def test_watchdog_stale_branch_does_not_clobber_finished_run(tmp_path):
+    """owner 还活着但心跳过期(长工具/挂起)时,stale 分支也不能把 finished 改成 paused。"""
+    con, dom, root, rid, hid = _mk(tmp_path)
+    con.execute("UPDATE runs SET state='finished', pid=?, pid_starttime=?, "
+                " heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?",
+                (os.getpid(), _proc_starttime(os.getpid()), rid))
+    acts = Watchdog(con, root, Limits(), heartbeat_timeout_s=60).scan_once()
+    row = con.execute("SELECT state,handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["state"] == "finished"
+    assert not (row["handback_reason"] or "").startswith("watchdog_paused")
+    assert not [a for a in acts if a.get("run") == rid], acts
+
+
+def test_watchdog_does_not_kill_pgids_of_finished_run(tmp_path):
+    """扫描与更新之间 run 已 finished ⇒ 不能提前 kill 它的进程组(会误杀新 owner 的工具)。"""
+    from fwcore.watchdog import _proc_starttime as _pst
+
+    con, dom, root, rid, hid = _mk(tmp_path)
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        art = os.path.join(root, "state", "artifacts", rid)
+        os.makedirs(art, exist_ok=True)
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{os.getpgid(child.pid)} {_pst(child.pid) or 0}\n")
+        con.execute("UPDATE runs SET state='finished', pid=999999, pid_starttime=1,"
+                    " heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+        Watchdog(con, root, Limits(), heartbeat_timeout_s=60).scan_once()
+        time.sleep(0.3)
+        assert child.poll() is None, "run 已 finished,看护不应杀掉它的进程组"
+    finally:
+        child.kill()

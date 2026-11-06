@@ -117,7 +117,7 @@ fi
 # ⑧ 工作区必须干净(不留临时产物)
 if [ -d "$WORK" ]; then rm -rf "$WORK"; fi
 if git status --porcelain | grep -q .; then
-  say "git status" "DIRTY(提交后再跑)"
+    say "git status" "FAIL(工作区 dirty;提交后重跑)"; fail=1
 else
   say "git status" "clean"
 fi

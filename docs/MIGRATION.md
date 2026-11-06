@@ -73,5 +73,5 @@ python3 -m pytest tests/test_migrate_all.py tests/test_no_markdown_fallback.py
 ## 5. 已知边界(如实)
 
 - 历史笔记没有结构化 `attempts` 行 ⇒ 该表 0 条;验证叙述在 `research_logs(kind=round)` 里,未编造。
-- 660 条 `needs_review`:多为无法机械判定的状态措辞/散文观察/汇总节;原文在 `documents`,可逐条复核。
+- 686 条 `needs_review`(见 §3):多为无法机械判定的状态措辞/散文观察/汇总节;原文在 `documents`,可逐条复核。
 - `notes.md` 保留为只读原始记录(不是第二事实源);清理需用户确认后再做。

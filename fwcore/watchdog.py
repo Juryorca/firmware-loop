@@ -189,11 +189,17 @@ class Watchdog:
                         actions.append({"run": r["id"], "kept_alive_by": "tool_inflight",
                                         "tool": inflight["tool"]})
                         continue
-                killed = self._kill_pgids(r["id"])
+                # 与 hard 分支同一条规则:**先赢下状态竞争**再杀组/写事件;
+                # 否则扫描→更新之间 run 可能已 finished/被 resume 接管,会误杀新 owner 的进程组
+                killed: list[int] = []
                 with _db.Tx(con) as c:
-                    c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=? WHERE id=?",
-                              (f"watchdog_paused: stale {round(now - hb, 1) if hb else 'unknown'}s",
-                               _now(), r["id"]))
+                    cur = c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=?"
+                                    " WHERE id=? AND state='running'",
+                                    (f"watchdog_paused: stale {round(now - hb, 1) if hb else 'unknown'}s",
+                                     _now(), r["id"]))
+                    if not cur.rowcount:
+                        continue
+                    killed = self._kill_pgids(r["id"])
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
                                json.dumps({"stale_s": round(now - hb, 1) if hb else None,
