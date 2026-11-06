@@ -45,6 +45,12 @@
 - **恢复就绪**:租约/心跳/看护竞态已修,`resume` 在 drill 库副本实测:计数从 130 延续、状态 finished、
   `handback=awaiting_user_close`(修复前会被误判 owner_dead 暂停)。
 - **阻塞**:续跑需用户批准付费模型(离线静态已完成并入库:观察 + 2 条 static-note 证据)。
+- **批准后的下一步(命令已备好,勿新建 run)**:
+  `python3 -m fwcore --root state/_scratch/realdrill-20261105-164147 resume R-20261105-3518ef1d --model openai`
+  goal 用 run 里已存的那条(继续 op 子处理器,勿重做静态);只做:
+  ①`op` 边界(缺失/非数字/负数/超大/重复参数)在四个分发器的实际响应;
+  ②`verification_code op=1` 失败分支(无 qtoken / client_id 不匹配)的 `error_code` 与会话字段;
+  ③把结果写成 observation/evidence(带来源),不要凭响应猜漏洞成立。
 
 ### P4 依赖库/样本边界(需 P1 运行结果)
 
