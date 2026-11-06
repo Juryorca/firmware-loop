@@ -247,3 +247,103 @@ def test_resume_reowns_run_and_clears_stale_handback(setup):
     assert row["pid"] == os.getpid()
     assert row["pid_starttime"] == _proc_starttime(os.getpid())
     assert not (row["handback_reason"] or "").startswith("watchdog_paused")
+
+
+def test_resume_refuses_live_owner(setup):
+    """同一 run 已有活主(另一个进程)时,resume 必须拒绝 —— 否则双跑=双倍付费+重复副作用。"""
+    import subprocess
+
+    from fwcore.runtime import _host, _proc_starttime
+
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    r.run(rid, "t1")
+    child = subprocess.Popen(["sleep", "30"])
+    try:
+        con.execute("UPDATE runs SET state='running', pid=?, pid_starttime=?, host=?,"
+                    " heartbeat_at=? WHERE id=?",
+                    (child.pid, _proc_starttime(child.pid), _host(),
+                     "2099-01-01T00:00:00+00:00", rid))
+        r2 = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: y", "tool_calls": []}]),
+                    policy=Policy(allow_high_risk=True))
+        with pytest.raises(RuntimeError):
+            r2.resume(rid)
+    finally:
+        child.kill()
+
+
+def test_owner_loss_mid_turn_does_not_overwrite(setup):
+    """模型调用期间 run 被别的进程接管 ⇒ 旧 owner 不得写 state/checkpoint。"""
+    con, dom, root = setup
+    rid_box = {}
+
+    class Steal(ScriptedModel):
+        def chat(self, messages, tools):
+            rep = super().chat(messages, tools)
+            if rid_box.get("done") is None:
+                con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?",
+                            (rid_box["rid"],))
+                rid_box["done"] = True
+            return rep
+
+    r = Runner(con, root, Steal(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    rid_box["rid"] = rid
+    res = r.run(rid, "t1")
+    row = con.execute("SELECT pid,state FROM runs WHERE id=?", (rid,)).fetchone()
+    assert res.handback == "owner_lost"
+    assert row["pid"] == 999999 and row["state"] != "finished"
+
+
+def test_cancel_finished_run_keeps_finished(setup):
+    """cancel 与 FINAL 竞争:cancel 不能把已 finished 的 run 改回 paused。"""
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    r.run(rid, "t1")
+    r.cancel(rid, "迟到的取消")
+    row = con.execute("SELECT state,handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["state"] == "finished"
+    assert not (row["handback_reason"] or "").startswith("user_stop")
+
+
+def test_resume_kills_orphan_tool_pgids_of_dead_owner(setup):
+    """接管死亡 owner 的 run 时,必须清掉它遗留的工具进程组(否则重复副作用/孤儿进程)。"""
+    import subprocess
+    import time
+
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    r.run(rid, "t1")
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        art = os.path.join(root, "state", "artifacts", rid)
+        os.makedirs(art, exist_ok=True)
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{os.getpgid(child.pid)}\n")
+        con.execute("UPDATE runs SET state='paused', pid=999999, pid_starttime=1,"
+                    " handback_reason='watchdog_paused: owner_dead' WHERE id=?", (rid,))
+        r2 = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: y", "tool_calls": []}]),
+                    policy=Policy(allow_high_risk=True))
+        r2.resume(rid)
+        time.sleep(0.3)
+        assert child.poll() is not None, "接管死亡 owner 后必须杀掉孤儿进程组"
+    finally:
+        child.kill()
+
+
+def test_heartbeat_does_not_steal_ownership(setup):
+    """B 的下一轮心跳不能用无条件 UPDATE 把 owner 抢回来(否则两进程来回抢)。"""
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (rid,))
+    assert r._heartbeat(rid) is False
+    row = con.execute("SELECT pid,pid_starttime FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["pid"] == 999999 and row["pid_starttime"] == 1

@@ -138,7 +138,7 @@ CHILD = textwrap.dedent('''
 
     root = sys.argv[1]; rid = sys.argv[2]
     con = db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
-    Runner(con, root, Crash(), max_steps=10).run(rid, "t1")
+    Runner(con, root, Crash(), max_steps=10).resume(rid)   # 接管(owner 已死)后继续
 ''')
 
 
@@ -148,6 +148,8 @@ def test_hard_crash_then_recover_and_resume(tmp_path):
     dom = Domain(con, root)
     dom.create_target("t1", version="1")
     rid = Runner(con, root, ScriptedModel(script=[]), max_steps=5).start("t1")
+    # 测试进程就是"原 owner";模拟它已死(否则新进程 resume 会按并发保护拒绝)
+    con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (rid,))
     con.close()
 
     child = os.path.join(root, "child.py")

@@ -232,13 +232,19 @@ class Runner:
         语义:在**安全点**停下(不打断工具内部),停 = paused + handback=user_stop,
         并杀掉该 run 的工具进程组;不写任何研究结论。
         """
+        won = False
         with _db.Tx(self.con) as c:
-            c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=? WHERE id=?",
-                      (f"user_stop: {reason}", _now(), rid))
-            _event(c, "run.cancelled", rid, {"reason": reason})
-        with contextlib.suppress(Exception):
-            from .watchdog import Watchdog
-            Watchdog(self.con, self.root)._kill_pgids(rid)
+            # 条件更新:扫描/调用之间 run 可能已 finished ⇒ 不能把完成态改回 paused
+            cur = c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=?"
+                            " WHERE id=? AND state='running'",
+                            (f"user_stop: {reason}", _now(), rid))
+            if cur.rowcount:
+                won = True
+                _event(c, "run.cancelled", rid, {"reason": reason})
+        if won:
+            with contextlib.suppress(Exception):
+                from .watchdog import Watchdog
+                Watchdog(self.con, self.root)._kill_pgids(rid)
         if self.mcp_bridge is not None:
             self.mcp_bridge.close()
 
@@ -307,13 +313,67 @@ class Runner:
             return f"run 状态已变为 {row['state']}"
         return None
 
-    def _heartbeat(self, rid: str) -> None:
-        # pid_starttime 必须一起刷新:看护用"pid 存活 + starttime 一致"判 owner,
-        # 只改 pid 不改 starttime ⇒ 接管后被误判 owner_dead(resume 立刻被 pause)
+    def _heartbeat(self, rid: str) -> bool:
+        """刷新心跳(仅当自己仍是 owner)。CAS:pid/starttime 对不上 ⇒ 不抢回所有权。
+
+        为什么必须条件更新:若 A 接管了 run,B 的下一轮 turn 若无条件写 pid,会把 owner
+        抢回来 ⇒ 两个进程来回"抢所有权"各自继续跑(重复付费/副作用)。返回 False = 已失去所有权。
+        """
+        me = os.getpid()
+        st = _proc_starttime(me)
         with _db.Tx(self.con) as c:
-            c.execute("UPDATE runs SET heartbeat_at=?, pid=?, pid_starttime=?, host=?, updated_at=?"
-                      " WHERE id=?",
-                      (_now(), os.getpid(), _proc_starttime(os.getpid()), _host(), _now(), rid))
+            cur = c.execute(
+                "UPDATE runs SET heartbeat_at=?, pid=?, pid_starttime=?, host=?, updated_at=?"
+                " WHERE id=? AND (pid IS NULL OR (pid=? AND (pid_starttime IS NULL OR pid_starttime=?)))",
+                (_now(), me, st, _host(), _now(), rid, me, st))
+            return cur.rowcount > 0
+
+    def _owns(self, rid: str) -> bool:
+        """本进程是否当前 owner(pid + starttime)。pid 为 NULL 的旧行按"无主"放行。"""
+        row = self.con.execute("SELECT pid,pid_starttime FROM runs WHERE id=?", (rid,)).fetchone()
+        if not row:
+            return False
+        if row["pid"] is None:
+            return True
+        if row["pid"] != os.getpid():
+            return False
+        cur = _proc_starttime(os.getpid())
+        return row["pid_starttime"] in (None, cur)
+
+    def _claim_run(self, rid: str) -> None:
+        """原子接管 run:活主存在 ⇒ 拒绝;CAS 失败 ⇒ 被别人抢先。
+
+        为什么需要:两个进程同时 resume 同一 run 会各跑一份 —— 双倍模型调用(付费)、
+        重复工具副作用、checkpoint 分叉。SQLite 的写事务只保证单条 UPDATE 原子,
+        不保证"读状态→接管"这段逻辑,必须用 CAS 把竞争收成一次条件更新。
+        """
+        row = self.con.execute(
+            "SELECT state,pid,pid_starttime,host FROM runs WHERE id=?", (rid,)).fetchone()
+        if not row:
+            raise KeyError(f"run 不存在: {rid}")
+        if row["pid"] and row["pid"] != os.getpid() and (row["host"] or "") == _host() \
+                and _pid_alive(row["pid"]):
+            cur = _proc_starttime(row["pid"])
+            if row["pid_starttime"] in (None, cur):
+                raise RuntimeError(f"run {rid} 正在被 pid {row['pid']} 执行(拒绝并发 resume)")
+        note = json.dumps({"limits": self._budget_snapshot(), "set_at": _now(), "via": "resume"},
+                          ensure_ascii=False)
+        with _db.Tx(self.con) as c:
+            cur = c.execute(
+                "UPDATE runs SET pid=?, pid_starttime=?, host=?, heartbeat_at=?, state='running',"
+                " handback_reason=NULL, budget_note=?, updated_at=?"
+                " WHERE id=? AND state=? AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                (os.getpid(), _proc_starttime(os.getpid()), _host(), _now(), note, _now(),
+                 rid, row["state"], -1 if row["pid"] is None else row["pid"],
+                 -1 if row["pid_starttime"] is None else row["pid_starttime"]))
+            if not cur.rowcount:
+                raise RuntimeError("run 已被其他进程接管(状态已变化);拒绝继续")
+        dead_owner = bool(row["pid"]) and (row["host"] or "") == _host() and not _pid_alive(row["pid"])
+        if dead_owner:
+            # 旧 owner 已死 ⇒ 它启动的工具进程组是孤儿,接管时一并清掉(防重复副作用/孤儿 fuzz)
+            with contextlib.suppress(Exception):
+                from .watchdog import Watchdog
+                Watchdog(self.con, self.root)._kill_pgids(rid)
 
     def context(self, target: str) -> dict:
         d = self.domain.derived(target)
@@ -365,6 +425,8 @@ class Runner:
         - **保留上限**:只留最近 `limits.checkpoints_keep` 条;
         - **库体积硬顶**:超过 `limits.max_db_bytes` 继续删最老的检查点,仍超 ⇒ 暂停 run(不写结论)。
         """
+        if not self._owns(rid):
+            return
         payload = json.dumps(_shrink_history(history, artifact_of=self._artifact_of),
                              ensure_ascii=False)
         with _db.Tx(self.con) as c:
@@ -398,6 +460,8 @@ class Runner:
 
     def _limit_hit(self, rid: str, reason: str, detail: dict | None = None) -> None:
         """记录"执行边界触发"。**只暂停**,不写任何研究结论。"""
+        if not self._owns(rid):
+            return
         with _db.Tx(self.con) as c:
             row = c.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()
             try:
@@ -423,8 +487,9 @@ class Runner:
             if not (row and (row["handback_reason"] or "").startswith("user_stop")):
                 with _db.Tx(self.con) as c:
                     c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
-        self._heartbeat(rid)        # 先接管 owner(pid+starttime),再起看护
-        self._watchdog_start()      # 否则 resume 时看护先看到旧 pid ⇒ 误判 owner_dead
+        if not self._heartbeat(rid):     # 先确认/刷新 owner;已被接管 ⇒ 立即退出
+            return RunResult(rid, "paused", step, rounds, "", False, [], "owner_lost", history)
+        self._watchdog_start()           # 心跳在起看护之前,避免旧 pid 被误判 owner_dead
         self._ensure_mcp()          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
         # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
@@ -436,6 +501,8 @@ class Runner:
         t0 = time.time()
 
         def _persist() -> None:
+            if not self._owns(rid):
+                return
             with _db.Tx(self.con) as c:
                 c.execute("UPDATE runs SET model_calls=?, tool_calls=?, elapsed_s=? WHERE id=?",
                           (run_calls, run_tools, run_elapsed + (time.time() - t0), rid))
@@ -446,6 +513,10 @@ class Runner:
             last_content_hashes: list[str] = []
             since = _now()
             while budget is None or budget > 0:
+                if not self._owns(rid):          # 被别的进程接管:立刻退出,不覆盖对方状态
+                    state = "paused"
+                    _event(self.con, "run.owner_lost", rid, {"pid": os.getpid()})
+                    break
                 stopped = self._external_stop(rid)
                 if stopped:
                     state = "paused"
@@ -709,6 +780,9 @@ class Runner:
                       final: str, history: list[dict]) -> RunResult:
         # 注意:MCP 桥**不在这里关** —— `advance()` 一轮结束后还要继续下一轮,
         # 关掉会让第 2 轮起所有 MCP 工具失效(实测过)。真正关闭在 `Runner.close()`。
+        if not self._owns(rid):
+            return RunResult(rid, "paused", step, rounds, final, False, [],
+                             "owner_lost", history)
         blockers = self.domain.closure_blockers(target)
         if self.research.mirror_due(target):
             blockers.append(f"三镜刷新超期({self.research.rounds_since_mirror(target)} 轮未做,"
@@ -831,6 +905,7 @@ class Runner:
         """持续推进,直到:收尾前置全清 / 需要用户输入 / 用完轮次预算。"""
         rid = run_id or self.start(target, goal)
         if run_id:
+            self._claim_run(rid)                  # 接管同一 run(并发 resume 防护)
             self._load_authorization(target)      # 新进程接着跑:授权/MCP 必须恢复
             self._ensure_mcp()
         # 续跑已有 run 必须从检查点恢复历史:否则模型只看到新 goal,
@@ -886,12 +961,8 @@ class Runner:
         history = self._load_history(rid)
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._ensure_mcp()
+        self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)
         with _db.Tx(self.con) as c:
-            # 接管:清掉上一次的 handback(否则 _handback 会把旧的 watchdog_paused 当现状)
-            c.execute("UPDATE runs SET state='running', handback_reason=NULL, budget_note=?,"
-                      " updated_at=? WHERE id=?",
-                      (json.dumps({"limits": self._budget_snapshot(), "set_at": _now(),
-                                   "via": "resume"}, ensure_ascii=False), _now(), rid))
             _event(c, "run.resumed", rid, {"step": row["step"],
                                            "mcp": bool(self.mcp_bridge and not self.mcp_bridge.closed)})
         try:
@@ -940,8 +1011,19 @@ class Runner:
             why = ("pid 已消失" if same_host and alive is not True else
                    f"跨主机心跳 {round(age, 1)}s 未更新")
             with _db.Tx(self.con) as c:
-                c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=? WHERE id=?",
-                          (f"recovered_stale: {why}", _now(), r["id"]))
+                cur = c.execute(
+                    "UPDATE runs SET state='paused', handback_reason=?, updated_at=?"
+                    " WHERE id=? AND state='running' AND IFNULL(pid,-1)=?"
+                    "   AND IFNULL(pid_starttime,-1)=?",
+                    (f"recovered_stale: {why}", _now(), r["id"],
+                     -1 if r["pid"] is None else r["pid"],
+                     -1 if r["pid_starttime"] is None else r["pid_starttime"]))
+                if not cur.rowcount:
+                    continue          # 扫描后已被 resume 接管 ⇒ 不能停它
+                # 主进程已死 ⇒ 它启动的工具进程组是孤儿,收敛时一并清掉(防孤儿 fuzz/工具)
+                with contextlib.suppress(Exception):
+                    from .watchdog import Watchdog
+                    Watchdog(self.con, self.root)._kill_pgids(r["id"])
                 _event(c, "run.recovered_stale", r["id"],
                        {"age_s": round(age, 1), "pid_alive": alive, "host": r["host"],
                         "pid_starttime": r["pid_starttime"]})
