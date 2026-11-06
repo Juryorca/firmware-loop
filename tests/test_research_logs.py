@@ -10,6 +10,7 @@ from fwcore import db as _db
 from fwcore.cli import render_view
 from fwcore.domain import Domain, InvariantViolation
 from fwcore.policy import Policy
+from fwcore.research import Research
 from fwcore.tools import ToolContext, default_registry, state_add_log
 
 
@@ -47,3 +48,14 @@ def test_state_add_log_tool_registered_and_writes(tmp_path):
     assert out["status"] == "ok" and out["log_id"]
     row = con.execute("SELECT needs_review FROM research_logs WHERE id=?", (out["log_id"],)).fetchone()
     assert row["needs_review"] == 1
+
+
+def test_state_prompt_shows_recent_logs_and_review_count(tmp_path):
+    """跨 run 连续性:决策/停止/下一步要进动态状态;needs_review 只报条数不灌正文。"""
+    con, dom, root = _mk(tmp_path)
+    dom.add_log("t", "decision", "选了 A 方案", "理由:B 代价更高")
+    dom.add_log("t", "needs_review", "没归类的段落", "正文不应进提示")
+    sp = Research(root, dom).state_prompt("t")
+    assert "[decision] 选了 A 方案" in sp
+    assert "另有 1 条未归类记录" in sp
+    assert "正文不应进提示" not in sp

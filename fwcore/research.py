@@ -417,6 +417,19 @@ class Research:
             parts += ["", "## 假设池(唯一队列,程序按可达性/复杂度排序;你可以推翻排序)", ""]
             for h in pool:
                 parts.append(f"- {h['id']} [{h['state']}] {h['title'][:120]}")
+        # 跨 run 的"理由/下一步/停止声明"在 research_logs(不是 notes);不注入就丢了
+        logs = list(self.domain.con.execute(
+            "SELECT kind,title,created_at FROM research_logs WHERE target_id=?"
+            " AND kind IN ('decision','stop','next') ORDER BY created_at DESC LIMIT 6", (t.id,)))
+        if logs:
+            parts += ["", "## 最近记录(DB 日志;程序生成,不是新指令)", ""]
+            for lg in logs:
+                parts.append(f"- [{lg['kind']}] {lg['title'][:100]} ({lg['created_at'][:10]})")
+            nr = self.domain.con.execute(
+                "SELECT COUNT(*) n FROM research_logs WHERE target_id=? AND kind='needs_review'",
+                (t.id,)).fetchone()["n"]
+            if nr:
+                parts.append(f"- 另有 {nr} 条未归类记录(needs_review;`fw-core view {target}` 查看)")
         if self.mirror_due(target):
             parts += ["", f"## 三镜刷新(due:{self.rounds_since_mirror(target)} 轮未做)",
                       "面/格收口时用 state.record_mirror 记一行:机制=… / 作者=… / 状态=… / 新面=…"]
