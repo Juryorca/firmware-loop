@@ -124,3 +124,25 @@ def test_verify_flags_evidence_path_escape(tmp_path):
                   " VALUES('E-x',?,'file','../../outside.txt',0,'2026-01-01')", (tid,))
     out = verify_target(con, root, "t")
     assert out["path_escapes"] == 1 and out["ok"] is False
+
+
+def test_pool_restatement_is_not_a_new_hypothesis():
+    """`- **H-11 的最终口径…**` 是对既有假设的状态重述 ⇒ 不建新假设,只记 needs_review 冲突。"""
+    from fwcore.migrate_all import parse_pool
+
+    text = ("## 假设池\n"
+            "- **H-11** 日志产者只来自 CGI 面\n  状态: 未处理\n"
+            "- **H-11 的最终口径(本轮定)**: 8/8 死导入\n"
+            "- **H-11 定论(负)**: 无证据\n")
+    pool, conflicts = parse_pool(text)
+    assert [e["raw_id"] for e in pool] == ["H-11"]
+    assert sum(1 for c in conflicts if "状态重述" in c) == 2
+
+
+def test_pool_keeps_parenthetical_title():
+    """`H-12(长标题)` 的括号是标题,不能被当优先级标记剥掉。"""
+    from fwcore.migrate_all import parse_pool
+
+    text = "## 假设池\n- **H-12(控制台 pre-auth 认证链 `/api/auth/*`)**: 说明\n"
+    pool, _ = parse_pool(text)
+    assert pool and "控制台" in pool[0]["title"]

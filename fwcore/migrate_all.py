@@ -23,6 +23,8 @@ SKIP_DIRS = {"_scratch", "ida"}
 MD_TOP = ("notes.md",)
 MD_REPORT = ("report/attack-surface.md",)
 RE_BULLET_H = re.compile(r"^- \*\*(H-?\d+|N\d+)\b(.*)$")
+# "H-11 的最终口径/定论/状态回滚…" 是对既有假设的**状态重述**,不是新假设
+RE_RESTATE = re.compile(r"^\s*(的|定论|结论|判定|状态|收口|维持|已|仍|→|含|注|说明|本轮|新观察|改为|更新|=)")
 RE_STATUS = re.compile(r"状态\s*[:：]\s*(.+)$")
 RE_DATE = re.compile(r"20\d\d-\d\d-\d\d")
 RE_TABLE_SEP = re.compile(r"^\|[\s:|-]+\|$")
@@ -219,8 +221,12 @@ def parse_pool(notes: str) -> tuple[list[dict], list[str]]:
             if cur:
                 out.append(cur)
             rest = m.group(2).replace("**", "")
-            rest = re.sub(r"^\s*\([^)]*\)", "", rest)          # N1(高) → 去掉优先级
+            # 只去掉**优先级标记**(N1(高)/H-3(P1));括号里是标题时不能剥(实测 H-12 标题被吃掉)
+            rest = re.sub(r"^\s*\((?:高|中|低|P\d+)\)", "", rest)
             rest = re.sub(r"^[\s:：\-–—]+", "", rest)
+            if RE_RESTATE.match(rest):
+                conflicts.append(f"状态重述 {m.group(1)}: {_clean(rest)[:100]}")
+                continue                                        # 不建重复假设(原文仍在 documents)
             cur = {"raw_id": m.group(1), "title": _clean(rest)[:200],
                    "body": [ln.strip()], "line": i}
             continue
@@ -264,6 +270,9 @@ def parse_pool(notes: str) -> tuple[list[dict], list[str]]:
             if not title or title.startswith("="):
                 _cand = [_clean(c) for k, c in enumerate(row) if k not in (0, s)]
                 title = max(_cand, key=len) if _cand else raw_id
+            if RE_RESTATE.match(title or ""):
+                conflicts.append(f"状态重述 {raw_id}: {_clean(title)[:100]}")
+                continue
             state, verdict = _verdict_of(status)
             res.append({"raw_id": raw_id, "title": title[:200],
                         "body": " | ".join(_clean(c) for c in row),
