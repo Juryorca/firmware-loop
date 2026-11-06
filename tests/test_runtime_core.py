@@ -347,3 +347,29 @@ def test_heartbeat_does_not_steal_ownership(setup):
     assert r._heartbeat(rid) is False
     row = con.execute("SELECT pid,pid_starttime FROM runs WHERE id=?", (rid,)).fetchone()
     assert row["pid"] == 999999 and row["pid_starttime"] == 1
+
+
+def test_owner_loss_cancels_remaining_tool_batch(setup):
+    """模型调用期间被接管:同一回复里的后续工具(尤其 state_* 写操作)不得执行。"""
+    con, dom, root = setup
+    box = {}
+
+    class Steal:
+        name = "steal"
+
+        def chat(self, messages, tools):
+            con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (box["rid"],))
+            return Reply(content="", tool_calls=[
+                {"id": "c1", "name": "state_add_observation",
+                 "args": {"target": "t1", "text": "第一条"}},
+                {"id": "c2", "name": "state_add_observation",
+                 "args": {"target": "t1", "text": "第二条"}},
+            ])
+
+    r = Runner(con, root, Steal(), policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    box["rid"] = rid
+    res = r.run(rid, "t1")
+    assert res.handback == "owner_lost"
+    assert con.execute("SELECT COUNT(*) n FROM observations").fetchone()["n"] == 0
+    assert con.execute("SELECT pid FROM runs WHERE id=?", (rid,)).fetchone()["pid"] == 999999

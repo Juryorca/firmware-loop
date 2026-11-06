@@ -246,3 +246,23 @@ def test_watchdog_does_not_kill_pgids_of_finished_run(tmp_path):
         assert child.poll() is None, "run 已 finished,看护不应杀掉它的进程组"
     finally:
         child.kill()
+
+
+def test_recover_stale_does_not_kill_pgids_cross_host(tmp_path):
+    """跨主机 recover:pgid 是主机本地概念,不能按别的 host 写的 .pgids 杀本机进程。"""
+    con, dom, root, rid, hid = _mk(tmp_path)
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        art = os.path.join(root, "state", "artifacts", rid)
+        os.makedirs(art, exist_ok=True)
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{os.getpgid(child.pid)}\n")
+        con.execute("UPDATE runs SET state='running', host='other-host', pid=NULL,"
+                    " heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+        fixed = Runner(con, root, ScriptedAdapter(script=[])).recover_stale(
+            include_remote=True, older_than_s=1)
+        assert fixed == [rid]
+        time.sleep(0.3)
+        assert child.poll() is None, "跨主机的 run 不能杀本机 pgid"
+    finally:
+        child.kill()

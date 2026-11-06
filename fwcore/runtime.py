@@ -319,6 +319,7 @@ class Runner:
         为什么必须条件更新:若 A 接管了 run,B 的下一轮 turn 若无条件写 pid,会把 owner
         抢回来 ⇒ 两个进程来回"抢所有权"各自继续跑(重复付费/副作用)。返回 False = 已失去所有权。
         """
+        cur = None
         me = os.getpid()
         st = _proc_starttime(me)
         with _db.Tx(self.con) as c:
@@ -326,7 +327,8 @@ class Runner:
                 "UPDATE runs SET heartbeat_at=?, pid=?, pid_starttime=?, host=?, updated_at=?"
                 " WHERE id=? AND (pid IS NULL OR (pid=? AND (pid_starttime IS NULL OR pid_starttime=?)))",
                 (_now(), me, st, _host(), _now(), rid, me, st))
-            return cur.rowcount > 0
+            pass
+        return cur is not None and cur.rowcount > 0
 
     def _owns(self, rid: str) -> bool:
         """本进程是否当前 owner(pid + starttime)。pid 为 NULL 的旧行按"无主"放行。"""
@@ -723,7 +725,20 @@ class Runner:
                                                 ensure_ascii=False)})
                         _event(self.con, "run.tool_cap", rid,
                                {"requested": len(reply.tool_calls), "executed": cap})
-                    for call in calls_this_turn:
+                    lost_owner = False
+                    for ci, call in enumerate(calls_this_turn):
+                        if not self._owns(rid):
+                            # 模型调用期间被接管:剩余工具(可能含 state_* 写操作)一律不执行;
+                            # 协议要求每个 tool_call_id 都有结果 ⇒ 逐个补 cancelled
+                            for c2 in calls_this_turn[ci:]:
+                                history.append({"role": "tool", "tool_call_id": c2.get("id"),
+                                                "name": c2.get("name"),
+                                                "content": json.dumps(
+                                                    {"status": "cancelled",
+                                                     "error": "owner_lost: 运行已被其他进程接管"},
+                                                    ensure_ascii=False)})
+                            lost_owner = True
+                            break
                         sig = call["name"] + "|" + json.dumps(call.get("args") or {}, sort_keys=True,
                                                               ensure_ascii=False)
                         seen[sig] = seen.get(sig, 0) + 1
@@ -740,6 +755,10 @@ class Runner:
                                {"tool": call["name"], "status": out.get("status")})
                         if out.get("needs_user_input"):
                             self.domain.request_user_input(rid, out["needs_user_input"])
+                    if lost_owner:
+                        state = "paused"
+                        _event(self.con, "run.owner_lost", rid, {"phase": "tool_batch"})
+                        break
                     if stalled:
                         # 反复执行同一操作且没有新状态 ⇒ 执行层停滞(不是研究结论)
                         _event(self.con, "run.stalled", rid, {"repeats": self.stall_repeats})
@@ -1020,10 +1039,12 @@ class Runner:
                      -1 if r["pid_starttime"] is None else r["pid_starttime"]))
                 if not cur.rowcount:
                     continue          # 扫描后已被 resume 接管 ⇒ 不能停它
-                # 主进程已死 ⇒ 它启动的工具进程组是孤儿,收敛时一并清掉(防孤儿 fuzz/工具)
-                with contextlib.suppress(Exception):
-                    from .watchdog import Watchdog
-                    Watchdog(self.con, self.root)._kill_pgids(r["id"])
+                # 只有**同主机**的孤立工具才杀:pgid 是主机本地概念,跨主机按同名 pgid 杀
+                # 可能误伤本机无关进程(.pgids 是别的主机写的)
+                if same_host:
+                    with contextlib.suppress(Exception):
+                        from .watchdog import Watchdog
+                        Watchdog(self.con, self.root)._kill_pgids(r["id"])
                 _event(c, "run.recovered_stale", r["id"],
                        {"age_s": round(age, 1), "pid_alive": alive, "host": r["host"],
                         "pid_starttime": r["pid_starttime"]})
