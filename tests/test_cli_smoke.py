@@ -22,7 +22,7 @@ def _run(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
 
 def test_help_runs():
     r = _run("--help")
-    assert r.returncode == 0 and "gates" in r.stdout and "pi-event" in r.stdout
+    assert r.returncode == 0 and "gates" in r.stdout
 
 
 def test_authz_show_reports_isolation_and_authorization(tmp_path):

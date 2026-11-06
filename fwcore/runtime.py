@@ -413,7 +413,7 @@ class Runner:
                     self._limit_hit(rid, "prepare_cancel", {"note": str(prep.get("why") or "")[:120]})
                     state = "paused"
                     break
-                _sys = self.research.system_prompt(target, goal)
+                _sys = self.research.system_prompt(target, goal, rid)
                 _note = self._prepare_state.get("context_note")
                 if _note:
                     _sys += "\n\n## 轮前准备(程序注入)\n" + _note

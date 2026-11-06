@@ -166,7 +166,7 @@ class Research:
             "SELECT COUNT(*) n FROM observations WHERE target_id=?", (t.id,)).fetchone()["n"]
 
     # ---------- 研究进度(给模型看的"当前手头有什么没做完") ----------
-    def progress_brief(self, target: str) -> list[str]:
+    def progress_brief(self, target: str, run_id: str | None = None) -> list[str]:
         """把**未完成的动作**摆到模型面前:它是数据,不是脚本步骤。
 
         演练复盘发现:模型跑完实验后不知道要结束 attempt / 复核 evidence / 下结论,
@@ -277,11 +277,21 @@ class Research:
             out.append("### 最近的工具失败(先换方法,不要把失败当研究结论)")
             for r in fails:
                 out.append(f"- {r['tool']} → {r['status']}: {(r['note'] or '')[:120]}")
+        if run_id:
+            n_tc = con.execute("SELECT COUNT(*) n FROM tool_calls WHERE run_id=?",
+                               (run_id,)).fetchone()["n"]
+            n_ev = con.execute(
+                "SELECT COUNT(*) n FROM evidence e JOIN tool_calls t ON t.id=e.tool_call_id"
+                " WHERE t.run_id=?", (run_id,)).fetchone()["n"]
+            if n_tc >= 10 and n_ev == 0:
+                out.append("### 本 run 的产出还没入账(提醒,不是配额)")
+                out.append(f"- 本 run 已执行 {n_tc} 次工具调用,但没有任何证据挂在这些调用上;若有可追溯产物(反汇编/脚本输出/日志),用 state_add_evidence(path=…, tool_call_id=<调用 id>) 登记并复核;纯探索不必登记,继续研究即可。")
         return out
 
     # ---------- 系统提示 ----------
     # ---------- 系统提示 ----------
-    def system_prompt(self, target: str, goal: str | None = None) -> str:
+    def system_prompt(self, target: str, goal: str | None = None,
+                      run_id: str | None = None) -> str:
         d = self.domain.derived(target)
         pool = self.pool(target)
         cards = kb_titles(self.root)
@@ -321,7 +331,7 @@ class Research:
                              f"[{e['link_relation'] or 'unlinked'}]")
             parts += ["\n".join(facts)[:3000]]
 
-        brief = self.progress_brief(target)
+        brief = self.progress_brief(target, run_id)
         if brief:
             parts += ["", "## 研究进度(程序按数据库事实生成;这些是待办,不是必须按顺序执行的脚本)",
                       *brief]

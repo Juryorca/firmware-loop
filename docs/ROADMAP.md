@@ -34,7 +34,6 @@
 | **Gate 迁移到权威状态**(除 Pi 侧调用) | ✅ | `fwcore/gates_db.py`:覆盖度/收尾/三镜/材料 + **KB 条数 / 附件引用完整性 / legacy 对照**;CLI `fw-core gates <target> [--legacy]`;`tests/test_gates_db.py` 6 条 0.81s ✓;第三步完成:证据**版本一致性**与"结论必须挂自己证据"已进 gate(`evidence_version_mismatch` / unlinked 阻塞),`tests/test_gates_db.py` 9 条 1.24s ✓(含用**真实** `tools/derived_check.sh` 的 legacy 集成);下一步(需授权):Pi 侧调用同一 gate |
 | **最终验证命令(可外部重跑)** | ✅ | `bash tools/fwcore_verify.sh`(cwd=仓库根;`PYTHONPATH` 由脚本设;临时目录 `.tmp/verify`,跑完自删);覆盖 8 个测试文件 + capabilities + gates 三项 |
 | Pi hook 接线 | ⏸ 待授权 | 需在**研究会话**里启用扩展(会改变 live harness 行为)⇒ 需用户明确同意后再做;桥本体已可用 | 
-| Pi 兼容适配器(桥本体) | ✅ | `fwcore/pi_bridge.py` + `fw-core pi-event`(stdin 事件流,幂等,坏事件不写);`tests/test_pi_bridge.py` 4 条 ✓;待:`.pi/extensions/` 里真正的 hook 接线 |
 | 独立 MCP 客户端 | ✅ | `fwcore/mcp_client.py`(initialize/tools.list/tools.call;select 等超时;关闭时 killpg)+ `fw-core mcp list|probe|call`;`tests/test_mcp_client.py` 6 条 1.06s ✓(含"server 起不来必须 unreachable") |
 | 结构化研究工具 | ✅ | `fwcore/toolkit.py` 加 `OBSERVERS`(derived/queue/signal/fuzz/emu → 字段;解析不出标 `unparsed`)+ `tool_calls` 记录 provider/capability/arch/env;`tests/test_toolkit_structured.py` 4 条 0.53s ✓;IDA `ida_query`、Ghidra `ghidra_query`(能力缺失如实报错)已完成,测试 8 条 1.03s ✓ |
 | 研究评测加难 | ✅ | 三个任务:`safe-control`(安全实现测假阳性)、`decoy-comment`(注释与实现相反)、`decoy-log`(过期日志);`eval/scoring.py` 要求 vulnerable 结论挂**自己名下**证据;`tests/test_eval_scoring.py` 5 条 1.30s ✓ |
@@ -84,6 +83,8 @@
 | **诊断字段真实链路** | ✅ | `OpenAICompatAdapter.chat()` 与 `_coerce_reply()` 之前丢弃 `finish_reason`/`usage`;已贯通,并用**模拟 HTTP transport**(真实 adapter + 真实响应解析)测到 `model.reply` 事件:`tests/test_adapter_plumbing.py` 4 passed(截断 length / 推理-only 协议往返 / 工具调用不记诊断 / 第二段 FINAL 一次收束) |
 | **token 消耗异常** | ✅ 根因+修复 | 历史**每次请求全量重发**且 run 内无限增长(旧 run checkpoint 491 KB,第二阶段收尾一次 222,238 prompt tokens/222,080 命中缓存);改为请求前 `_bound_history`(默认 160 k 字符预算)+ `model.call` 每次调用记账(usage 缺失标 `usage_known=false`);见 `docs/evidence/token-usage-audit.md` |
 | **上下文策略定稿** | ✅ 不裁剪 | 完整会话历史照常发送(缓存命中 ~99.93% 的 222,238 prompt 不是费用异常);**不设**字符上限旋钮;`model.call` 每次调用记账。测试:`test_context_budget.py`(全量发送 / 协议配对 / 恢复) |
+| **架构边界:Pi 是开发工具,不是产品** | ✅ | `fwcore` 独立运行:模型调用/工具执行/研究状态/证据/Watchdog/checkpoint/resume 全在产品内;**不依赖** Pi 会话、Pi Hook、continue-guard 或用户配置。已删除 `fwcore/pi_bridge.py`、`fwcore/pi_hook.py`、CLI `pi-event`(及对应测试);`.pi/` 进 `.gitignore` 并从版本管理移除(本地文件保留) |
+| **第三阶段产出复盘** | ✅ 有真分析,无落账 | `_notes/s3/` 有 12 份 `ann_*.txt`、9 份 `body_*.txt`、`all_calls.txt`(38 KB)与 4 个分析脚本(annotate/cfg/calls/body),均针对 op 子处理器反汇编;但 70 calls 内 **0 次 state_*** 调用 ⇒ 未入账。已在 Research 层加**提醒**(非配额):本 run ≥10 次工具调用却零证据挂账时提示"有可追溯产物就登记,纯探索不必" |
 | **第三阶段复盘 + 续跑** | ✅ 结论:分析真、落账空 | 原 30 次:36 tool calls 全是**真分析**(`_notes/s3/annotate.py|cfg.py|calls.py|body.py` 反汇编/CFG/调用点,产出 12 份 ann + 9 份 body),但 **0 次 state_* 调用** ⇒ 0 假设/0 证据;续跑 +40 calls(共 70)仍 0 落账 ⇒ 不是工具报错,是模型不落账。**没有编造记录**。下一步(未做):`progress_brief` 在"本 run 有产物但零登记"时给一次提示 |
 | **checkpoint 截断可追溯** | ✅ | `_shrink_history` 截断时带 `stdout_path`(shell_exec 输出)/`result_path` 与 `tool_call_id`;顺带修真 bug:keep_full=0 时 `[:-0]` 什么都不压 |
 | **跨 run 继承研究事实** | ✅ 修复 | 之前系统提示只有派生计数,新 run 看不到上一轮的假设/证据;现注入`## 已有研究事实`(最近 25 条假设+范围、25 条证据+来源关系),`test_cross_run_inheritance.py` 锁定 |
