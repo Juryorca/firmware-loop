@@ -490,13 +490,16 @@ class Runner:
         final = ""
         stopped_by_final = False
         state = "running"
+        if not self._heartbeat(rid):     # 先确认/刷新 owner;已被接管 ⇒ 立即退出
+            return RunResult(rid, "paused", step, rounds, "", False, [], "owner_lost", history)
         with contextlib.suppress(Exception):
             row = self.con.execute("SELECT handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
             if not (row and (row["handback_reason"] or "").startswith("user_stop")):
                 with _db.Tx(self.con) as c:
-                    c.execute("UPDATE runs SET state='running', updated_at=? WHERE id=?", (_now(), rid))
-        if not self._heartbeat(rid):     # 先确认/刷新 owner;已被接管 ⇒ 立即退出
-            return RunResult(rid, "paused", step, rounds, "", False, [], "owner_lost", history)
+                    # 只允许 paused/finished → running;不能把被接管的 running 覆盖,
+                    # 也不能复活 user_stop(上面已排除)
+                    c.execute("UPDATE runs SET state='running', updated_at=?"
+                              " WHERE id=? AND state IN ('paused','finished')", (_now(), rid))
         self._watchdog_start()           # 心跳在起看护之前,避免旧 pid 被误判 owner_dead
         self._ensure_mcp()          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
@@ -698,6 +701,9 @@ class Runner:
                     # 必须本轮真的推进了一条假设(决定性尝试结束 / 假设收口 / 假设被放弃)
                     advanced = self._round_advanced(target, since)
                     if advanced:
+                        if not self._owns(rid):
+                            state = "paused"
+                            break
                         rounds += 1
                         _event(self.con, "round.ended", self.domain.target(target).id,
                                {"run_id": rid, "rounds": rounds})
