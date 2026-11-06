@@ -265,6 +265,15 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
     no_link = [a["id"] for a in decisive_att
                if not any(e["attempt_id"] == a["id"] or e["hypothesis_id"] == a["hypothesis_id"]
                           for e in linked_any)]
+    _rel = {}
+    for e in ev:
+        k = (e.get("link_relation") or "unlinked")
+        _rel[k] = _rel.get(k, 0) + 1
+    add("provenance_mix", True,
+        f"证据来源:direct {sum(v for k, v in _rel.items() if k.startswith('direct'))}"
+        f" / weak {_rel.get('command-write', 0)} / unlinked {_rel.get('unlinked', 0)}"
+        " —— 弱来源不计入直接产出", critical=False)
+
     add("decisive_attempts_have_source_links", bool(decisive_att) and not no_link,
         f"决定性尝试 {len(decisive_att)} 个,无任何来源链接 {len(no_link)} 个 {no_link[:3]}")
     add("decisive_attempts_have_direct_evidence", bool(decisive_att) and not missing,

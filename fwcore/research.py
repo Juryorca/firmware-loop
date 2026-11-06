@@ -119,6 +119,7 @@ def _facts_lines(hyps, evs, obs, budget: int = 2900) -> list[str]:
     def o_lines():
         return [f"- 观察 {o['id']}: {_clip(o['text'], 150)}"
                 + (f" (来源 {o['tool_call_id']})" if o["tool_call_id"] else "")
+                + (f" [{o['relation'] or 'unlinked'}]" if o["tool_call_id"] else "")
                 + (f" 文件 {_clip(o['path'], 50)}" if o["path"] else "")
                 for o in obs]
 
@@ -387,7 +388,7 @@ class Research:
             " ORDER BY created_at DESC LIMIT 25", (t.id,)))
         # 观察 = 已确认但还不足以成假设的技术事实;不注入的话跨 run 就丢了
         obs = list(self.domain.con.execute(
-            "SELECT id,text,tool_call_id,path FROM observations WHERE target_id=?"
+            "SELECT id,text,tool_call_id,path,relation FROM observations WHERE target_id=?"
             " ORDER BY created_at DESC LIMIT 15", (t.id,)))
         if hyps or evs or obs:
             facts = ["## 已有研究事实(程序从数据库读出;先复用,不要重做)"]

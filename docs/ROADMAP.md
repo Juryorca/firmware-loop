@@ -36,6 +36,9 @@
 - 依赖:`link_relation`、`assess` 的 info 级检查;
 - 验收:报告生成路径的断言测试。
 
+- **P2 验收证据**:`tests/test_research_e2e_chain.py`(大文件 `fs_read` → 模型读 `db_tool_call_id` → `state_add_observation(带来源)` → 下一 run 提示可见);`tests/test_cross_run_inheritance.py`(观察跨 run、来源需可证、缺文件拒绝);`tests/test_tool_result_payload.py`(50 KB 字段仍合法 JSON、协议/DB id 分离);`tests/test_context_budget.py`(旧 checkpoint 非法 JSON 修复、配对完整)。
+- **P3 验收证据**:`tests/test_provenance_strength.py`(observation 关系分 direct-stdout / command-write;提示里标强度;`assess` 的 direct 检查不被弱来源满足;关系落库重开仍在);`assess` 新增 `provenance_mix`(direct/weak/unlinked 计数);gates 对 vulnerable 的"仅完整性复核"阻断保持。
+
 ### P4 依赖库/样本边界(可选)**
 - 目标:缺失库或动态入口导致无法判定时,给出明确边界说明而非猜测;
 - 验收:边界写进结论 `scope_note`,并有对应证据。

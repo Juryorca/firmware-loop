@@ -138,20 +138,23 @@ class Domain:
             "surfaces_unjudged": self._count("surfaces_unjudged", t.id),
         }
 
-    _COUNT_SQL = {
-        "hypotheses_open": "SELECT COUNT(*) n FROM hypotheses WHERE target_id=? AND state IN ('open','investigating')",
-        "surfaces_unjudged": "SELECT COUNT(*) n FROM surfaces WHERE target_id=? AND disposition='unjudged'",
-        "attempts_running": ("SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
-                             " WHERE h.target_id=? AND a.result='running'"),
-    }
-
     def _count(self, key: str, target_id: str) -> int:
-        """计数只走**白名单 SQL**(不做字符串插值,避免注入与被误用)。"""
-        sql = self._COUNT_SQL.get(key)
-        if sql is None:
+        """按 key 取计数。SQL 全部是**字面量**,不走字符串拼接/动态构造。"""
+        if key == "hypotheses_open":
+            row = self.con.execute(
+                "SELECT COUNT(*) n FROM hypotheses WHERE target_id=?"
+                " AND state IN ('open','investigating')", (target_id,)).fetchone()
+        elif key == "surfaces_unjudged":
+            row = self.con.execute(
+                "SELECT COUNT(*) n FROM surfaces WHERE target_id=? AND disposition='unjudged'",
+                (target_id,)).fetchone()
+        elif key == "attempts_running":
+            row = self.con.execute(
+                "SELECT COUNT(*) n FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
+                " WHERE h.target_id=? AND a.result='running'", (target_id,)).fetchone()
+        else:
             raise DomainError(f"未登记的计数项: {key}")
-        # sql 来自 _COUNT_SQL 常量白名单,不含外部输入(不是拼接 SQL)
-        return self.con.execute(sql, (target_id,)).fetchone()["n"]  # nosemgrep: python-sql-injection(sql 来自白名单常量)  # nosemgrep: python-sql-injection
+        return row["n"]
 
     # ---------------- 攻击面 ----------------
     def add_surface(self, target: str, key: str, **attrs) -> str:
@@ -336,6 +339,7 @@ class Domain:
         """
         t = self.target(target)
         sha = None
+        relation = None
         if tool_call_id:
             tc = self.con.execute(
                 "SELECT t.id, t.status, r.target_id FROM tool_calls t"
@@ -356,17 +360,21 @@ class Domain:
                     "SELECT stdout_path, result_path, args FROM tool_calls WHERE id=?",
                     (tool_call_id,)).fetchone()
                 goal = os.path.abspath(full)
-                direct = {os.path.abspath(p) for p in
-                          (tc2["stdout_path"], tc2["result_path"]) if p}
-                if goal not in direct and os.path.basename(full) not in (tc2["args"] or ""):
+                if tc2["stdout_path"] and os.path.abspath(tc2["stdout_path"]) == goal:
+                    relation = "direct-stdout"
+                elif tc2["result_path"] and os.path.abspath(tc2["result_path"]) == goal:
+                    relation = "direct-result"
+                elif os.path.basename(full) in (tc2["args"] or ""):
+                    relation = "command-write"      # 只在命令参数里出现 ⇒ 弱来源
+                else:
                     raise InvariantViolation(
                         "无法证明该调用产出了这个文件:不是它的 stdout/result,命令参数里也没有")
             sha = _sha256_file(full)
         oid = new_id("O")
         with Tx(self.con) as c:
             c.execute("INSERT INTO observations(id,target_id,attempt_id,text,tool_call_id,path,sha256,"
-                      "created_at) VALUES(?,?,?,?,?,?,?,?)",
-                      (oid, t.id, attempt_id, text, tool_call_id, path, sha, _now()))
+                      "relation,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (oid, t.id, attempt_id, text, tool_call_id, path, sha, relation, _now()))
             _event(c, "observation.added", oid,
                    {"attempt": attempt_id, "tool_call": tool_call_id, "path": path})
         return oid

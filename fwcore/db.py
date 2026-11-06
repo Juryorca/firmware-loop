@@ -9,11 +9,10 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 
-SCHEMA_VERSION = 12   # 开发期**基线**:不再逐版本迁移(见 _migrate)
+SCHEMA_VERSION = 13   # 开发期**基线**:不再逐版本迁移(见 _migrate)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -92,6 +91,8 @@ CREATE TABLE IF NOT EXISTS observations (
   tool_call_id TEXT,
   path         TEXT,
   sha256       TEXT,
+  -- 来源强度:direct-stdout / direct-result(强) vs command-write(弱);无来源为 NULL
+  relation     TEXT,
   created_at   TEXT NOT NULL
 );
 
@@ -282,7 +283,8 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
 # 开发期基线:历史上通过 _stepN 加过的列,一次性列在这里。
 # 新库直接由 SCHEMA 建出全部列;旧库用 `tools/db_rebaseline.py`(先备份)一次性补齐。
 BASELINE_COLUMNS: dict[str, list[tuple[str, str]]] = {
-    "observations": [("tool_call_id", "TEXT"), ("path", "TEXT"), ("sha256", "TEXT")],
+    "observations": [("tool_call_id", "TEXT"), ("path", "TEXT"), ("sha256", "TEXT"),
+                     ("relation", "TEXT")],
     "surfaces": [("judged_by", "TEXT")],
     "attempts": [("obs_outcome", "TEXT NOT NULL DEFAULT 'pending'"), ("obs_reason", "TEXT")],
     "tool_calls": [("call_key", "TEXT"), ("provider", "TEXT"), ("capability", "TEXT"),
