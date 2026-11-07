@@ -20,7 +20,7 @@ from . import db as _db
 from .db import Tx
 
 KINDS = ("pattern", "misreport", "guideline")
-STATUSES = ("draft", "needs_review", "approved", "deprecated", "superseded")
+STATUSES = ("approved", "deprecated", "superseded")  # Agent 直接记录；不设中间审核态
 SEED_FILE = "knowledge/research-knowledge.md"
 HEADING = re.compile(r"(?m)^## (.+)$")
 TAG_WORDS = {
@@ -94,7 +94,10 @@ def _insert_version(con: sqlite3.Connection, entry_id: str, version: int, title:
 
 
 def migrate_seed(root: str, con: sqlite3.Connection, *, dry_run: bool = False) -> dict:
-    """把 curated seed 导入知识库;幂等,内容变化才产生新版本。"""
+    """把 curated seed 导入知识库;幂等,内容变化才产生新版本。
+
+    seed 由 Agent 在提炼时判断为可复用知识,直接是 approved;不设人工/中间审核态。
+    """
     path = os.path.join(root, SEED_FILE)
     entries = parse_seed(path)
     stats = {"seed": SEED_FILE, "parsed": len(entries), "inserted": 0,
@@ -103,12 +106,18 @@ def migrate_seed(root: str, con: sqlite3.Connection, *, dry_run: bool = False) -
     for e in entries:
         eid = _stable_id(e["kind"], e["title"])
         e["id"] = eid
+        e["source"] = SEED_FILE
         stats["entries"].append({"id": eid, "title": e["title"], "kind": e["kind"]})
     if dry_run:
         return stats
     for e in entries:
         old = con.execute("SELECT * FROM knowledge_entries WHERE id=?", (e["id"],)).fetchone()
         if old and old["source_hash"] == e["source_hash"]:
+            # 旧库若还是 needs_review/draft,迁移时按 Agent 直接记录语义收敛到 approved
+            if old["status"] != "approved":
+                with Tx(con) as tx:
+                    tx.execute("UPDATE knowledge_entries SET status='approved',updated_at=?"
+                               " WHERE id=?", (_now(), e["id"]))
             stats["skipped"] += 1
             continue
         with Tx(con) as tx:
@@ -125,11 +134,12 @@ def migrate_seed(root: str, con: sqlite3.Connection, *, dry_run: bool = False) -
                 tx.execute(
                     "INSERT INTO knowledge_entries(id,title,body_md,kind,status,source,source_hash,"
                     "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (e["id"], e["title"], e["body_md"], e["kind"], "needs_review",
+                    (e["id"], e["title"], e["body_md"], e["kind"], "approved",
                      e["source"], e["source_hash"], now, now),
                 )
                 stats["inserted"] += 1
-            _insert_version(tx, e["id"], ver, e["title"], e["body_md"], "curated seed import")
+            _insert_version(tx, e["id"], ver, e["title"], e["body_md"],
+                            "curated seed import (agent-approved)")
             stats["versions"] += 1
             tx.execute("DELETE FROM knowledge_entry_tags WHERE entry_id=?", (e["id"],))
             for tag in e["tags"]:
@@ -207,10 +217,10 @@ def propose(con: sqlite3.Connection, *, kind: str, title: str, body_md: str,
     with Tx(con) as tx:
         tx.execute(
             "INSERT INTO knowledge_entries(id,title,body_md,kind,status,source,source_hash,"
-            "created_at,updated_at) VALUES(?,?,?,?,'draft',?,?,?,?)",
+            "created_at,updated_at) VALUES(?,?,?,?,'approved',?,?,?,?)",
             (eid, title, body_md, kind, source, _sha(body_md), now, now),
         )
-        _insert_version(tx, eid, 1, title, body_md, "proposed")
+        _insert_version(tx, eid, 1, title, body_md, "agent-recorded")
         for tag in tag_list:
             tx.execute("INSERT OR IGNORE INTO knowledge_entry_tags(entry_id,tag) VALUES(?,?)",
                        (eid, tag[:80]))
@@ -224,7 +234,7 @@ def propose(con: sqlite3.Connection, *, kind: str, title: str, body_md: str,
 def revise(con: sqlite3.Connection, entry_id: str, *, title: str | None = None,
            body_md: str | None = None, change_note: str = "",
            status: str | None = None) -> dict:
-    """修订知识正文/标题:追加新版本,不覆盖历史;默认回到 needs_review。"""
+    """修订知识正文/标题:追加新版本,不覆盖历史;Agent 直接判断仍可复用则 approved。"""
     old = _row(con, entry_id)
     if not old:
         raise KeyError(entry_id)
@@ -232,7 +242,7 @@ def revise(con: sqlite3.Connection, entry_id: str, *, title: str | None = None,
     new_body = (body_md if body_md is not None else old["body_md"]).strip()
     if not new_title or not new_body:
         raise ValueError("title/body_md 不能为空")
-    new_status = status or "needs_review"
+    new_status = status or "approved"
     if new_status not in STATUSES:
         raise ValueError(f"未知 status: {new_status}")
     with Tx(con) as tx:
@@ -295,8 +305,6 @@ def _main(argv: list[str] | None = None) -> int:
     p.add_argument("--body-file", default=None)
     p.add_argument("--note", default="")
     p = sub.add_parser("stats")
-    p = sub.add_parser("approve")
-    p.add_argument("entry_id")
     p = sub.add_parser("deprecate")
     p.add_argument("entry_id")
     a = ap.parse_args(argv)
@@ -319,9 +327,6 @@ def _main(argv: list[str] | None = None) -> int:
                                     change_note=a.note), ensure_ascii=False, indent=2))
         elif a.cmd == "stats":
             print(json.dumps(stats(con), ensure_ascii=False, indent=2))
-        elif a.cmd == "approve":
-            print(json.dumps(set_status(con, a.entry_id, "approved"),
-                             ensure_ascii=False, indent=2))
         elif a.cmd == "deprecate":
             print(json.dumps(set_status(con, a.entry_id, "deprecated"),
                              ensure_ascii=False, indent=2))

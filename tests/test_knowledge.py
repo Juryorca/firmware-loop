@@ -6,8 +6,7 @@ import shutil
 
 from fwcore import db as _db
 from fwcore.domain import Domain
-from fwcore.knowledge import (get, migrate_seed, propose, revise, search,
-                              set_status, stats)
+from fwcore.knowledge import get, migrate_seed, propose, revise, search, stats
 from fwcore.tools import ToolContext, default_registry
 
 
@@ -26,7 +25,7 @@ def test_migrate_seed_is_idempotent_and_minimal(tmp_path):
     assert first["parsed"] == 8 and first["inserted"] == 8
     st = stats(con)
     assert st["total"] == 8
-    assert st["by_status"] == {"needs_review": 8}
+    assert st["by_status"] == {"approved": 8}
     second = migrate_seed(root, con)
     assert second["inserted"] == 0 and second["skipped"] == 8
     assert stats(con)["total"] == 8
@@ -46,17 +45,15 @@ def test_search_chinese_english_identifier(tmp_path):
     assert body and "适用" in body["body_md"] and "owner" in body["body_md"]
 
 
-def test_propose_is_draft_and_requires_manual_approval(tmp_path):
+def test_propose_records_directly_as_approved(tmp_path):
     root, con = _root(tmp_path)
     migrate_seed(root, con)
     e = propose(con, kind="guideline", title="测试新知识",
                 body_md="适合跨目标复用的判断经验。", tags=["test"])
-    assert e["status"] == "draft"
+    assert e["status"] == "approved"
     assert any(v["version"] == 1 for v in e["versions"])
     loaded = get(con, e["id"])
-    assert loaded is not None and loaded["status"] == "draft"
-    approved = set_status(con, e["id"], "approved")
-    assert approved["status"] == "approved"
+    assert loaded is not None and loaded["status"] == "approved"
     try:
         propose(con, kind="guideline", title="测试新知识",
                 body_md="适合跨目标复用的判断经验。", tags=["test"])
@@ -79,7 +76,7 @@ def test_tools_search_get_propose(tmp_path):
     p = reg.call(ctx, "knowledge_propose", {
         "kind": "guideline", "title": "工具提案测试", "body_md": "可复用经验。",
         "tags": ["test"]})
-    assert p["status"] == "ok" and p["entry"]["status"] == "draft"
+    assert p["status"] == "ok" and p["entry"]["status"] == "approved"
 
 
 def test_revision_keeps_history_and_requires_review(tmp_path):
@@ -87,7 +84,7 @@ def test_revision_keeps_history_and_requires_review(tmp_path):
     migrate_seed(root, con)
     hit = search(con, "认证")[0]
     revised = revise(con, hit["id"], body_md="新的知识正文", change_note="更新判据")
-    assert revised["status"] == "needs_review"
+    assert revised["status"] == "approved"
     versions = revised["versions"]
     assert len(versions) == 2
     assert versions[-1]["body_md"] == "新的知识正文"

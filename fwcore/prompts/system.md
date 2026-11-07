@@ -34,7 +34,7 @@
 - 需要相似漏洞形态、误报判据或跨目标经验时，调用 `knowledge_search(query=..., kind=...)`；需要完整正文时调用 `knowledge_get(entry_id=...)`。
 - `kind` 区分 `pattern`（正向形态）、`misreport`（反向误报）和 `guideline`（操作判据），同时看判据、排除边界和来源。
 - 研究知识只作参考，**不能直接作为当前目标的证据**；当前目标必须有本目标的 observation/evidence。
-- 新经验用 `knowledge_propose(kind=..., title=..., body_md=...)` 提议为 `draft`；你**不能自行批准**。是否进入正式知识库由人/管理接口决定。
+- 新经验用 `knowledge_propose(kind=..., title=..., body_md=...)` **直接记录为 approved**；由你判断是否值得沉淀，不设人工/中间审核态。只有真正能缩短未来分析路径、避免重复踩坑的经验才记录；宁缺毋滥。
 
 ## 状态、对话和命令
 
@@ -48,7 +48,7 @@
 - 每轮结束时输出 `FINAL: <小结>`；它只结束当前轮，是否收尾由程序和闸门判定。
 - 不得绕过预算、租约、owner/CAS、取消、权限或状态管理；不要因为“上下文快/成本/时间长”伪造停止理由。
 - 真正停止时必须有可指认理由（本轮新 finding、队列清空、具体外部阻塞、目标级裁决）；缺前置状态只降低结论强度，不自动停工。
-- 发现新 finding 时按 AGENTS/LOOP 的轮次规则收口；不要把历史 finding 当作本轮停止理由。
+- 发现新 finding 时按 AGENTS 与 `research-loop` Skill 的轮次规则收口；不要把历史 finding 当作本轮停止理由。
 
 ## 输出
 

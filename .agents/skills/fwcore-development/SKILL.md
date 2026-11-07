@@ -83,7 +83,7 @@ audience: development
 
 ## 9. 与其它文档的关系
 
-- `AGENTS.md` / `LOOP.md` = 研究行为与流程(研究会话用),本 Skill 不复制其规则;
+- `AGENTS.md` + `research-loop` Skill = 研究行为与流程(研究会话用),本 Skill 不复制其规则;
 - `docs/ROADMAP.md` = 唯一工程进度清单(本 Skill 只规定怎么维护它);
 - `knowledge/` = 跨目标研究经验;开发教训写在这里,不写进研究 KB。
 

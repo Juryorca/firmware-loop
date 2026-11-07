@@ -95,7 +95,7 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 | `firmware-reversing` | rootfs/IDA/Ghidra/入口→sink 建模 |
 | `firmware-validation` | 建场、仿真/容器、差分/fuzz、证据复核 |
 | `report-submission` | advisory/CVE/厂商提交（只填不提交） |
-| `case-knowledge-curation` | 知识检索与 draft 候选沉淀 |
+| `research-knowledge-curation` | 研究知识检索与直接沉淀（无中间审核态） |
 | `fwcore-development` | 产品开发会话方法（开发用，不是研究流程） |
 
 ## 5. Slash Commands
@@ -145,10 +145,10 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 - `body_md` 是完整自然知识；不要为了字段统一压缩正文。
 - `kind`: `pattern`（正向）/ `misreport`（反向）/ `guideline`。
-- `status`: `draft` → `needs_review` → `approved` → `deprecated` / `superseded`。
+- `status`: Agent 判断值得记录即 `approved`；后续可 `deprecated` / `superseded`；不设中间审核态。
 - 版本只追加，不覆盖历史。
 - 检索：FTS5 优先，失败/无结果以 LIKE 兜底；支持中文、英文标识符、函数/API 名。
-- `knowledge_propose` 只能写 `draft`；`approved` 只能经 CLI/人工审核。
+- `knowledge_propose` 直接写 `approved`；由 Agent 自己判断是否值得沉淀。
 - 检索结果返回 ID/标题/类型/状态/摘要；需要全文再 `knowledge_get`。
 
 ## 7. 动态研究状态 vs 长期知识
@@ -180,8 +180,8 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 1. 先问：它能否跨 Target 复用？重获成本是否高于检索成本？
 2. 不能复用/通用可查 → 不进知识库；
-3. 能复用 → 用 `knowledge_propose` 写 draft（完整正文、判据、边界、来源）；
-4. 人工审核后 `python3 -m fwcore.knowledge approve <id>`；
+3. 能复用 → 用 `knowledge_propose` 直接记录为 `approved`（完整正文、判据、边界、来源）；
+4. 不设人工审核；不再适用时用管理接口标 `deprecated` / `superseded`；
 5. 不把目标专属地址/当前证据写进知识正文。
 
 ### 新增 Tool
@@ -196,7 +196,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 - Prompt 组装：core + AGENTS + skills catalog + commands；案例正文不在 system；AGENTS 后段不裁剪。
 - Skills：发现、frontmatter、catalog 不含正文、按需读取、路径穿越/symlink 拒绝。
 - Commands：登记、分发、参数/错误/补全，不进入模型工具。
-- Knowledge：迁移幂等、FTS 中英文、get 完整正文、propose=draft、approve 人工、版本追加。
+- Knowledge：迁移幂等、FTS 中英文、get 完整正文、propose 直接 approved、版本追加。
 - Tool：真实能力、失败路径、授权；未接线状态如实。
 - 全量：`bash tools/fwcore_verify.sh`。
 

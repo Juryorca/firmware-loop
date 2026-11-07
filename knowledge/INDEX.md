@@ -23,7 +23,7 @@
 - 只收能缩短未来分析路径、避免重复踩坑、判断成立/排除条件的经验；
 - 不收目标专属地址/一次性复现记录，也不收网上低成本可查的通用原理；
 - 正文是完整自然知识；结构化字段只做 `kind/status/tags/source` 等最小检索；
-- `knowledge_propose` 只能产生 `draft`；人工/管理接口审核后才进入 `approved`。
+- Agent 判断值得记录时，`knowledge_propose` 直接写入 `approved`；不设人工/中间审核态。
 
 ## 维护
 
@@ -32,7 +32,7 @@ python3 -m fwcore.knowledge stats
 python3 -m fwcore.knowledge search "认证" --kind pattern
 python3 -m fwcore.knowledge get KN-...
 python3 -m fwcore.knowledge migrate
-python3 -m fwcore.knowledge approve KN-...   # 人工审核后用
+python3 -m fwcore.knowledge stats
 ```
 
 旧案例正文仍保留在 `vuln-patterns.md` / `misreports.md`，但不再由 Runtime 常驻加载；迁移/提炼时不得丢掉其判据与反例边界。

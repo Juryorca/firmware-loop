@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     q = sp.add_parser("search")
     q.add_argument("query")
     q.add_argument("--kind", choices=["pattern", "misreport", "guideline"])
-    q.add_argument("--status", choices=["draft", "needs_review", "approved", "deprecated", "superseded"])
+    q.add_argument("--status", choices=["approved", "deprecated", "superseded"])
     q.add_argument("--limit", type=int, default=20)
     q = sp.add_parser("get")
     q.add_argument("entry_id")
@@ -168,8 +168,6 @@ def main(argv: list[str] | None = None) -> int:
     q.add_argument("--body-file", default=None)
     q.add_argument("--note", default="")
     q = sp.add_parser("stats")
-    q = sp.add_parser("approve")
-    q.add_argument("entry_id")
     q = sp.add_parser("deprecate")
     q.add_argument("entry_id")
     p = sub.add_parser("status"); p.add_argument("target")
@@ -409,9 +407,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(_kb_get(con, args.entry_id), ensure_ascii=False, indent=2))
             elif args.knowledge_cmd == "stats":
                 print(json.dumps(_kb_stats(con), ensure_ascii=False, indent=2))
-            elif args.knowledge_cmd == "approve":
-                print(json.dumps(_kb_set_status(con, args.entry_id, "approved"),
-                                 ensure_ascii=False, indent=2))
             elif args.knowledge_cmd == "deprecate":
                 print(json.dumps(_kb_set_status(con, args.entry_id, "deprecated"),
                                  ensure_ascii=False, indent=2))

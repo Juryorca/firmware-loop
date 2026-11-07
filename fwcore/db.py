@@ -250,7 +250,8 @@ CREATE TABLE IF NOT EXISTS knowledge_entries (
   body_md     TEXT NOT NULL,
   kind        TEXT NOT NULL DEFAULT 'guideline'
      CHECK (kind IN ('pattern','misreport','guideline')),
-  status      TEXT NOT NULL DEFAULT 'draft'
+  -- 兼容旧枚举；Agent 新写入直接 approved，不产生 draft/needs_review
+  status      TEXT NOT NULL DEFAULT 'approved'
      CHECK (status IN ('draft','needs_review','approved','deprecated','superseded')),
   source      TEXT,
   source_hash TEXT,
