@@ -1,0 +1,506 @@
+"""Agent Session:把现有 Runner 装进一个可被 UI 驱动的会话。
+
+对应 Pi 的 `AgentSession` + `AgentSessionRuntime` 的**应用侧**职责,
+但**不实现 Agent Loop** —— 每一轮都调用 fwcore.Runner 的
+turn / resume / start,研究状态、预算、取消、看护全部留在 Core。
+
+线程模型:
+- 一个后台 worker 线程独占自己的 SQLite 连接与 Runner(模型调用是阻塞的);
+- UI 线程用 `services.con` 只读快照,并在取消时直接走 Runner.cancel;
+- 所有写仍由 Core 的 CAS / 租约 / 预算控制,应用层不写研究事实。
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import queue
+import sqlite3
+import threading
+import time
+from collections import deque
+from dataclasses import dataclass, field
+
+from fwcore import db as _db
+from fwcore.compact import estimate_tokens
+from fwcore.models import ScriptedAdapter
+from fwcore.runtime import Runner
+
+from .config import AppConfig, adapter_for
+from .services import Services, latest_run
+
+
+@dataclass
+class UiEvent:
+    kind: str
+    text: str = ""
+    data: dict = field(default_factory=dict)
+    ts: float = field(default_factory=time.time)
+
+
+@dataclass
+class Snapshot:
+    target: str | None
+    run_id: str | None
+    state: str
+    handback: str | None
+    goal: str | None
+    model: str
+    rounds: int
+    step: int
+    calls: int
+    tools: int
+    elapsed: float
+    limits: dict
+    budget: dict
+    tokens: dict
+    context: dict
+    hypotheses: dict
+    surfaces: dict
+    evidence: int
+    observations: int
+    blockers: list[str]
+    busy: bool
+    pending: list[str]
+    last_error: str | None
+    updated_at: str | None
+
+
+@dataclass
+class TranscriptItem:
+    kind: str          # user / assistant / tool / notice
+    text: str = ""
+    meta: dict = field(default_factory=dict)
+
+
+def _json(raw, default):
+    try:
+        return json.loads(raw) if raw else default
+    except (TypeError, ValueError):
+        return default
+
+
+class AgentSession:
+    """一个 target × model 的交互会话;同一时间只跑一个 turn。"""
+
+    def __init__(self, services: Services, *, target: str | None = None,
+                 run_id: str | None = None, model: str | None = None,
+                 adapter_factory=None, mcp: bool = True, watchdog: bool = True):
+        self.services = services
+        self.cfg: AppConfig = services.cfg
+        self.target = target or self._default_target()
+        self.run_id = run_id
+        if self.target and not self.run_id:
+            self.run_id = latest_run(services.con, self.target)
+        self.model_name = model or self.cfg.model_name
+        self._adapter_factory = adapter_factory
+        self._mcp = mcp
+        self._watchdog = watchdog
+        self._q: queue.Queue = queue.Queue()
+        self._pending: list[str] = []
+        self._returned: list[str] = []
+        self._lock = threading.Lock()
+        self._busy = False
+        self._closed = False
+        self._last_error: str | None = None
+        self._thread: threading.Thread | None = None
+        self._events: deque[UiEvent] = deque(maxlen=400)
+        self._tool_cache: dict[str, tuple] = {}
+        self._usage_cache: tuple | None = None
+        self._started = False
+        self._runner_model_name: str | None = None
+        self._model_cursor: int | None = None
+
+    # ---------------- 生命周期 ----------------
+    def _default_target(self) -> str | None:
+        row = self.services.con.execute(
+            "SELECT name FROM targets ORDER BY created_at DESC LIMIT 1").fetchone()
+        return row["name"] if row else None
+
+    def start(self) -> None:
+        if self._started:
+            return
+        self._thread = threading.Thread(target=self._loop, name="fwapp-session", daemon=True)
+        self._thread.start()
+        self._started = True
+
+    def close(self) -> None:
+        self._closed = True
+        self._q.put(None)
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        self.services.close()
+
+    @property
+    def busy(self) -> bool:
+        with self._lock:
+            return self._busy
+
+    @property
+    def pending(self) -> list[str]:
+        with self._lock:
+            return list(self._pending)
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    def take_returned(self) -> list[str]:
+        with self._lock:
+            out, self._returned = self._returned, []
+        return out
+
+    # ---------------- UI 事件 ----------------
+    def emit(self, kind: str, text: str = "", **data) -> None:
+        self._events.append(UiEvent(kind=kind, text=text, data=data))
+
+    def drain_events(self) -> list[UiEvent]:
+        out = list(self._events)
+        self._events.clear()
+        return out
+
+    # ---------------- 提交与控制 ----------------
+    def submit(self, text: str) -> None:
+        text = (text or "").strip()
+        if not text:
+            return
+        with self._lock:
+            if self._busy:
+                self._pending.append(text)
+                self.emit("queued", text)
+                return
+        self._q.put(("turn", text))
+
+    def new_session(self, text: str | None = None) -> None:
+        if self.busy:
+            self.emit("error", "正在执行;先 Esc 停止再 /new")
+            return
+        self.run_id = None
+        self._tool_cache.clear()
+        self._model_cursor = None
+        self.emit("session.new", "")
+        if text:
+            self.submit(text)
+
+    def resume_run(self, run_id: str, *, run_now: bool = False) -> None:
+        if self.busy:
+            self.emit("error", "正在执行;不能切换 run")
+            return
+        row = self.services.con.execute(
+            "SELECT r.id,t.name FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
+            (run_id,)).fetchone()
+        if not row:
+            self.emit("error", f"run 不存在: {run_id}")
+            return
+        self.target = row["name"]
+        self.run_id = run_id
+        self._tool_cache.clear()
+        self._model_cursor = None
+        self.emit("session.resumed", run_id, run=run_id, target=self.target)
+        if run_now:
+            self._q.put(("continue", None))
+
+    def continue_run(self) -> None:
+        if not self.run_id:
+            self.emit("error", "没有可继续的 run")
+            return
+        if self.busy:
+            self.emit("queued", "(continue)")
+            return
+        self._q.put(("continue", None))
+
+    def set_target(self, name: str) -> None:
+        if self.busy:
+            self.emit("error", "正在执行;不能切换目标")
+            return
+        if not self.services.con.execute("SELECT 1 FROM targets WHERE name=?", (name,)).fetchone():
+            self.emit("error", f"目标不存在: {name}")
+            return
+        self.target = name
+        self.run_id = latest_run(self.services.con, name)
+        self._tool_cache.clear()
+        self._model_cursor = None
+        self.emit("session.target", name, target=name, run=self.run_id)
+
+    def set_model(self, name: str) -> None:
+        self.model_name = name
+        self.emit("session.model", name, model=name)
+
+    def cancel(self, reason: str = "用户取消") -> bool:
+        rid = self.run_id
+        if not rid:
+            return False
+        try:
+            ctl = Runner(self.services.con, self.cfg.root, ScriptedAdapter(script=[]),
+                         mcp=False, watchdog=False)
+            ctl.cancel(rid, reason)
+        except Exception as e:
+            self.emit("error", f"取消失败: {e}")
+            return False
+        with self._lock:
+            self._returned.extend(self._pending)
+            self._pending.clear()
+        self.emit("cancelled", reason, run=rid)
+        return True
+
+    def dequeue(self) -> list[str]:
+        """把排队消息还给编辑器(Pi 的 Alt+Up 语义)。"""
+        with self._lock:
+            out, self._pending = self._pending, []
+        return out
+
+    # ---------------- worker ----------------
+    def _loop(self) -> None:
+        con = None
+        runner = None
+        try:
+            con = _db.connect(self.cfg.db_path)
+            while not self._closed:
+                item = self._q.get()
+                if item is None:
+                    break
+                kind, arg = item
+                with self._lock:
+                    self._busy = True
+                self.emit("busy", kind)
+                try:
+                    if runner is None:
+                        runner = self._make_runner(con)
+                        self._runner_model_name = self.model_name
+                    elif self._runner_model_name != self.model_name:
+                        runner.model = self._adapter_for(self.model_name)
+                        self._runner_model_name = self.model_name
+                    if kind == "turn":
+                        self._do_turn(runner, str(arg))
+                    elif kind == "continue":
+                        self._do_continue(runner)
+                    elif kind == "restart":
+                        runner.close()
+                        runner = self._make_runner(con)
+                        self._runner_model_name = self.model_name
+                except Exception as e:                 # 应用层兜底:显示,不吞
+                    self._last_error = str(e)
+                    self.emit("error", str(e), cmd=kind)
+                finally:
+                    with self._lock:
+                        self._busy = False
+                        nxt = self._pending.pop(0) if self._pending else None
+                    if nxt and not self._closed:
+                        self._q.put(("turn", nxt))
+        finally:
+            if runner is not None:
+                with contextlib.suppress(Exception):
+                    runner.close()
+            if con is not None:
+                with contextlib.suppress(Exception):
+                    con.close()
+
+    def _adapter_for(self, name: str):
+        if self._adapter_factory is not None:
+            return self._adapter_factory(name)
+        return adapter_for(self.cfg, name)
+
+    def _make_runner(self, con: sqlite3.Connection) -> Runner:
+        return Runner(
+            con, self.cfg.root, self._adapter_for(self.model_name),
+            limits=self.cfg.limits, watchdog=self._watchdog, mcp=self._mcp,
+            watchdog_poll_s=5.0, mcp_call_timeout=120.0,
+        )
+
+    def _do_turn(self, runner: Runner, text: str) -> None:
+        if not self.target:
+            self.emit("error", "没有目标:先用 `fw-core init <target>` 创建,或在选择器里选目标")
+            return
+        rid = self.run_id
+        if not rid:
+            rid = runner.start(self.target, text)
+            self.run_id = rid
+            res = runner.run(rid, self.target, goal=text)
+        else:
+            res = runner.resume(rid, goal=text)
+        self._publish_result(res)
+
+    def _do_continue(self, runner: Runner) -> None:
+        if not self.run_id:
+            self.emit("error", "没有可继续的 run")
+            return
+        res = runner.resume(self.run_id, goal="继续推进未收口项")
+        self._publish_result(res)
+
+    def _publish_result(self, res) -> None:
+        data = {"run": res.run_id, "state": res.state, "handback": res.handback,
+                "blockers": list(res.blockers or []), "final": (res.final or "")[:4000]}
+        self.emit("turn_done", data["final"], **data)
+
+    # ---------------- 只读快照 ----------------
+    def snapshot(self) -> Snapshot:
+        con = self.services.con
+        row = None
+        if self.run_id:
+            row = con.execute(
+                "SELECT r.*, t.name AS target FROM runs r JOIN targets t ON t.id=r.target_id"
+                " WHERE r.id=?", (self.run_id,)).fetchone()
+        if row is None and self.target:
+            row = con.execute(
+                "SELECT r.*, t.name AS target FROM runs r JOIN targets t ON t.id=r.target_id"
+                " WHERE t.name=? ORDER BY r.started_at DESC, r.rowid DESC LIMIT 1",
+                (self.target,)).fetchone()
+        target = row["target"] if row else self.target
+        derived, blockers = {}, []
+        if target:
+            with contextlib.suppress(Exception):
+                derived = self.services.domain.derived(target)
+                blockers = list(derived.get("closure_blockers") or [])
+        tokens = self._tokens()
+        return Snapshot(
+            target=target, run_id=row["id"] if row else self.run_id,
+            state=row["state"] if row else "idle",
+            handback=row["handback_reason"] if row else None,
+            goal=row["goal"] if row else None,
+            model=self.model_name,
+            rounds=int(row["rounds"] or 0) if row else 0,
+            step=int(row["step"] or 0) if row else 0,
+            calls=int(row["model_calls"] or 0) if row else 0,
+            tools=int(row["tool_calls"] or 0) if row else 0,
+            elapsed=float(row["elapsed_s"] or 0.0) if row else 0.0,
+            limits=self.cfg.limits.describe(),
+            budget=_json(row["budget_note"], {}) if row else {},
+            tokens=tokens,
+            context=self._context(tokens),
+            hypotheses=derived.get("hypotheses", {}),
+            surfaces=derived.get("surfaces", {}),
+            evidence=int(derived.get("evidence", 0) or 0),
+            observations=int(derived.get("observations", 0) or 0),
+            blockers=blockers,
+            busy=self.busy, pending=self.pending, last_error=self._last_error,
+            updated_at=row["updated_at"] if row else None,
+        )
+
+    def _tokens(self) -> dict:
+        if not self.run_id:
+            return {"prompt": 0, "completion": 0, "cached": 0, "total": 0, "calls": 0}
+        last = self.services.con.execute(
+            "SELECT MAX(id) m FROM events WHERE kind='model.call' AND ref=?",
+            (self.run_id,)).fetchone()["m"]
+        if self._usage_cache and self._usage_cache[0] == (self.run_id, last):
+            return self._usage_cache[1]
+        out = {"prompt": 0, "completion": 0, "cached": 0, "total": 0, "calls": 0}
+        for r in self.services.con.execute(
+                "SELECT payload FROM events WHERE kind='model.call' AND ref=? ORDER BY id",
+                (self.run_id,)).fetchall():
+            p = _json(r["payload"], {})
+            u = p.get("usage") or {}
+            out["prompt"] += int(u.get("prompt_tokens") or p.get("prompt_tokens") or 0)
+            out["completion"] += int(u.get("completion_tokens") or p.get("completion_tokens") or 0)
+            out["cached"] += int(p.get("cached_tokens") or 0)
+            out["calls"] += 1
+        out["total"] = out["prompt"] + out["completion"]
+        self._usage_cache = ((self.run_id, last), out)
+        return out
+
+    def _context(self, tokens: dict) -> dict:
+        est = 0
+        if self.run_id:
+            ck = self.services.con.execute(
+                "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC, rowid DESC LIMIT 1",
+                (self.run_id,)).fetchone()
+            msgs = _json(ck["messages"], []) if ck else []
+            with contextlib.suppress(Exception):
+                est = estimate_tokens(msgs)
+        window = int(getattr(self.cfg.limits, "context_tokens", 0) or 0)
+        last = self.services.con.execute(
+            "SELECT payload FROM events WHERE kind='model.call' AND ref=? ORDER BY id DESC LIMIT 1",
+            (self.run_id,)).fetchone() if self.run_id else None
+        prompt = 0
+        if last:
+            p = _json(last["payload"], {})
+            prompt = int(p.get("prompt_tokens") or 0)
+        return {"estimated": est, "window": window, "last_prompt": prompt,
+                "percent": round((prompt or est) / window * 100, 1) if window else None}
+
+    # ---------------- 转录 ----------------
+    def transcript(self, limit: int = 400) -> list[TranscriptItem]:
+        items: list[TranscriptItem] = []
+        if not self.run_id:
+            return items
+        con = self.services.con
+        run = con.execute("SELECT goal FROM runs WHERE id=?", (self.run_id,)).fetchone()
+        if run and run["goal"]:
+            items.append(TranscriptItem("user", run["goal"]))
+        ck = con.execute(
+            "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC, rowid DESC LIMIT 1",
+            (self.run_id,)).fetchone()
+        tools = {r["call_key"] or r["id"]: dict(r) for r in con.execute(
+            "SELECT id,call_key,tool,args,status,note,exit_code,duration_ms,stdout_path,"
+            "result_path,created_at FROM tool_calls WHERE run_id=? ORDER BY created_at,id",
+            (self.run_id,)).fetchall()}
+        used_tools: set[str] = set()
+        if ck:
+            msgs = _json(ck["messages"], [])
+            for m in msgs[-limit:]:
+                role = m.get("role")
+                if role == "assistant":
+                    content = m.get("content") or ""
+                    reasoning = m.get("reasoning_content") or ""
+                    if content.strip() or reasoning.strip():
+                        items.append(TranscriptItem("assistant", content, {"reasoning": reasoning}))
+                    for c in m.get("tool_calls") or []:
+                        key = c.get("id") or ""
+                        row = tools.get(key)
+                        if row:
+                            used_tools.add(key)
+                            items.append(TranscriptItem("tool", "", {"call": row}))
+                # user 消息是运行时注入的状态提示,不是用户输入 ⇒ 不渲染
+        # 检查点里没有的工具(运行中/失败在协议之外)补在末尾
+        for key, row in tools.items():
+            if key not in used_tools:
+                items.append(TranscriptItem("tool", "", {"call": row}))
+        return items
+
+    def model_updates(self) -> list[dict]:
+        """新的 model.call 事件(UI 用来展示实时模型活动)。"""
+        if not self.run_id:
+            return []
+        con = self.services.con
+        if self._model_cursor is None:
+            row = con.execute(
+                "SELECT MAX(id) m FROM events WHERE kind='model.call' AND ref=?",
+                (self.run_id,)).fetchone()
+            self._model_cursor = int(row["m"] or 0)
+            return []
+        rows = con.execute(
+            "SELECT id,payload FROM events WHERE kind='model.call' AND ref=? AND id>? ORDER BY id",
+            (self.run_id, self._model_cursor)).fetchall()
+        if rows:
+            self._model_cursor = int(rows[-1]["id"])
+        return [{"id": r["id"], "payload": _json(r["payload"], {})} for r in rows]
+
+    def tool_updates(self) -> list[dict]:
+        """返回新出现或状态变化的工具调用(UI 增量渲染用)。"""
+        if not self.run_id:
+            return []
+        rows = self.services.con.execute(
+            "SELECT id,call_key,tool,args,status,note,exit_code,duration_ms,stdout_path,"
+            "result_path,created_at FROM tool_calls WHERE run_id=? ORDER BY created_at,id",
+            (self.run_id,)).fetchall()
+        changed = []
+        for r in rows:
+            d = dict(r)
+            sig = (d["status"], d["note"], d["exit_code"], d["duration_ms"], d["result_path"])
+            if self._tool_cache.get(d["id"]) != sig:
+                self._tool_cache[d["id"]] = sig
+                changed.append(d)
+        return changed
+
+    def recent_events(self, limit: int = 8) -> list[dict]:
+        if not self.run_id:
+            return []
+        rows = self.services.con.execute(
+            "SELECT ts,kind,ref,payload FROM events WHERE ref=? ORDER BY id DESC LIMIT ?",
+            (self.run_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    def research_view(self) -> dict:
+        if not self.target:
+            return {}
+        return self.services.domain.derived(self.target)

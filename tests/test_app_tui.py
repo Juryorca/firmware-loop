@@ -1,0 +1,253 @@
+"""TUI 行为测试(Textual headless pilot:真实按键、真实布局、真实 Runtime)。
+
+不调用外部模型:scripted 适配器 + 临时状态库。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+
+from fwapp.args import AppOptions
+from fwapp.config import resolve
+from fwapp.modes.interactive import FwApp
+from fwapp.runtime import AppRuntime
+from fwapp.widgets.editor import PromptEditor
+from fwapp.widgets.palette import CommandPalette
+from fwapp.widgets.screens import ConfirmScreen, HelpScreen, ResearchScreen, SelectorScreen
+from fwapp.widgets.transcript import ToolWidget
+from fwcore import db as _db
+from fwcore.domain import Domain
+from fwcore.models import Reply, ScriptedAdapter
+
+
+def make_ws(tmp_path, name="t1"):
+    root = tmp_path / "ws"
+    root.mkdir()
+    con = _db.connect(_db.default_db_path(str(root)))
+    Domain(con, str(root)).create_target(name)
+    con.close()
+    return resolve(AppOptions(root=str(root), model="scripted", mcp=False, watchdog=False))
+
+
+def _script():
+    return [
+        {"content": "先登记假设。", "tool_calls": [{
+            "id": "c1", "name": "state_add_hypothesis",
+            "args": {"target": "t1", "title": "解析器边界"}}]},
+        {"content": "FINAL: 完成", "tool_calls": []},
+    ]
+
+
+def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1",
+                    adapter_factory=lambda name: ScriptedAdapter(script=_script()),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.3)
+            assert app.query_one("#title") is not None
+            ed = app.query_one(PromptEditor)
+            assert app.focused is ed
+
+            # slash 补全
+            ed.text = "/"
+            await pilot.pause(0.2)
+            palette = app.query_one(CommandPalette)
+            assert palette.is_open and palette.option_count > 0
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            assert not palette.is_open
+
+            # overlay:帮助 / 恢复选择器 / 研究面板
+            await pilot.press("f1")
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, HelpScreen)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            await pilot.press("f2")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, ResearchScreen)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+
+            # 多行编辑:Shift+Enter 不提交
+            ed.text = ""
+            ed.focus()
+            await pilot.press("a")
+            await pilot.press("shift+enter")
+            await pilot.press("b")
+            assert "\n" in ed.text
+            ed.text = "开始研究"
+            await pilot.press("enter")
+            for _ in range(60):
+                await pilot.pause(0.1)
+                if not app.sess.busy and not app.sess.pending:
+                    break
+            await pilot.pause(0.4)
+            assert [w for w in app.query(ToolWidget)
+                    if w.call_data.get("tool") == "state_add_hypothesis"]
+
+            # 历史输入:↑ 取回上一条
+            ed.focus()
+            await pilot.press("up")
+            assert ed.text.strip() == "开始研究"
+
+            # /budget 走真实快照(命令执行会追加一条 notice)
+            from fwapp.widgets.transcript import NoticeWidget
+            before = len(app.query(NoticeWidget))
+            ed.text = "/budget"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert len(app.query(NoticeWidget)) > before
+
+            # 其余 slash commands 也必须连真实服务(不是静态帮助)
+            ed.text = "/model scripted"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert app.sess.model_name == "scripted"
+            ed.text = "/target t1"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert app.sess.target == "t1"
+            ed.text = "/status"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, ResearchScreen)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            ed.text = "/hypotheses"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, ResearchScreen)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            ed.text = "/evidence"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, ResearchScreen)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+
+            # 有 run 之后,/resume 打开选择器
+            await pilot.press("ctrl+r")
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, SelectorScreen)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+
+            # resize 后布局仍可用
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause(0.2)
+            await pilot.resize_terminal(120, 40)
+            await pilot.pause(0.2)
+            assert app.size.width == 120 and app.size.height == 40
+
+            await pilot.press("ctrl+q")
+            await pilot.pause(0.2)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_tui_escape_cancels_running_turn(tmp_path):
+    cfg = make_ws(tmp_path)
+
+    class Slow:
+        name = "scripted"
+
+        def chat(self, messages, tools):
+            time.sleep(0.8)
+            return Reply(content="FINAL: 迟到", tool_calls=[])
+
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: Slow(),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.3)
+            ed = app.query_one(PromptEditor)
+            ed.text = "开始"
+            await pilot.press("enter")
+            t0 = time.time()
+            while not app.sess.busy and time.time() - t0 < 2:
+                await pilot.pause(0.05)
+            await pilot.press("escape")
+            for _ in range(60):
+                await pilot.pause(0.1)
+                if not app.sess.busy:
+                    break
+            row = app.sess.services.con.execute(
+                "SELECT state,handback_reason FROM runs WHERE id=?",
+                (app.sess.run_id,)).fetchone()
+            assert row["state"] == "paused"
+            assert (row["handback_reason"] or "").startswith("user_stop")
+            # /continue 恢复同一 run(再走一轮,不新建)
+            ed.text = "/continue"
+            await pilot.press("enter")
+            for _ in range(80):
+                await pilot.pause(0.1)
+                if not app.sess.busy:
+                    break
+            row = app.sess.services.con.execute(
+                "SELECT state FROM runs WHERE id=?", (app.sess.run_id,)).fetchone()
+            assert row["state"] in ("finished", "paused")
+            await pilot.press("ctrl+q")
+            await pilot.pause(0.2)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_tui_quit_confirm_while_running(tmp_path):
+    cfg = make_ws(tmp_path)
+
+    class Slow:
+        name = "scripted"
+
+        def chat(self, messages, tools):
+            time.sleep(0.8)
+            return Reply(content="FINAL: 迟到", tool_calls=[])
+
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: Slow(),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.3)
+            ed = app.query_one(PromptEditor)
+            ed.text = "开始"
+            await pilot.press("enter")
+            t0 = time.time()
+            while not app.sess.busy and time.time() - t0 < 2:
+                await pilot.pause(0.05)
+            await pilot.press("ctrl+q")
+            await pilot.pause(0.2)
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.press("n")
+            await pilot.pause(0.2)
+            assert not isinstance(app.screen, ConfirmScreen)
+            await pilot.press("escape")
+            for _ in range(60):
+                await pilot.pause(0.1)
+                if not app.sess.busy:
+                    break
+            row = app.sess.services.con.execute(
+                "SELECT state FROM runs WHERE id=?", (app.sess.run_id,)).fetchone()
+            assert row["state"] == "paused"
+            await pilot.press("ctrl+q")
+            await pilot.pause(0.2)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()

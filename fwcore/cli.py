@@ -35,8 +35,41 @@ def _con(args):
     return _db.connect(path)
 
 
+_SUBCOMMANDS = frozenset({
+    "init", "hyp", "surface", "attempt", "evidence", "observe", "conclude",
+    "authz", "ida-env", "watchdog", "recover", "progress", "context", "mcp",
+    "gates", "capabilities", "status", "derive", "migrate", "view",
+    "run", "resume", "advance",
+})
+
+
+def _app_invocation(argv: list[str]) -> bool:
+    """顶层无研究子命令 ⇒ 交给应用层(TUI / print)。
+
+    先跳过全局 `--root/--db`(可多个、可任意顺序),再看第一个有效位置参数:
+    是研究子命令 ⇒ 原 CLI;否则 ⇒ 应用层。非 TTY 的降级由 fwapp.main 决定
+    (绝不意外进全屏)。
+    """
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a in ("--root", "--db"):
+            i += 2
+            continue
+        if a in ("-h", "--help"):
+            return False          # 顶层帮助仍由原 CLI 提供(含全部研究子命令)
+        return a not in _SUBCOMMANDS
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="fw-core", description="固件研究 agent 核心(宿主无关)")
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if _app_invocation(argv):
+        from fwapp.cli import main as app_main
+        return app_main(argv)
+    ap = argparse.ArgumentParser(
+        prog="fw-core", description="固件研究 agent 核心(宿主无关)",
+        epilog="交互模式: fw-core(TTY 自动)/ fw-core tui;非交互: fw-core -p \"...\"")
     ap.add_argument("--root", default=os.environ.get("FW_ROOT", os.getcwd()))
     ap.add_argument("--db", default=None)
     sub = ap.add_subparsers(dest="cmd", required=True)

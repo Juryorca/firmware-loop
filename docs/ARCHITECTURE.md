@@ -27,6 +27,7 @@ fwcore/  db.py(SCHEMA v14/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变
          mcp_runtime.py(MCP 桥)                  adapters_ida.py + winenv(IDA/Windows)
          gates_db.py(权威 Gate)                  models/model_client(适配器/协议)
          policy.py(Authz)  limits.py(边界)  watchdog.py  migrate_all.py  cli.py
+fwapp/  应用层(TUI/print,薄组合;见 docs/APP.md)
 fwloop/  兼容入口        scripts/ 演练与 e2e        eval/ 答案隔离评测
 tools/registry/*.json  仓库工具 manifest(8 个)
 ```
@@ -155,4 +156,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 63 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 66 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

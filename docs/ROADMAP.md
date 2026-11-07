@@ -24,7 +24,7 @@
 - **全量迁移**:14 个历史目标的 notes/attack-surface 已导入 DB(`documents` 保原文;
   面/假设/观察/证据/复核/结论/三镜进结构化表;叙述与模糊内容进 `research_logs`);
   `fw-core migrate --all` 幂等,`--verify` 逐目标核对;运行路径**无 Markdown 回退**。
-- **验证**:`bash tools/fwcore_verify.sh` = pytest(63 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
+- **验证**:`bash tools/fwcore_verify.sh` = pytest(66 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
 
 ## 待办
 
