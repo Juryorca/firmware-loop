@@ -34,7 +34,7 @@ def observer(name: str):
     return deco
 
 
-def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 3000,
+def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 12000,
          tool: str | None = None, meta: dict | None = None) -> dict:
     out = shell_exec(ctx, {"command": cmd, "timeout": timeout})
     text = ""

@@ -145,10 +145,10 @@ class MCPBridge:
                 return {"status": "error", "error": f"{type(e).__name__}: {e}"[:500], "meta": meta}
             if out.get("is_error"):
                 return {"status": "error", "error": (out.get("text") or "MCP tool error")[:500],
-                        "meta": meta, "observation": {"status": "error", "text": out.get("text", "")[:1000]}}
-            return {"status": "ok", "text": out.get("text", "")[:4000],
+                        "meta": meta, "observation": {"status": "error", "text": out.get("text", "")[:2000]}}
+            return {"status": "ok", "text": out.get("text", "")[:8000],
                     "meta": meta,
-                    "observation": {"status": "ok", "text": out.get("text", "")[:1000],
+                    "observation": {"status": "ok", "text": out.get("text", "")[:2000],
                                     "content_items": len(out.get("content") or [])}}
         return _handler
 

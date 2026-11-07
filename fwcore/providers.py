@@ -233,9 +233,11 @@ def python_module_provider(python: str | None, module: str, *, kind: str = "venv
 
 def unblob_provider(root: str) -> Provider:
     """读元数据定位 unblob;本体在 ≠ 各 extractor 都在,缺哪个就报哪个。"""
-    required = {"jefferson": "JFFS2", "ubireader_extract_files": "UBI/UBIFS",
-                "lz4": "lz4(库)", "unar": "unar(包)"}
-    tools = {"simg2img": "Android sparse", "fsck.erofs": "EROFS", "partclone.restore": "partclone",
+    # Python packages vs CLI extractors are different kinds of dependency.
+    required = {"jefferson": "JFFS2", "ubireader": "UBI/UBIFS", "lz4": "lz4(库)"}
+    tools = {"ubireader_extract_files": "UBI/UBIFS", "ubireader_extract_images": "UBI images",
+             "sasquatch": "SquashFS", "unar": "unar(包)", "simg2img": "Android sparse",
+             "fsck.erofs": "EROFS", "partclone.restore": "partclone",
              "7z": "7z 归档", "zstd": "zstd", "debugfs": "ext2/3/4"}
     entry = toolmeta.runtime(root, "unblob")
     binpath = entry.get("path")
@@ -255,7 +257,9 @@ def unblob_provider(root: str) -> Provider:
                          path=binpath)
         missing_modules = [m for m in required
                            if _run([python, "-c", f"import {m}"], 20, cwd=cwd, env=env)[0] != 0]
-        missing_tools = [t for t in tools if shutil.which(t) is None]
+        # 外部 extractor 由 unblob 的 PATH 决定；不能用宿主全局 PATH 误报缺失。
+        search_path = (env or {}).get("PATH", os.environ.get("PATH", ""))
+        missing_tools = [t for t in tools if shutil.which(t, path=search_path) is None]
         detail = []
         if missing_modules:
             detail.append("缺 python 提取器: " + ", ".join(f"{m}({required[m]})" for m in missing_modules))
@@ -302,7 +306,10 @@ def system_tool_provider(root: str, name: str, extra: list[str] | None = None,
             return Probe(MISSING, f"未安装或未配置 {name}")
         rc, out = _run(([path] + (extra or ["--version"])), 10,
                        cwd=entry.get("cwd"), env=entry.get("env"))
-        ok = rc == 0
+        # 有些工具的 help 用非 0 退出码；有 usage/SYNTAX 输出仍算入口可用。
+        helpish = bool(extra) and any(
+            marker in out.lower() for marker in ("usage", "syntax", "options:"))
+        ok = rc == 0 or helpish
         ver = None
         if version_arg:
             rc2, out2 = _run([path] + version_arg, 10,

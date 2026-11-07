@@ -789,10 +789,10 @@ class Runner:
         for key in ("stdout_tail", "stderr_tail", "text"):
             value = payload.get(key)
             if isinstance(value, str):
-                payload[key] = value[:4000]
+                payload[key] = value[:8000]
         if out.get("tool_call_id"):
             payload["tool_call_id"] = out["tool_call_id"]
-        content = json.dumps(payload, ensure_ascii=False)[:2000]
+        content = json.dumps(payload, ensure_ascii=False)[:8000]
         call_id = str(call.get("id") or call.get("name") or "?")
         try:
             self._conversation_write(
@@ -1684,7 +1684,7 @@ def _render_for_summary(messages: list[dict], limit: int = 2_000_000) -> str:
     return "\n".join(lines)[:limit]
 
 
-def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
+def _bounded_tool_result(out: dict, limit: int = 16000) -> str:
     """工具结果给模型看的版本:整体 JSON 合法,关键字段优先保留。
 
     - `db_tool_call_id`:数据库 TC-…(state_add_evidence 认这个,不是协议 id)

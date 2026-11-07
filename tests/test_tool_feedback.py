@@ -30,11 +30,11 @@ def _ctx(dom, root, rid="R1"):
 def test_shell_exec_returns_bounded_tail_without_artifacts(tmp_path):
     con, dom, root = _setup(tmp_path)
     out = default_registry().call(_ctx(dom, root), "shell_exec",
-                                  {"command": "seq 1 2000"})
+                                  {"command": "seq 1 5000"})
     assert out["status"] == "ok"
     assert out["stdout_tail"] and len(out["stdout_tail"]) <= TAIL_CHARS
     assert out["stdout_truncated"] is True
-    assert "2000" in out["stdout_tail"]          # 尾部内容确实可用
+    assert "5000" in out["stdout_tail"]          # 尾部内容确实可用
     assert out["stdout_sha256"] and "stdout_path" not in out  # Pi 风格:不自动落 artifact
 
 

@@ -6,8 +6,18 @@ set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 export PYTHONPATH="$ROOT"
-PY="${PY:-python3}"
+# 测试运行器优先从 Agent 的 Python 环境队列选择（只影响测试/开发代码，不用于找工具）。
+if [ -z "${PY:-}" ]; then
+  PY="$(cd "$ROOT" && python3 -m fwcore.pyenvs --select pytest,xdist 2>/dev/null || true)"
+  [ -n "$PY" ] || PY=python3
+fi
+# 测试默认并行；PYTEST_WORKERS 可覆盖，PYTEST_PARALLEL=0 可显式关闭。
 WORK=".tmp/verify"
+if [ "${PYTEST_PARALLEL:-1}" != "0" ] && "$PY" -c 'import xdist' >/dev/null 2>&1; then
+  PARALLEL=(-n "${PYTEST_WORKERS:-8}")
+else
+  PARALLEL=()
+fi
 rm -rf "$WORK" && mkdir -p "$WORK/pytest"
 fail=0
 say() { printf '  %-56s %s\n' "$1" "$2"; }
@@ -15,7 +25,7 @@ say() { printf '  %-56s %s\n' "$1" "$2"; }
 # ① 受保护的相关测试(**自动发现 tests/test_*.py**,不再手写清单 ⇒ 数量不会失真、不会漏新文件)
 TESTS=$(ls tests/test_*.py 2>/dev/null)
 NTESTS=$(printf '%s\n' "$TESTS" | grep -c . )
-if timeout 900 "$PY" -m pytest $TESTS -q --basetemp="$WORK/pytest" > "$WORK/pytest.log" 2>&1; then
+if timeout 900 "$PY" -m pytest $TESTS -q "${PARALLEL[@]}" --basetemp="$WORK/pytest" > "$WORK/pytest.log" 2>&1; then
   say "pytest($NTESTS 个文件)" "PASS $(tail -1 "$WORK/pytest.log" | tr -d '\n')"
 else
   say "pytest($NTESTS 个文件)" "FAIL"; tail -20 "$WORK/pytest.log" | sed 's/^/      /'; fail=1

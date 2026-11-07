@@ -193,7 +193,7 @@ def _kill_group(proc: subprocess.Popen) -> None:
 def _capture_process(argv: list[str], *, cwd: str, env: dict[str, str] | None,
                      timeout: float, cancel_check: Callable[[], bool] | None = None,
                      max_bytes: int = 8 * 1024 * 1024,
-                     tail_chars: int = 2000, pgid_dir: str | None = None) -> dict:
+                     tail_chars: int = 12000, pgid_dir: str | None = None) -> dict:
     """执行一个进程并把输出留在内存(Pi 风格);不创建 stdout/stderr 文件。
 
     只做进程生命周期与有界输出:
@@ -307,7 +307,7 @@ def _capture_process(argv: list[str], *, cwd: str, env: dict[str, str] | None,
             out[f"{stream}_tail"] = f"[binary output: {totals[stream]} bytes; redirect to a file / use xxd/strings]"
         else:
             out[f"{stream}_tail"] = data.decode("utf-8", errors="replace")[-tail_chars:]
-        out[f"{stream}_truncated"] = bool(truncated[stream] or totals[stream] > tail_limit)
+        out[f"{stream}_truncated"] = bool(truncated[stream] or totals[stream] > tail_chars)
         out[f"{stream}_binary"] = binary
         out[f"{stream}_bytes"] = totals[stream]
         out[f"{stream}_sha256"] = hashes[stream].hexdigest()
@@ -651,7 +651,7 @@ def _caps(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "capabilities": inv}
 
 
-TAIL_CHARS = 2000
+TAIL_CHARS = 12000
 
 
 def _tail_info(path: str, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]:
