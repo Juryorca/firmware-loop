@@ -68,7 +68,7 @@ DEFAULT_TOOLSET: tuple[ToolsetItem, ...] = (
                       "tools/win_stage.sh")),
     ToolsetItem("screenshot", "终端截图证据", "P1", True,
                 repo=("tools/termshot.sh", "tools/ansi2png.py"),
-                external=("tmux", "zsh")),
+                external=("tmux", "zsh", "chromium")),
     ToolsetItem("strace", "系统调用追踪", "P1", True, ("trace.strace",)),
     ToolsetItem("patched-qemu", "qemu-aarch64-patched(特殊构建)", "P2",
                 False, external=("qemu-aarch64-patched",), optional=True),
