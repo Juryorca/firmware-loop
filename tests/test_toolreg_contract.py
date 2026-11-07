@@ -55,8 +55,6 @@ def _real_manifest(name: str) -> Manifest:
      ["bash", "tools/cgi_fuzz.sh", "-s", "a b", "-n", "10"]),
     ("emu_run", {"args": '--root "r 1 dir" --cmd ls'},
      ["bash", "tools/emu_run.sh", "--root", "r 1 dir", "--cmd", "ls"]),
-    ("ghidra_query", {"args": "--script x.java"},
-     ["bash", "tools/ghidra_run.sh", "--script", "x.java"]),
     # 路径参数:不拆(含空格也要整体传)
     ("research_signal", {"log": "state/log with space.txt"},
      ["python3", "tools/parse_signal.py", "state/log with space.txt"]),

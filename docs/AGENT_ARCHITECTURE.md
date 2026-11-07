@@ -283,3 +283,17 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | `opencode.json` | 删除 |
 | 旧 `AI辅助复现工作循环.md` / `循环定制.md` | 选靶/获取/环境/验证原则并入 `firmware-target-selection`、`firmware-validation`；按用户要求旧文件已删除 |
 | 旧 CVE 目录 / 报告参考 | 外部历史资料，不纳入产品 |
+
+
+## 14. 默认工具集完整性
+
+入口：`python3 -m fwcore toolset` / TUI `/tools`。定义在 `fwcore/toolset.py`，不是第二套注册系统。
+
+- **仓库资产**：`tools/ida_*`、`tools/ghidra_run.sh`、`tools/ghidra_scripts/`、`tools/fw_extract.sh`、`tools/cgi_fuzz.sh`、研究辅助脚本；
+  检查存在/可执行，不运行有副作用的脚本。
+- **外部依赖**：QEMU user、AFL++、Docker/bwrap、IDA/Ghidra、binwalk/unblob、Sasquatch、strace 等，复用 `providers` 的探针。
+- **能力/服务**：区分 `ready / partial / missing / deps_missing / not_started / arch_mismatch`；
+  服务未启动不自动启动，状态如实显示；`qemu-aarch64-patched` 为 optional，不计入必需完整性。
+- **结果**：项目自带资产缺陷与用户环境缺陷分开报告；支持 CLI JSON/TUI 状态页。
+
+验收：干净 checkout 能直接获得仓库脚本；普通 QEMU 缺失算默认问题，特殊 patched QEMU 缺失不算；状态检查不改变环境。

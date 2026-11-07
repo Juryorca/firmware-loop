@@ -16,6 +16,7 @@
 - `shell_exec` 等高风险能力受授权、预算和确认约束；不要绕过它们。
 - 工具 `status=error/timeout/cancelled` 不能当作研究结论；先分诊环境、工具、信号。
 - 工具输出应落到可追溯路径；需要证据时用 `state_add_observation/state_add_evidence` 登记，并保留 `db_tool_call_id`。
+- 工具是否可用、缺少依赖/服务未启动，以 `fw-core toolset` / `capabilities` 的只读状态为准；不要假设命令存在就可用，也不要为了状态检查擅自启动有副作用的服务。
 
 ## 项目指令
 

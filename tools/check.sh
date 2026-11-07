@@ -69,5 +69,9 @@ if [ -d .git ]; then
     info "框架有 $_dirty 处未提交改动(建议 commit;git diff 可核对)"; fi
 else info "非 git 仓库(框架改动无法回滚)"; fi
 
+# 默认工具集摘要(复用 fwcore toolset,不替代上面的细项检查)
+_toolset=$($PY -m fwcore toolset 2>/dev/null | head -1 || true)
+[ -n "$_toolset" ] && info "默认工具集: $_toolset" || info "默认工具集: 检查不可用"
+
 echo "=== pass=$pass fail=$fail ==="
 [ $fail -eq 0 ]

@@ -1,0 +1,22 @@
+{
+  "name": "qemu_user",
+  "description": "用普通 QEMU user 运行目标二进制(显式 arch/binary/rootfs/argv;不走 shell)",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "arch": {"type": "string", "enum": ["x86_64", "aarch64", "arm", "mipsel", "mips"]},
+      "binary": {"type": "string"},
+      "rootfs": {"type": "string"},
+      "argv": {"type": "array", "items": {"type": "string"}},
+      "timeout": {"type": "number"}
+    },
+    "required": ["arch", "binary"]
+  },
+  "kind": "python",
+  "adapter": "fwcore.adapters_qemu:run",
+  "timeout": 30,
+  "timeout_arg": "timeout",
+  "risk": "high",
+  "capability": "emu.user",
+  "provider": "qemu-user"
+}

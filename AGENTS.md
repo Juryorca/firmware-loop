@@ -395,6 +395,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 ## 工具速查
 - 环境预检: bash tools/check.sh(开工必跑,有 FAIL 先报告)
 - **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|migrate|revise|deprecate`;模型用 `knowledge_search/get/propose/stats/revise/deprecate`。旧 `tools/kb.py` 只维护静态来源文件,不是知识权威。
+- **默认工具集完整性**: `python3 -m fwcore toolset`(区分仓库资产/外部依赖/能力/服务);只读探针,不启动有副作用的服务。
 - **批量静态/动态工具**: `tools/ghidra_scripts/{ProfileFuncs,DumpFuncsWithStr,DumpDecomp}.java`(函数画像/反编译批处理;Ghidra base = IDA base + 0x100000) + `tools/cgi_fuzz.sh`(对厂商 CGI 有界变异 fuzz,判据 = qemu `uncaught signal`/SIGSEGV;用法见文件头)→ 用法与坑见 `knowledge/methodology.md`「函数画像 × 动作表 join」
 - **JS 页面取件**: `mcp__chrome-devtools__navigate_page` → `take_snapshot` / `list_network_requests` ⇒ 真实下载 URL(curl 拿不到时);见「环境清单 → 取件 / JS 页面」
 - **提交(用户要求时)**: 先 `python3 tools/chrome-live-probe.py`(OFF ⇒ 提醒用户开 `chrome://inspect/#remote-debugging`)→ `mcp__chrome-live__*` 填表 → **不点提交** → 贴待确认清单;见「环境清单 → 提交」

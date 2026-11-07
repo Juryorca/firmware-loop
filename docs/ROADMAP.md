@@ -27,7 +27,7 @@
 - **Agent 内容架构**:`fwcore/prompts/system.md` + 根 `AGENTS.md` 组成 system;LOOP 迁入 `research-loop` Skill;
   `.agents/skills/` 渐进式加载;Slash Commands 保留并由 fwapp 分发;SQLite `knowledge_entries` 保存 curated 研究知识,
   旧案例 Markdown 仅作来源。
-- **验证**:`bash tools/fwcore_verify.sh` = pytest(69 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
+- **验证**:`bash tools/fwcore_verify.sh` = pytest(70 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
 
 ## 待办
 
@@ -70,6 +70,7 @@
 | P7 Runtime 架构对照 | `docs/ARCHITECTURE.md`(与 Pi 逐项对照 + 生命周期) |
 | P8 上下文生命周期 + 上下文感知 | `compact.py`/`contextinfo.py`;`test_compaction*.py`、`test_context_awareness.py`;CLI `context` |
 | Agent 内容架构重构 | `docs/AGENT_ARCHITECTURE.md`;`fwcore/prompts/system.md`;`fwcore/prompting.py`;`fwcore/skills.py`;SQLite `knowledge_entries`;`test_prompt_architecture.py`、`test_skills.py`、`test_knowledge.py` |
+| 默认工具集与工具接入 | `fwcore/toolset.py`;`fwcore/adapters_ghidra.py`;`fwcore/adapters_qemu.py`;`tools/ghidra_run.sh`;`tools/registry/qemu_user.json`;`test_toolset.py` |
 | P11 全量迁移 + 去运行时 legacy | `fwcore/migrate_all.py`;`docs/MIGRATION.md`;schema v14 `research_logs`;`tests/test_migrate_all.py`、`test_no_markdown_fallback.py`;`derived_check` 缺库即 FAIL |
 | P10 存储与 Git 边界规范 | `eval/run.py`(默认不写仓库);`fwcore_verify`「运行产物边界」;`docs/ARCHITECTURE.md` §3;`tests/test_cli_context_scope.py`、`test_state_authority.py` |
 | P9 Pi 真实基准 + 分层缓存对比 + 压缩验收纠偏 | `docs/ARCHITECTURE.md` §6/§7;`scripts/pi_cache_stats.py`;`test_compaction_sim.py` |

@@ -14,7 +14,8 @@ from fwapp.modes.interactive import FwApp
 from fwapp.runtime import AppRuntime
 from fwapp.widgets.editor import PromptEditor
 from fwapp.widgets.palette import CommandPalette
-from fwapp.widgets.screens import ConfirmScreen, HelpScreen, ResearchScreen, SelectorScreen
+from fwapp.widgets.screens import (ConfirmScreen, HelpScreen, ResearchScreen,
+                                   SelectorScreen, ToolsetScreen)
 from fwapp.widgets.transcript import ToolWidget
 from fwcore import db as _db
 from fwcore.domain import Domain
@@ -143,6 +144,12 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
             await pilot.press("enter")
             await pilot.pause(0.2)
             assert len(app.query(NoticeWidget)) > n_before
+            ed.text = "/tools"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, ToolsetScreen)
+            await pilot.press("escape")
+            await pilot.pause(0.1)
 
             # 有 run 之后,/resume 打开选择器
             await pilot.press("ctrl+r")

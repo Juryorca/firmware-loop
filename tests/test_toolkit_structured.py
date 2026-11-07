@@ -121,7 +121,9 @@ def test_ghidra_missing_capability_is_honest_error(tmp_path, monkeypatch):
     reg2 = Registry()
     register_repo_tools(reg2, root)
     assert "ghidra_query" in {s["name"] for s in reg2.describe()}
-    out = reg2.call(ctx, "ghidra_query", {"args": "x"})
+    out = reg2.call(ctx, "ghidra_query", {
+        "project": os.path.join(root, "proj"), "name": "p",
+        "binary": "/bin/true", "script": "dummy.java"})
     assert out["status"] == "error" and "能力不可用" in out["error"]
 
 
@@ -141,7 +143,9 @@ def test_ghidra_structured_when_runner_exists(tmp_path, monkeypatch):
     monkeypatch.setattr(pv, "default_capabilities", lambda root: {"debug.ghidra": _Cap()})
     reg2 = Registry()
     tk.register_repo_tools(reg2, root)
-    out = reg2.call(ctx, "ghidra_query", {"args": "x"})
+    out = reg2.call(ctx, "ghidra_query", {
+        "project": os.path.join(root, "proj"), "name": "p",
+        "binary": "/bin/true", "script": "dummy.java"})
     assert out["observation"]["status"] == "ok" and out["observation"]["format"] == "json"
     row = con.execute("SELECT provider FROM tool_calls WHERE tool='ghidra_query'"
                       " ORDER BY created_at DESC LIMIT 1").fetchone()

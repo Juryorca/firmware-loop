@@ -1,35 +1,27 @@
 {
   "name": "ghidra_query",
-  "description": "调用 Ghidra 无头脚本做函数画像/反编译;输出结构化;能力缺失时如实报错",
+  "description": "Ghidra 无头分析:显式 project/name/binary/script/script_args;输出脚本产物",
   "input_schema": {
     "type": "object",
     "properties": {
-      "args": {
-        "type": "string"
-      },
-      "timeout": {
-        "type": "number"
-      }
+      "project": {"type": "string", "description": "Ghidra 项目目录(不能含 . 开头路径元素)"},
+      "name": {"type": "string", "description": "项目名"},
+      "binary": {"type": "string", "description": "待分析二进制"},
+      "script": {"type": "string", "description": "Ghidra 脚本名,如 ProfileFuncs.java"},
+      "script_args": {"type": "array", "items": {"type": "string"}},
+      "cleanup": {"type": "boolean"},
+      "timeout": {"type": "number"}
     },
-    "required": [
-      "args"
-    ]
+    "required": ["project", "name", "binary", "script"]
   },
-  "kind": "script",
-  "argv": [
-    "bash",
-    "tools/ghidra_run.sh",
-    "{args}"
-  ],
-  "split_args": [
-    "args"
-  ],
+  "kind": "python",
+  "adapter": "fwcore.adapters_ghidra:run",
   "timeout": 300,
   "timeout_arg": "timeout",
-  "observer": "ghidra_query",
   "risk": "high",
   "capability": "debug.ghidra",
   "provider": "repo:ghidra_run.sh",
-  "capability_required": "debug.ghidra",
-  "requires_file": "tools/ghidra_run.sh"
+  "observer": "ghidra_query",
+  "requires_file": "tools/ghidra_run.sh",
+  "capability_required": "debug.ghidra"
 }

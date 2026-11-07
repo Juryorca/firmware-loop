@@ -24,7 +24,8 @@ fwcore/  db.py(SCHEMA v17/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变
          tools.py(内置 ToolSpec)                toolreg.py(manifest→Registry,4 种注册路径)
          runtime.py(循环/检查点/恢复/预算/流式消费/对话持久化失败显式暂停)
          streaming.py(事件/取消令牌;真实 HTTP 取消用 socket shutdown)
-         research.py(池/三镜/进度); prompting.py + prompts/system.md(System Prompt); skills.py(Skills Loader); knowledge.py(Research Knowledge)
+         research.py(池/三镜/进度); prompting.py + prompts/system.md(System Prompt); skills.py(Skills Loader);
+         knowledge.py(Research Knowledge); toolset.py(默认工具集完整性); adapters_ghidra.py + adapters_qemu.py
          compact.py(压缩)                        contextinfo.py(上下文状态)
          mcp_runtime.py(MCP 桥)                  adapters_ida.py + winenv(IDA/Windows)
          gates_db.py(权威 Gate)                  models/model_client(适配器/协议)
@@ -174,4 +175,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 69 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 70 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

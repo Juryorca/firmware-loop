@@ -27,6 +27,7 @@ from ..widgets.editor import PromptEditor
 from ..widgets.palette import CommandPalette
 from ..widgets.screens import (
     ConfirmScreen, HelpScreen, ResearchScreen, SelectItem, SelectorScreen,
+    ToolsetScreen,
 )
 from ..widgets.status import HINTS, StatusBar
 from ..widgets.transcript import (
@@ -456,6 +457,9 @@ class FwApp(App):
 
     def _cmd_evidence(self, arg: str) -> None:
         self.push_screen(ResearchScreen(self.sess, tab="evidence"))
+
+    def _cmd_tools(self, arg: str) -> None:
+        self.push_screen(ToolsetScreen(self.sess.services.cfg.root))
 
     def _cmd_skills(self, arg: str) -> None:
         from fwcore.skills import catalog

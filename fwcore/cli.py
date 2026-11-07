@@ -38,7 +38,7 @@ def _con(args):
 _SUBCOMMANDS = frozenset({
     "init", "hyp", "surface", "attempt", "evidence", "observe", "conclude",
     "authz", "ida-env", "watchdog", "recover", "progress", "context", "mcp",
-    "gates", "capabilities", "knowledge", "status", "derive", "migrate", "view",
+    "gates", "capabilities", "toolset", "knowledge", "status", "derive", "migrate", "view",
     "run", "resume", "advance",
 })
 
@@ -151,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("gates", help="权威状态版 Gate(覆盖度/收尾/KB/引用;只读 SQLite)")
     p.add_argument("target")
     p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
+    p = sub.add_parser("toolset", help="默认工具集完整性(仓库资产/外部依赖/能力;只读探针)")
+    p.add_argument("--json", action="store_true", help="输出 JSON")
     p = sub.add_parser("knowledge", help="Research Knowledge(检索/迁移/版本/审核)")
     sp = p.add_subparsers(dest="knowledge_cmd", required=True)
     q = sp.add_parser("migrate")
@@ -418,6 +420,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(_kb_revise(con, args.entry_id, title=args.title,
                                             body_md=body, change_note=args.note),
                                  ensure_ascii=False, indent=2))
+        elif args.cmd == "toolset":
+            from .toolset import check_toolset, render_report
+            rep = check_toolset(args.root)
+            print(json.dumps(rep, ensure_ascii=False, indent=2) if args.json
+                  else render_report(rep))
+            return 0 if rep["integrity"] == "ready" else 1
         elif args.cmd == "capabilities":
             from .providers import inventory
             print(json.dumps(inventory(args.root), ensure_ascii=False, indent=2))

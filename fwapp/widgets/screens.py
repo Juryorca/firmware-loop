@@ -16,6 +16,7 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 
 from ..commands import COMMANDS
+from fwcore.toolset import check_toolset, render_report
 from ..services import state_store_rows
 from ..session import AgentSession
 
@@ -271,3 +272,22 @@ class ResearchScreen(ModalScreen[None]):
 def parse_run_label(row: dict) -> str:
     goal = (row.get("goal") or "").replace("\n", " ")
     return f"{row['id']} · {row.get('state','?')} · {goal[:70]}"
+
+
+class ToolsetScreen(ModalScreen[None]):
+    """默认工具集完整性(只读;不启动服务/浏览器)."""
+
+    BINDINGS = [("escape", "close", "关闭"), ("g", "close", "关闭")]
+
+    def __init__(self, root: str, **kw):
+        super().__init__(**kw)
+        self.root = root
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog research"):
+            yield Static("默认工具集完整性", classes="dialog-title")
+            yield Static(render_report(check_toolset(self.root)), classes="pane")
+            yield Static("Esc 关闭", classes="dialog-hint")
+
+    def action_close(self) -> None:
+        self.dismiss(None)

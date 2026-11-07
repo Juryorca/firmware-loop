@@ -207,6 +207,21 @@ def unblob_provider(venv_python: str) -> Provider:
     return Provider(id="unblob-venv", kind="venv", resolve=lambda: {"interpreter": venv_python}, probe=probe)
 
 
+def repo_asset_provider(root: str, rel: str) -> Provider:
+    """仓库自带可执行资产的探针(不运行脚本,只检查存在/可执行)。"""
+    p = os.path.join(root, rel)
+
+    def probe() -> Probe:
+        if not os.path.isfile(p):
+            return Probe(MISSING, f"仓库资产缺失: {rel}")
+        if not os.access(p, os.X_OK):
+            return Probe(PARTIAL, f"仓库资产不可执行: {rel}", path=p)
+        return Probe(READY, f"仓库资产可执行: {rel}", path=p, evidence="discovered")
+
+    return Provider(id=f"repo:{os.path.basename(rel)}", kind="repo",
+                    resolve=lambda: {"path": p}, probe=probe)
+
+
 def system_tool_provider(name: str, extra: list[str] | None = None, version_arg: list[str] | None = None) -> Provider:
     def probe() -> Probe:
         path = shutil.which(name)
@@ -224,6 +239,43 @@ def system_tool_provider(name: str, extra: list[str] | None = None, version_arg:
     return Provider(id=name, kind="system", resolve=lambda: {"path": shutil.which(name)}, probe=probe)
 
 
+def ghidra_provider() -> Provider:
+    """Ghidra 12.x 常装在 ~/tools/ghidra_*/support,不一定在 PATH。"""
+    import glob as _g
+
+    def _find() -> str | None:
+        seen: list[str] = []
+        for key in ("GHIDRA_HOME", "GHIDRA_INSTALL_DIR"):
+            v = os.environ.get(key)
+            if v:
+                seen += [os.path.join(v, "support", "analyzeHeadless"), v]
+        seen += sorted(_g.glob(os.path.expanduser("~/tools/ghidra_*/support/analyzeHeadless")), reverse=True)
+        seen += sorted(_g.glob("/opt/ghidra*/support/analyzeHeadless"), reverse=True)
+        w = shutil.which("analyzeHeadless")
+        if w:
+            seen.insert(0, w)
+        for p in seen:
+            try:
+                if p and os.path.isfile(p) and os.access(p, os.X_OK):
+                    return p
+            except OSError:
+                continue
+        return None
+
+    def probe() -> Probe:
+        p = _find()
+        if not p:
+            return Probe(MISSING, "未找到 analyzeHeadless(Ghidra 未安装/未配置 GHIDRA_HOME)")
+        rc, out = _run([p, "-help"], 30)
+        # analyzeHeadless 的 -help 用非 0 退出码表示用法;有 Usage 就说明入口可用
+        if "Headless Analyzer Usage" in out or "analyzeHeadless" in out.lower():
+            return Probe(READY, "analyzeHeadless 可执行(静态探针)", path=p, evidence="reachable")
+        return Probe(PARTIAL, f"analyzeHeadless 存在但 -help 失败: {out[-160:]}", path=p)
+
+    return Provider(id="ghidra-headless", kind="system",
+                    resolve=lambda: {"argv_prefix": [_find() or "analyzeHeadless"]}, probe=probe)
+
+
 def windows_ida_provider(root: str) -> Provider:
     """复用现有 IDA 生命周期封装(tools/ida_*.sh),配置来自 winenv(单一来源)。"""
     from .winenv import load as _ida_load
@@ -236,10 +288,17 @@ def windows_ida_provider(root: str) -> Provider:
             return Probe(MISSING if "不存在" in problems[0] else NOT_STARTED,
                          "; ".join(problems)[:300], path=cfg.mcp_exe)
         started = bool(glob.glob(os.path.join(cfg.stage, ".port-*")))
-        return Probe(READY if started else NOT_STARTED,
-                     "IDA supervisor 已启动(端口文件存在)" if started
+        http = "000"
+        if not started:
+            rc, out = _run(["curl", "-s", "--noproxy", "*", "--max-time",
+                            str(max(1, int(cfg.probe_timeout))), "-o", "/dev/null",
+                            "-w", "%{http_code}", cfg.url], 5)
+            http = out.strip() if rc == 0 else "000"
+        up = started or http not in ("", "000")
+        return Probe(READY if up else NOT_STARTED,
+                     "IDA supervisor 已启动(端口文件/HTTP 可达)" if up
                      else f"IDA 未启动(用 tools/ida_start.sh;配置来源 {cfg.source})",
-                     path=cfg.mcp_exe, evidence="reachable" if started else "configured")
+                     path=cfg.mcp_exe, evidence="reachable" if up else "configured")
 
     def resolve() -> dict:
         cfg = _ida_load(root)
@@ -293,6 +352,8 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
     pwn = os.path.join(os.environ.get("ENTER_HOME", os.path.join(home, "ENTER")), "envs", "pwn", "bin", "python")
     unblob_py = os.path.join(home, "venvs", "unblob", "bin", "python")
     caps: dict[str, Capability] = {
+        "fuzz.cgi": Capability("fuzz.cgi", "对厂商 CGI 做有界变异 fuzz",
+                               [repo_asset_provider(root, "tools/cgi_fuzz.sh")]),
         "fuzz.aarch64": Capability("fuzz.aarch64", "对 aarch64 guest 做覆盖率/变异 fuzz", [
             afl_tracer_provider(os.path.join(home, ".local/bin/afl-aarch64"), "aarch64",
                                 sample_roots=_guest_roots(root)),
@@ -311,7 +372,7 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
                                              [system_tool_provider("sasquatch", ["-h"], version_arg=[])]),
         "trace.strace": Capability("trace.strace", "系统调用追踪", [system_tool_provider("strace", ["-V"])]),
         "debug.ghidra": Capability("debug.ghidra", "Ghidra 无头分析(脚本见 tools/ghidra_scripts)",
-                                  [system_tool_provider("analyzeHeadless", ["-help"], version_arg=[])]),
+                                  [ghidra_provider()]),
         "debug.ida": Capability("debug.ida", "Windows IDA 无头(经 WSL,复用 tools/ida_*)",
                                 [windows_ida_provider(root)]),
         "mcp.chrome": Capability("mcp.chrome", "浏览器自动化(取件/提交)", [
