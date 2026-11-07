@@ -783,8 +783,13 @@ class Runner:
         status = str(out.get("status") or "ok")
         cstatus = {"ok": "ok", "error": "error", "timeout": "error",
                    "cancelled": "cancelled"}.get(status, "error")
-        payload = {k: out.get(k) for k in ("status", "error", "note", "exit_code")
+        payload = {k: out.get(k) for k in ("status", "error", "note", "exit_code",
+                                           "stdout_tail", "stderr_tail", "text")
                    if out.get(k) not in (None, "")}
+        for key in ("stdout_tail", "stderr_tail", "text"):
+            value = payload.get(key)
+            if isinstance(value, str):
+                payload[key] = value[:4000]
         if out.get("tool_call_id"):
             payload["tool_call_id"] = out["tool_call_id"]
         content = json.dumps(payload, ensure_ascii=False)[:2000]

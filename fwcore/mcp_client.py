@@ -36,7 +36,7 @@ class ServerSpec:
     command: str
     args: list[str] = field(default_factory=list)
     env: dict = field(default_factory=dict)
-    url: str | None = None          # HTTP transport:本实现暂不支持,会在 probe 里如实报
+    url: str | None = None          # HTTP transport(Streamable HTTP;JSON/SSE + session id)
     enabled: bool = True
     # external: 配置显式声明该服务器是否"会碰外部世界"(网络/登录态/提交)。
     # None = 没声明 ⇒ 一律按 external=True 处理(默认拒绝,不靠工具名猜)。
@@ -69,13 +69,21 @@ def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
         if not isinstance(servers, dict):
             raise MCPConfigError(f"{path}: mcpServers 必须是 object")
         for name, srv in servers.items():
-            if name in out or not isinstance(srv, dict):
+            if not isinstance(name, str) or not isinstance(srv, dict):
+                raise MCPConfigError(f"{path}: mcpServers.{name!r} 必须是 object")
+            if name in out:
                 continue
+            args = srv.get("args") or []
+            env = srv.get("env") or {}
+            if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+                raise MCPConfigError(f"{path}: {name}.args 必须是字符串数组")
+            if not isinstance(env, dict):
+                raise MCPConfigError(f"{path}: {name}.env 必须是 object")
             out[name] = ServerSpec(
                 name=name,
                 command=srv.get("command") or "",
-                args=list(srv.get("args") or []),
-                env=dict(srv.get("env") or {}),
+                args=args,
+                env=env,
                 url=srv.get("url"),
                 enabled=srv.get("enabled", True) is not False,
                 external=(None if srv.get("external") is None else bool(srv.get("external"))),
