@@ -146,12 +146,21 @@ class IdAdapter(Adapter):
         out.setdefault("meta", {})
         out["meta"].update({"capability": "debug.ida", "provider": "ida:supervisor",
                             "arch": args.get("arch"), "url": cfg.url})
-        # 输出若能解析成 JSON,就把它作为结构化 text(观测器还会再抽一层字段)
-        text = (_tail(out.get("stdout_path")) if out.get("stdout_path") else "")
+        # IDA MCP 返回 JSON-RPC 信封。优先把内层 structuredContent 交给 observer，
+        # 避免 600 字符尾部截断导致明明成功却显示 unparsed；原始 stdout 仍在路径里。
+        text = _tail(out.get("stdout_path"), keep=2_000_000) if out.get("stdout_path") else ""
         if text.strip().startswith("{"):
             try:
-                json.loads(text)
-                out["text"] = text
+                envelope = json.loads(text)
+                result = envelope.get("result") if isinstance(envelope, dict) else None
+                if isinstance(result, dict) and result.get("structuredContent") is not None:
+                    out["text"] = json.dumps(result["structuredContent"], ensure_ascii=False)
+                elif isinstance(result, dict):
+                    content = result.get("content")
+                    if isinstance(content, list) and content and isinstance(content[0], dict):
+                        inner = content[0].get("text")
+                        if isinstance(inner, str):
+                            out["text"] = inner
             except json.JSONDecodeError:
                 pass
         return out
