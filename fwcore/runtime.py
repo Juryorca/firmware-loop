@@ -26,7 +26,7 @@ from . import db as _db
 from .compact import compact_history, estimate_tokens, should_compact
 from .compact import find_cut as _find_cut
 from .contextinfo import build_status
-from .domain import Domain, new_id
+from .domain import ConversationPersistError, Domain, new_id
 from .limits import Limits
 from .models import Adapter, ModelHTTPError, Reply, ScriptedAdapter, assistant_message  # noqa: F401
 from .policy import Policy
@@ -186,8 +186,12 @@ class Runner:
             _event(c, "run.started", rid, {"target": target, "goal": goal,
                                             "limits": self._budget_snapshot()})
         if goal:
-            self.domain.add_conversation(rid, "user", goal, client_id=f"start:{rid}",
+            try:
+                self._conversation_write(rid, "user", goal, client_id=f"start:{rid}",
                                          meta={"source": "start"})
+            except ConversationPersistError as e:
+                self._set_paused(rid, f"conversation_error: {e}")
+                raise
         # 授权已确定 ⇒ 这时才允许启动 MCP(启动有副作用:子进程/外网/登录态);
         # rid 已存在 ⇒ MCP 的 pgid 能登记进本 run(崩溃后可清孤儿)
         self._ensure_mcp(rid)
@@ -534,6 +538,20 @@ class Runner:
             self._update_if_running(rid, "state='paused', handback_reason=?, updated_at=?",
                                     (reason[:400], _now()))
 
+    def _conversation_write(self, *args, **kwargs):
+        """对话写入:短重试只针对锁竞争;最终失败必须显式抛错,不能吞掉。"""
+        last: Exception | None = None
+        for attempt in range(3):
+            try:
+                return self.domain.add_conversation(*args, **kwargs)
+            except Exception as e:
+                last = e
+                if isinstance(e, _db.LockedError) or "locked" in str(e).lower():
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                break
+        raise ConversationPersistError(f"对话写入失败: {last}") from last
+
     def _persist_assistant(self, rid: str, reply: Reply, *, status: str,
                            call_seq: int, error: str = "") -> None:
         """对话记录只存**面向用户**的内容;reasoning 只记长度,不混进正文。"""
@@ -548,10 +566,16 @@ class Runner:
         }
         if error:
             meta["error"] = error[:300]
-        with contextlib.suppress(Exception):
-            self.domain.add_conversation(
+        try:
+            self._conversation_write(
                 rid, "assistant", reply.content, status=status,
                 client_id=f"asst:{rid}:{call_seq}", meta=meta)
+        except ConversationPersistError as e:
+            e.reply = reply
+            self._emit_stream({"type": "conversation_error", "run": rid,
+                               "call": call_seq, "phase": "assistant",
+                               "error": str(e)[:300]})
+            raise
 
     @staticmethod
     def _reply_from_stream(content: list[str], reasoning: list[str],
@@ -576,6 +600,11 @@ class Runner:
         return Reply(content="".join(content), reasoning="".join(reasoning),
                      tool_calls=out, finish_reason=finish, usage=usage or {})
 
+    @staticmethod
+    def _reply_status(reply: Reply) -> str:
+        return ("partial" if (reply.finish_reason or "").lower() in ("length", "content_filter")
+                else "ok")
+
     def _model_call(self, rid: str, msgs: list[dict], tools: list[dict],
                     call_seq: int) -> Reply:
         """一次模型调用:流式事件 → 完整 Reply;工具参数只有收全后才组装。"""
@@ -597,12 +626,13 @@ class Runner:
             if reply.reasoning:
                 self._emit_stream({"type": "reasoning_delta", "run": rid,
                                    "call": call_seq, "text": reply.reasoning})
+            status = self._reply_status(reply)
             self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
                                "text": reply.content, "reasoning": reply.reasoning,
                                "finish_reason": reply.finish_reason,
-                               "usage": reply.usage or {}, "status": "ok",
+                               "usage": reply.usage or {}, "status": status,
                                "tool_calls": len(reply.tool_calls)})
-            self._persist_assistant(rid, reply, status="ok", call_seq=call_seq)
+            self._persist_assistant(rid, reply, status=status, call_seq=call_seq)
             return reply
         content: list[str] = []
         reasoning: list[str] = []
@@ -660,12 +690,13 @@ class Runner:
                     raise StreamError(ev.error or "stream error")
             start()
             reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
+            status = self._reply_status(reply)
             self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
                                "text": reply.content, "reasoning": reply.reasoning,
                                "finish_reason": reply.finish_reason,
-                               "usage": reply.usage or {}, "status": "ok",
+                               "usage": reply.usage or {}, "status": status,
                                "tool_calls": len(reply.tool_calls)})
-            self._persist_assistant(rid, reply, status="ok", call_seq=call_seq)
+            self._persist_assistant(rid, reply, status=status, call_seq=call_seq)
             return reply
         except StreamCancelled:
             reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
@@ -699,11 +730,18 @@ class Runner:
         if out.get("tool_call_id"):
             payload["tool_call_id"] = out["tool_call_id"]
         content = json.dumps(payload, ensure_ascii=False)[:2000]
-        with contextlib.suppress(Exception):
-            self.domain.add_conversation(
+        call_id = str(call.get("id") or call.get("name") or "?")
+        try:
+            self._conversation_write(
                 rid, "tool", content, status=cstatus,
                 tool_call_id=call.get("id"),
+                client_id=f"tool:{rid}:{call_id}",
                 meta={"tool": call.get("name"), "status": status})
+        except ConversationPersistError as e:
+            self._emit_stream({"type": "conversation_error", "run": rid,
+                               "phase": "tool", "tool": call.get("name"),
+                               "error": str(e)[:300]})
+            raise
 
     # ---------------- 一轮 = 一个模型-工具交互序列 ----------------
     def turn(self, rid: str, target: str, goal: str | None, history: list[dict],
@@ -880,11 +918,47 @@ class Runner:
                     _persist()
                     self._checkpoint(rid, step, history)
                     break
+                except ConversationPersistError as e:
+                    with contextlib.suppress(Exception):
+                        _event(self.con, "conversation.error", rid,
+                               {"error": str(e)[:300], "phase": "assistant"})
+                    r = getattr(e, "reply", None)
+                    if r is not None:
+                        if r.content or r.tool_calls or r.reasoning:
+                            history.append(r.assistant_message())
+                        else:
+                            history.append({"role": "assistant", "content": ""})
+                        for c in r.tool_calls:
+                            history.append({"role": "tool", "tool_call_id": c.get("id"),
+                                            "name": c.get("name"),
+                                            "content": json.dumps(
+                                                {"status": "cancelled",
+                                                 "error": "conversation_persist_failed: tool 未执行"},
+                                                ensure_ascii=False)})
+                    self._set_paused(rid, f"conversation_error: {str(e)[:300]}")
+                    state = "paused"
+                    _persist()
+                    self._checkpoint(rid, step, history)
+                    break
                 if self.stop_event is not None and self.stop_event.is_set():
                     # 非流式 chat 期间到达的取消:返回后立刻停,不执行工具
                     self._set_paused(rid, "user_stop: 用户取消")
                     state = "paused"
                     _persist()
+                    break
+                _finish_l = (reply.finish_reason or "").lower()
+                _incomplete = _finish_l in ("length", "content_filter")
+                if _incomplete and (_finish_l == "content_filter" or reply.tool_calls
+                                     or _FINAL_RE.search(reply.content or "")):
+                    # 截断响应里的 FINAL/工具调用都不完整:保留部分文本,暂停,不执行工具
+                    _event(self.con, "model.incomplete", rid,
+                           {"finish_reason": _finish_l,
+                            "tool_calls": len(reply.tool_calls),
+                            "content_len": len(reply.content or "")})
+                    self._set_paused(rid, f"model_incomplete: finish_reason={_finish_l}")
+                    state = "paused"
+                    _persist()
+                    self._checkpoint(rid, step, history)
                     break
                 # **每一次**真实调用都记账(含 tool_calls / FINAL / 推理-only / 截断);
                 # 服务端没给 usage ⇒ usage_known=false,不猜 token 数
@@ -908,7 +982,7 @@ class Runner:
                     "tool_calls": len(reply.tool_calls),
                     "streamed": bool(self.stream_enabled and callable(
                         getattr(self.model, "stream", None))),
-                    "status": "ok",
+                    "status": ("partial" if _incomplete else "ok"),
                 })
                 # 推理-only 的回复(content 空但 reasoning 非空)也要按 assistant 记录,
                 # 否则历史里只剩一条空白回复,既丢诊断信息也会让 thinking 模式协议不完整
@@ -980,6 +1054,7 @@ class Runner:
                     stalled = False
                     cap = max(1, int(self.limits.max_tool_calls_per_turn))
                     calls_this_turn = list(reply.tool_calls)
+                    conv_failed = False
                     if len(calls_this_turn) > cap:
                         # 防止一次模型回复刷出上百次调用(演练里出现过 121 次):
                         # 超出的**显式**告知未执行,而不是静默丢弃
@@ -993,13 +1068,25 @@ class Runner:
                                             "content": json.dumps(
                                                 {"status": "cancelled", "error": err},
                                                 ensure_ascii=False)})
-                            with contextlib.suppress(Exception):
-                                self.domain.add_conversation(
+                            try:
+                                self._conversation_write(
                                     rid, "tool", json.dumps(
                                         {"status": "cancelled", "error": err},
                                         ensure_ascii=False),
                                     status="cancelled", tool_call_id=c.get("id"),
+                                    client_id=f"tool:{rid}:{c.get('id')}",
                                     meta={"tool": c.get("name"), "status": "cancelled"})
+                            except ConversationPersistError as e:
+                                self._emit_stream({"type": "conversation_error", "run": rid,
+                                                   "phase": "tool-cap", "error": str(e)[:300]})
+                                self._set_paused(rid, f"conversation_error: {str(e)[:300]}")
+                                state = "paused"
+                                conv_failed = True
+                                break
+                        if conv_failed:
+                            _persist()
+                            self._checkpoint(rid, step, history)
+                            break
                         _event(self.con, "run.tool_cap", rid,
                                {"requested": len(reply.tool_calls), "executed": cap})
                     lost_owner = False
@@ -1014,13 +1101,20 @@ class Runner:
                                                 "content": json.dumps(
                                                     {"status": "cancelled", "error": err2},
                                                     ensure_ascii=False)})
-                                with contextlib.suppress(Exception):
-                                    self.domain.add_conversation(
+                                try:
+                                    self._conversation_write(
                                         rid, "tool", json.dumps(
                                             {"status": "cancelled", "error": err2},
                                             ensure_ascii=False),
                                         status="cancelled", tool_call_id=c2.get("id"),
+                                        client_id=f"tool:{rid}:{c2.get('id')}",
                                         meta={"tool": c2.get("name"), "status": "cancelled"})
+                                except ConversationPersistError as e:
+                                    self._emit_stream({"type": "conversation_error", "run": rid,
+                                                       "phase": "tool-owner-lost",
+                                                       "error": str(e)[:300]})
+                                    conv_failed = True
+                                    break
                             lost_owner = True
                             break
                         sig = call["name"] + "|" + json.dumps(call.get("args") or {}, sort_keys=True,
@@ -1030,16 +1124,31 @@ class Runner:
                             stalled = True
                         run_tools += 1
                         out = self._exec_tool_call(ctx, call, rid)
-                        self._record_tool_conversation(rid, call, out)
                         history.append({"role": "tool", "tool_call_id": call.get("id"),
                                         "name": call["name"],
                                         # 有界且**始终合法**的 JSON:硬截断会把大字段切在中间,
                                         # 模型收到坏 JSON、并丢掉后面的 tool_call_id/产物路径
                                         "content": _bounded_tool_result(out)})
+                        try:
+                            self._record_tool_conversation(rid, call, out)
+                        except ConversationPersistError as e:
+                            with contextlib.suppress(Exception):
+                                _event(self.con, "conversation.error", rid,
+                                       {"error": str(e)[:300], "phase": "tool",
+                                        "tool": call.get("name")})
+                            self._set_paused(rid, f"conversation_error: {str(e)[:300]}")
+                            state = "paused"
+                            conv_failed = True
+                            break
                         _event(self.con, "tool.called", out.get("tool_call_id"),
                                {"tool": call["name"], "status": out.get("status")})
                         if out.get("needs_user_input"):
                             self.domain.request_user_input(rid, out["needs_user_input"])
+                    if conv_failed:
+                        self._set_paused(rid, "conversation_error: 排队/取消工具记录写入失败")
+                        _persist()
+                        self._checkpoint(rid, step, history)
+                        break
                     if lost_owner:
                         state = "paused"
                         _event(self.con, "run.owner_lost", rid, {"phase": "tool_batch"})
@@ -1298,8 +1407,12 @@ class Runner:
         self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)
         if goal:
             # 用户追加指令属于对话历史;client_id 让同一提交重试幂等
-            self.domain.add_conversation(rid, "user", goal, client_id=user_client_id,
+            try:
+                self._conversation_write(rid, "user", goal, client_id=user_client_id,
                                          meta={"source": "resume"})
+            except ConversationPersistError as e:
+                self._set_paused(rid, f"conversation_error: {e}")
+                raise
         self._ensure_mcp(rid)
         with _db.Tx(self.con) as c:
             _event(c, "run.resumed", rid, {"step": row["step"],

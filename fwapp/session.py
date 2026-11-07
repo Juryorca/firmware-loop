@@ -132,10 +132,12 @@ class AgentSession:
             queued, self._pending = list(self._pending), []
         for text, cid in queued:
             if self.run_id:
-                with contextlib.suppress(Exception):
+                try:
                     self.services.domain.add_conversation(
                         self.run_id, "user", text, status="cancelled", client_id=cid,
                         meta={"source": "tui-queue", "cancelled": True})
+                except Exception as e:
+                    self.emit("error", f"关闭时排队消息状态写入失败: {e}")
         self._closed = True
         self._q.put(None)
         if self._thread is not None:
@@ -181,10 +183,12 @@ class AgentSession:
         if busy:
             # 排队也持久化(状态 queued);执行时同一 client_id 推进为 ok,不产生第二条
             if self.run_id:
-                with contextlib.suppress(Exception):
+                try:
                     self.services.domain.add_conversation(
                         self.run_id, "user", text, status="queued",
                         client_id=client_id, meta={"source": "tui-queue"})
+                except Exception as e:
+                    self.emit("error", f"排队消息写入失败(仍会尝试执行): {e}")
             with self._lock:
                 self._pending.append((text, client_id))
             self.emit("queued", text)
@@ -279,10 +283,12 @@ class AgentSession:
             self._pending.clear()
             self._returned.extend(text for text, _cid in queued)
         for text, cid in queued:
-            with contextlib.suppress(Exception):
+            try:
                 self.services.domain.add_conversation(
                     rid, "user", text, status="cancelled", client_id=cid,
                     meta={"source": "tui-queue", "cancelled": True})
+            except Exception as e:
+                self.emit("error", f"取消排队消息状态写入失败: {e}")
         self.emit("cancelled", reason, run=rid)
         return True
 
@@ -292,10 +298,12 @@ class AgentSession:
             items, self._pending = list(self._pending), []
         for text, cid in items:
             if self.run_id:
-                with contextlib.suppress(Exception):
+                try:
                     self.services.domain.add_conversation(
                         self.run_id, "user", text, status="cancelled", client_id=cid,
                         meta={"source": "tui-queue", "cancelled": True})
+                except Exception as e:
+                    self.emit("error", f"取回排队消息状态写入失败: {e}")
         return [text for text, _cid in items]
 
     # ---------------- worker ----------------
@@ -481,48 +489,141 @@ class AgentSession:
 
     # ---------------- 转录 ----------------
     def transcript(self, limit: int = 400) -> list[TranscriptItem]:
-        """用户可见对话:优先 conversation_entries;旧 run 回退 checkpoint。"""
-        items: list[TranscriptItem] = []
+        """用户可见对话:conversation 为准,缺失的 assistant/tool 从权威记录补齐。
+
+        权威关系:tool_calls = 工具是否真的执行;checkpoint = 模型执行历史;
+        conversation = 用户可见消息。三者不互相替代,只做**幂等合并**。
+        """
         if not self.run_id:
-            return items
+            return []
         con = self.services.con
         tools = {r["call_key"] or r["id"]: dict(r) for r in con.execute(
             "SELECT id,call_key,tool,args,status,note,exit_code,duration_ms,stdout_path,"
             "result_path,created_at FROM tool_calls WHERE run_id=? ORDER BY created_at,id",
             (self.run_id,)).fetchall()}
         entries = self.services.domain.conversation(self.run_id, limit=limit)
-        if entries:
-            for e in entries:
-                role = e.get("role")
-                content = (e.get("content") or "").strip()
-                if role == "user":
-                    if content:
-                        suffix = ""
-                        if e.get("status") == "queued":
-                            suffix = "  (queued)"
-                        elif e.get("status") == "cancelled":
-                            suffix = "  (cancelled)"
-                        items.append(TranscriptItem("user", content + suffix))
-                elif role == "assistant":
-                    if content:
-                        items.append(TranscriptItem("assistant", content))
-                elif role == "tool":
-                    row = tools.get(e.get("tool_call_id") or "")
-                    if row is None:
-                        meta = _json(e.get("meta"), {})
-                        row = {"id": e.get("id"), "tool": meta.get("tool") or "tool",
-                               "args": "{}", "status": e.get("status") or "ok",
-                               "note": content, "created_at": e.get("created_at")}
-                    items.append(TranscriptItem("tool", "", {"call": row}))
-            return items
-
-        # 兼容迁移前/旧 run:从 checkpoint 重建(用户 goal 只显示一次)
-        run = con.execute("SELECT goal FROM runs WHERE id=?", (self.run_id,)).fetchone()
-        if run and run["goal"]:
-            items.append(TranscriptItem("user", run["goal"]))
         ck = con.execute(
             "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC, rowid DESC LIMIT 1",
             (self.run_id,)).fetchone()
+
+        if not entries:
+            return self._transcript_from_checkpoint(ck, tools, limit)
+
+        conv: list[dict] = []
+        for e in entries:
+            role = e.get("role")
+            content = e.get("content") or ""
+            item = None
+            if role == "user" and content.strip():
+                suffix = ""
+                if e.get("status") == "queued":
+                    suffix = "  (queued)"
+                elif e.get("status") == "cancelled":
+                    suffix = "  (cancelled)"
+                item = TranscriptItem("user", content + suffix)
+            elif role == "assistant" and content.strip():
+                item = TranscriptItem("assistant", content)
+            elif role == "tool":
+                row = tools.get(e.get("tool_call_id") or "")
+                if row is None:
+                    meta = _json(e.get("meta"), {})
+                    row = {"id": e.get("id"), "tool": meta.get("tool") or "tool",
+                           "args": "{}", "status": e.get("status") or "ok",
+                           "note": content, "created_at": e.get("created_at")}
+                item = TranscriptItem("tool", "", {"call": row})
+            meta = _json(e.get("meta"), {})
+            conv.append({"item": item, "role": role, "content": content,
+                         "tool_id": e.get("tool_call_id") or "",
+                         "tool_ids": tuple(meta.get("tool_calls") or []),
+                         "status": e.get("status")})
+
+        msgs = _json(ck["messages"], []) if ck else []
+        execs = []
+        for m in msgs[-limit:]:
+            if m.get("role") != "assistant":
+                continue
+            content = (m.get("content") or "").strip()
+            call_ids = tuple(c.get("id") or "" for c in (m.get("tool_calls") or []))
+            if content or call_ids:
+                execs.append({"content": content, "call_ids": call_ids})
+
+        avail: dict[tuple, list[int]] = {}
+        tool_index: dict[str, int] = {}
+        for i, c in enumerate(conv):
+            if c["role"] == "assistant":
+                avail.setdefault((c["content"].strip(), c["tool_ids"]), []).append(i)
+            elif c["role"] == "tool" and c["tool_id"]:
+                tool_index[c["tool_id"]] = i
+        used_assist: set[int] = set()
+        used_tools: set[str] = {c["tool_id"] for c in conv
+                                if c["role"] == "tool" and c["tool_id"]}
+        after: dict[int, list[TranscriptItem]] = {}
+
+        def add_after(idx: int, item: TranscriptItem) -> None:
+            after.setdefault(idx, []).append(item)
+
+        last_anchor = -1
+        for ex in execs:
+            key = (ex["content"], ex["call_ids"])
+            matched = next((i for i in avail.get(key, []) if i not in used_assist), None)
+            if matched is not None:
+                used_assist.add(matched)
+                last_anchor = matched
+            else:
+                # 缺失 assistant:优先插在它声明的工具记录之前,否则插在下一个
+                # assistant 之前 / 最后一条用户消息之后。
+                cand = min((tool_index[i] for i in ex["call_ids"] if i in tool_index),
+                           default=None)
+                if cand is not None:
+                    anchor = cand - 1
+                    if ex["content"]:
+                        add_after(anchor, TranscriptItem("assistant", ex["content"]))
+                    last_anchor = anchor
+                else:
+                    nxt = next((i for i, c in enumerate(conv)
+                                if i > last_anchor and c["role"] == "assistant"), None)
+                    if nxt is not None:
+                        anchor = nxt - 1
+                    else:
+                        anchor = max((i for i, c in enumerate(conv) if c["role"] == "user"),
+                                     default=last_anchor)
+                        if anchor < last_anchor:
+                            anchor = last_anchor
+                    if ex["content"]:
+                        add_after(anchor, TranscriptItem("assistant", ex["content"]))
+                    last_anchor = anchor
+            for cid in ex["call_ids"]:
+                if not cid:
+                    continue
+                if cid in tool_index:
+                    last_anchor = max(last_anchor, tool_index[cid])
+                    used_tools.add(cid)
+                    continue
+                row = tools.get(cid)
+                if row is not None:
+                    add_after(last_anchor, TranscriptItem("tool", "", {"call": row}))
+                    used_tools.add(cid)
+
+        # 已执行但既不在 conversation、也不在 checkpoint 里的工具:补在末尾
+        for key, row in tools.items():
+            if key not in used_tools:
+                add_after(last_anchor, TranscriptItem("tool", "", {"call": row}))
+                used_tools.add(key)
+
+        items: list[TranscriptItem] = list(after.get(-1, []))
+        for i, c in enumerate(conv):
+            if c["item"] is not None:
+                items.append(c["item"])
+            items.extend(after.get(i, []))
+        return items
+
+    def _transcript_from_checkpoint(self, ck, tools: dict, limit: int) -> list[TranscriptItem]:
+        """兼容迁移前/旧 run:从 checkpoint 重建(用户 goal 只显示一次)。"""
+        items: list[TranscriptItem] = []
+        con = self.services.con
+        run = con.execute("SELECT goal FROM runs WHERE id=?", (self.run_id,)).fetchone()
+        if run and run["goal"]:
+            items.append(TranscriptItem("user", run["goal"]))
         used_tools: set[str] = set()
         if ck:
             msgs = _json(ck["messages"], [])

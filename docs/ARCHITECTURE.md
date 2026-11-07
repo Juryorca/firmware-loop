@@ -22,7 +22,8 @@
 ```
 fwcore/  db.py(SCHEMA v16/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
          tools.py(内置 ToolSpec)                toolreg.py(manifest→Registry,4 种注册路径)
-         runtime.py(循环/检查点/恢复/预算/流式消费)  streaming.py(事件/取消令牌)
+         runtime.py(循环/检查点/恢复/预算/流式消费/对话持久化失败显式暂停)
+         streaming.py(事件/取消令牌;真实 HTTP 取消用 socket shutdown)
          research.py(提示/池/三镜/进度)
          compact.py(压缩)                        contextinfo.py(上下文状态)
          mcp_runtime.py(MCP 桥)                  adapters_ida.py + winenv(IDA/Windows)

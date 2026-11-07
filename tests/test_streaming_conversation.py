@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import http.server
 import json
+import threading
 import time
 
 from fwapp.args import AppOptions
@@ -13,9 +15,9 @@ from fwapp.runtime import AppRuntime
 from fwapp.widgets.editor import PromptEditor
 from fwapp.widgets.transcript import MessageWidget
 from fwcore import db as _db
-from fwcore.domain import Domain
+from fwcore.domain import ConversationPersistError, Domain
 from fwcore.model_client import OpenAICompatModel
-from fwcore.models import ScriptedAdapter
+from fwcore.models import OpenAICompatAdapter, ScriptedAdapter
 from fwcore.policy import Policy
 from fwcore.runtime import Runner
 from fwcore.streaming import StreamError, StreamEvent
@@ -355,3 +357,330 @@ def test_cancel_marks_queued_message_cancelled(tmp_path):
         assert "第二问" in sess.take_returned() or "第二问" in [r["content"] for r in rows]
     finally:
         rt.dispose()
+
+
+# ---------------- SSE 终止/截断 ----------------
+
+def _sse_model(lines):
+    return OpenAICompatModel(model="m", base_url="https://example.test", api_key="k",
+                             stream_transport=lambda url, headers, payload: list(lines))
+
+
+def _collect(model, control=None):
+    events = []
+    err = None
+    try:
+        for ev in model.stream([{"role": "user", "content": "hi"}], [], control=control):
+            events.append(ev)
+    except Exception as e:                     # 测试需要检查异常类型
+        err = e
+    return events, err
+
+
+def test_sse_eof_without_terminator_is_error_but_keeps_partial():
+    lines = ['data: {"choices":[{"delta":{"content":"半截"}}]}']
+    events, err = _collect(_sse_model(lines))
+    assert "".join(e.text for e in events if e.type == "text_delta") == "半截"
+    assert isinstance(err, StreamError), err
+
+
+def test_sse_done_without_finish_reason_is_accepted():
+    lines = ['data: {"choices":[{"delta":{"content":"ok"}}]}', "data: [DONE]"]
+    events, err = _collect(_sse_model(lines))
+    assert err is None
+    assert events[-1].type == "done" and events[-1].finish_reason == ""
+
+
+def test_sse_finish_reason_without_done_is_accepted():
+    lines = ['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}']
+    events, err = _collect(_sse_model(lines))
+    assert err is None and events[-1].finish_reason == "stop"
+
+
+def test_runner_eof_truncation_does_not_finish(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    dom = Domain(con, str(root))
+    lines = ['data: {"choices":[{"delta":{"content":"FINAL: 假完成"}}]}']
+    adapter = OpenAICompatAdapter(model="m", api_key="k", base_url="https://example.test",
+                                  stream_transport=lambda u, h, p: list(lines))
+    r = Runner(con, str(root), adapter, mcp=False, watchdog=False)
+    rid = r.start("t1", "开始")
+    res = r.run(rid, "t1")
+    assert res.state == "paused"
+    assert (res.handback or "").startswith("model_error")
+    entries = dom.conversation(rid)
+    assert any(e["role"] == "assistant" and e["status"] == "error"
+               and "FINAL: 假完成" in e["content"] for e in entries)
+    con.close()
+
+
+def test_length_finish_with_final_does_not_finish(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    dom = Domain(con, str(root))
+    script = [{"content": "FINAL: 假完成", "finish_reason": "length", "tool_calls": []}]
+    r = Runner(con, str(root), ScriptedAdapter(script=script), mcp=False, watchdog=False)
+    rid = r.start("t1", "开始")
+    res = r.run(rid, "t1")
+    assert res.state == "paused"
+    assert "model_incomplete" in (res.handback or "")
+    assert any(e["role"] == "assistant" and e["status"] == "partial" for e in dom.conversation(rid))
+    con.close()
+
+
+def test_length_finish_with_tool_call_does_not_execute_tool(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    script = [{"content": "", "finish_reason": "length", "tool_calls": [{
+        "id": "c1", "name": "state_add_hypothesis",
+        "args": {"target": "t1", "title": "不应执行"}}]}]
+    r = Runner(con, str(root), ScriptedAdapter(script=script), mcp=False, watchdog=False)
+    rid = r.start("t1", "开始")
+    res = r.run(rid, "t1")
+    assert res.state == "paused"
+    assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 0
+    assert con.execute("SELECT COUNT(*) n FROM tool_calls").fetchone()["n"] == 0
+    con.close()
+
+
+# ---------------- 对话写入失败必须显式暂停 ----------------
+
+def _fail_role(r, role, message="模拟对话写入失败"):
+    orig = r._conversation_write
+
+    def fail(*args, **kwargs):
+        if len(args) > 1 and args[1] == role:
+            raise ConversationPersistError(message)
+        return orig(*args, **kwargs)
+
+    r._conversation_write = fail
+    return orig
+
+
+def test_assistant_conversation_failure_pauses_and_checkpoint_is_valid(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    script = [
+        {"content": "先登记", "tool_calls": [{"id": "c1", "name": "state_add_hypothesis",
+                                            "args": {"target": "t1", "title": "不应执行"}}]},
+        {"content": "FINAL: 后续", "tool_calls": []},
+    ]
+    r = Runner(con, str(root), ScriptedAdapter(script=script), mcp=False, watchdog=False)
+    rid = r.start("t1", "开始")
+    orig = _fail_role(r, "assistant")
+    res = r.run(rid, "t1")
+    assert res.state == "paused" and "conversation_error" in (res.handback or "")
+    assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 0
+    ck = con.execute("SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1",
+                     (rid,)).fetchone()
+    msgs = json.loads(ck["messages"])
+    assert any(m.get("role") == "assistant" for m in msgs)
+    assert any(m.get("role") == "tool" and "conversation_persist_failed" in (m.get("content") or "")
+               for m in msgs), "必须补 cancelled tool 结果,保持协议合法"
+    r._conversation_write = orig
+    res2 = r.resume(rid)
+    assert res2.state == "finished"
+    assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 0
+    con.close()
+
+
+def test_tool_conversation_failure_does_not_rerun_tool(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    script = [
+        {"content": "登记", "tool_calls": [{"id": "c1", "name": "state_add_hypothesis",
+                                           "args": {"target": "t1", "title": "只执行一次"}}]},
+        {"content": "FINAL: 后续", "tool_calls": []},
+    ]
+    r = Runner(con, str(root), ScriptedAdapter(script=script), mcp=False, watchdog=False)
+    rid = r.start("t1", "开始")
+    orig = _fail_role(r, "tool")
+    res = r.run(rid, "t1")
+    assert res.state == "paused" and "conversation_error" in (res.handback or "")
+    assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 1
+    r._conversation_write = orig
+    res2 = r.resume(rid)
+    assert res2.state == "finished"
+    assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 1, "不得重跑工具"
+    assert con.execute("SELECT COUNT(*) n FROM tool_calls").fetchone()["n"] == 1
+    con.close()
+
+
+# ---------------- Transcript 从权威记录补齐 ----------------
+
+def _run_with_tool(root, cfg):
+    con = _db.connect(cfg.db_path)
+    script = [
+        {"content": "先登记", "tool_calls": [{"id": "c1", "name": "state_add_hypothesis",
+                                            "args": {"target": "t1", "title": "补齐测试"}}]},
+        {"content": "FINAL: 完成", "tool_calls": []},
+    ]
+    r = Runner(con, str(root), ScriptedAdapter(script=script), mcp=False, watchdog=False)
+    rid = r.start("t1", "用户目标")
+    r.run(rid, "t1")
+    con.close()
+    return rid
+
+
+def _session_for(cfg, rid):
+    rt = AppRuntime(cfg, target="t1", run_id=rid,
+                    adapter_factory=lambda name: ScriptedAdapter(script=[]),
+                    mcp=False, watchdog=False)
+    return rt
+
+
+def _roles(items):
+    return [i.kind for i in items]
+
+
+def test_transcript_backfills_missing_assistant_and_tool(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    rid = _run_with_tool(root, cfg)
+    rt = _session_for(cfg, rid)
+    try:
+        sess = rt.session
+        assert _roles(sess.transcript()) == ["user", "assistant", "tool", "assistant"]
+        con = sess.services.con
+        # 缺 assistant
+        con.execute("DELETE FROM conversation_entries WHERE run_id=? AND role='assistant'"
+                    " AND content LIKE '先登记%'", (rid,))
+        assert _roles(sess.transcript()) == ["user", "assistant", "tool", "assistant"]
+        # 缺 tool
+        con.execute("DELETE FROM conversation_entries WHERE run_id=? AND role='tool'", (rid,))
+        items = sess.transcript()
+        assert _roles(items) == ["user", "assistant", "tool", "assistant"]
+        assert len([i for i in items if i.kind == "tool"]) == 1
+        # 只剩 user:assistant/tool 全部从 checkpoint/tool_calls 补齐
+        con.execute("DELETE FROM conversation_entries WHERE run_id=? AND role!='user'", (rid,))
+        items = sess.transcript()
+        assert _roles(items) == ["user", "assistant", "tool", "assistant"]
+        assert len([i for i in items if i.kind == "assistant"]) == 2
+    finally:
+        rt.dispose()
+
+
+# ---------------- 真实 HTTP SSE:取消必须关闭阻塞读取 ----------------
+
+class _SSEHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, format, *args):
+        return
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(length)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        for text in ("第一", "第二"):
+            payload = json.dumps({"choices": [{"delta": {"content": text}}]})
+            self.wfile.write(f"data: {payload}\n\n".encode())
+            self.wfile.flush()
+        self.server.sent.set()             # type: ignore[attr-defined]
+        self.server.release.wait(10)       # type: ignore[attr-defined]
+        if getattr(self.server, "eof_mode", False):
+            return
+        # 客户端取消后应关闭连接:直接读 accepted socket,EOF/错误即证明关闭
+        self.connection.settimeout(2)
+        try:
+            if self.connection.recv(1) == b"":
+                self.server.closed.set()   # type: ignore[attr-defined]
+        except OSError:
+            self.server.closed.set()       # type: ignore[attr-defined]
+
+
+def _serve_sse(eof_mode=False):
+    class Server(http.server.ThreadingHTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+        sent: threading.Event
+        release: threading.Event
+        closed: threading.Event
+        eof_mode: bool
+
+    srv = Server(("127.0.0.1", 0), _SSEHandler)
+    srv.sent = threading.Event()           # type: ignore[attr-defined]
+    srv.release = threading.Event()        # type: ignore[attr-defined]
+    srv.closed = threading.Event()         # type: ignore[attr-defined]
+    srv.eof_mode = eof_mode                # type: ignore[attr-defined]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_real_http_sse_cancel_closes_blocked_read_and_pauses(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    dom = Domain(con, str(root))
+    srv = _serve_sse()
+    adapter = OpenAICompatAdapter(model="m", api_key="k",
+                                  base_url=f"http://127.0.0.1:{srv.server_port}/v1")
+    r = Runner(con, str(root), adapter, mcp=False, watchdog=False)
+    try:
+        rid = r.start("t1", "开始")
+        errs: list = []
+        th = threading.Thread(target=lambda: errs.append(r.run(rid, "t1")), daemon=True)
+        th.start()
+        assert srv.sent.wait(5), "服务端应已发送部分 SSE"
+        t0 = time.time()
+        while r.stream_control is None and time.time() - t0 < 3:
+            time.sleep(0.02)
+        assert r.stream_control is not None
+        time.sleep(0.4)                     # 让客户端先读到已发送的分片
+        t_cancel = time.time()
+        r.stream_control.cancel()
+        th.join(3)
+        assert not th.is_alive(), "cancel 必须打断阻塞的 HTTP 读取"
+        assert time.time() - t_cancel < 2.0
+        assert len(errs) == 1 and errs[0].state == "paused", errs
+        srv.release.set()
+        assert srv.closed.wait(3), "服务端应观察到连接被关闭"
+        row = con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()
+        assert row["state"] == "paused"
+        entries = dom.conversation(rid)
+        assert any(e["role"] == "assistant" and e["status"] == "cancelled"
+                   and "第一" in e["content"] for e in entries)
+        assert con.execute("SELECT model_calls FROM runs WHERE id=?", (rid,)).fetchone()[0] == 1
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        con.close()
+
+
+def test_real_http_sse_eof_without_terminator_pauses(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    srv = _serve_sse(eof_mode=True)
+    adapter = OpenAICompatAdapter(model="m", api_key="k",
+                                  base_url=f"http://127.0.0.1:{srv.server_port}/v1")
+    r = Runner(con, str(root), adapter, mcp=False, watchdog=False)
+    try:
+        rid = r.start("t1", "开始")
+        th = threading.Thread(target=lambda: r.run(rid, "t1"), daemon=True)
+        th.start()
+        time.sleep(0.3)
+        srv.release.set()
+        th.join(5)
+        row = con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()
+        assert row["state"] == "paused"
+        entries = Domain(con, str(root)).conversation(rid)
+        assert any(e["role"] == "assistant" and e["status"] == "error"
+                   and "第一" in e["content"] for e in entries)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+        con.close()
+
+
+def test_content_filter_partial_pauses(tmp_path):
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    script = [{"content": "被过滤的部分", "finish_reason": "content_filter", "tool_calls": []}]
+    r = Runner(con, str(root), ScriptedAdapter(script=script), mcp=False, watchdog=False)
+    rid = r.start("t1", "开始")
+    res = r.run(rid, "t1")
+    assert res.state == "paused" and "model_incomplete" in (res.handback or "")
+    con.close()

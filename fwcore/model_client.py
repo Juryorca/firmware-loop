@@ -13,6 +13,7 @@ import contextlib
 import http.client
 import json
 import os
+import socket
 from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from collections.abc import Callable, Iterable
@@ -196,12 +197,29 @@ class OpenAICompatModel:
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
         conn = cls(host, u.port, timeout=120)
         resp = None
+        sock = None
         try:
             conn.request("POST", path, body=json.dumps(payload).encode(), headers=headers)
             resp = conn.getresponse()
             if control is not None:
-                control.bind(resp.close)
-                control.bind(conn.close)
+                # getresponse() 可能把 socket 从 conn 移到 resp.fp.raw._sock
+                sock = conn.sock
+                if sock is None:
+                    raw = getattr(getattr(resp, "fp", None), "raw", None)
+                    sock = getattr(raw, "_sock", None)
+                if sock is not None:
+                    # 阻塞 read 也每 0.5s 醒来检查取消;shutdown 再负责立即打断
+                    sock.settimeout(0.5)
+
+                def _abort() -> None:
+                    # 只 shutdown,不在这里 close:readline 持有 file 锁时
+                    # resp.close() 会阻塞取消线程(实测 9.5s)。shutdown 足够唤醒
+                    # 阻塞的 recv,真正的 close 由读取线程的 finally 完成。
+                    if sock is not None:
+                        with contextlib.suppress(Exception):
+                            sock.shutdown(socket.SHUT_RDWR)
+
+                control.bind(_abort)
             if resp.status >= 400:
                 body = resp.read()
                 raise ModelHTTPError(resp.status, body.decode("utf-8", errors="replace"))
@@ -210,10 +228,19 @@ class OpenAICompatModel:
             if control is not None and control.cancelled:
                 raise StreamCancelled("请求已取消") from e
             raise ModelHTTPError(0, f"连接失败: {str(e)[:200]}") from e
+        except Exception as e:
+            if control is not None and control.cancelled:
+                raise StreamCancelled("请求已取消") from e
+            if isinstance(e, StreamError):
+                raise
+            raise StreamError(f"{type(e).__name__}: {e}") from e
         finally:
             if resp is not None:
                 with contextlib.suppress(Exception):
                     resp.close()
+            if sock is not None:
+                with contextlib.suppress(Exception):
+                    sock.close()
             with contextlib.suppress(Exception):
                 conn.close()
 
@@ -285,7 +312,17 @@ def _parse_sse(lines: Iterable, control: StreamControl | None) -> Iterable[Strea
     finish = ""
     usage: dict = {}
     seen_calls: set[int] = set()
-    for raw in lines:
+    saw_done = False
+    iterator = iter(lines)
+    while True:
+        try:
+            raw = next(iterator)
+        except StopIteration:
+            break
+        except TimeoutError:
+            if control is not None:
+                control.raise_if_cancelled()
+            continue
         if control is not None:
             control.raise_if_cancelled()
         if isinstance(raw, bytes):
@@ -297,6 +334,7 @@ def _parse_sse(lines: Iterable, control: StreamControl | None) -> Iterable[Strea
             continue
         data = line[5:].strip()
         if data == "[DONE]":
+            saw_done = True
             break
         try:
             obj = json.loads(data)
@@ -330,5 +368,13 @@ def _parse_sse(lines: Iterable, control: StreamControl | None) -> Iterable[Strea
         if choice.get("finish_reason"):
             finish = choice["finish_reason"]
     if not started:
-        yield StreamEvent("start")
+        if control is not None and control.cancelled:
+            raise StreamCancelled("请求已取消")
+        raise StreamError("SSE 响应为空(没有任何 assistant 事件)")
+    # 合法终止:收到 [DONE],或服务端给出 finish_reason。
+    # 两者都没有 ⇒ 连接被截断/异常 EOF,绝不能当成正常完成。
+    if not (saw_done or finish):
+        if control is not None and control.cancelled:
+            raise StreamCancelled("请求已取消")
+        raise StreamError("SSE 响应异常结束:缺少 [DONE] 或 finish_reason(响应可能被截断)")
     yield StreamEvent("done", finish_reason=finish, usage=usage)

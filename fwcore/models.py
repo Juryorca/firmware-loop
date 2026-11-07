@@ -140,8 +140,11 @@ class ScriptedAdapter:
                         "args": c.get("args") or args or {},
                         "args_raw": None,
                         "args_invalid": invalid})
+        usage = raw.get("usage")
         return Reply(content=raw.get("content") or "", tool_calls=out,
-                     reasoning=raw.get("reasoning_content") or "")
+                     reasoning=raw.get("reasoning_content") or "",
+                     finish_reason=raw.get("finish_reason") or "",
+                     usage=usage if isinstance(usage, dict) else {})
 
 
 @dataclass

@@ -50,6 +50,14 @@ class InvariantViolation(DomainError):
     pass
 
 
+class ConversationPersistError(DomainError):
+    """对话记录写入失败(不是研究结论);可携带尚未落库的 assistant reply。"""
+
+    def __init__(self, message: str, *, reply=None):
+        super().__init__(message)
+        self.reply = reply
+
+
 def _sha256_file(path: str) -> str:
     h = hashlib.sha256()
     try:

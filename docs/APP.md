@@ -55,6 +55,12 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 - **真流式**:模型 SSE → Adapter → Runner → Session → TUI 全链路增量;
   assistant 消息在首个 token 到达时即出现并持续追加,reasoning 只进隐藏的
   thinking 块,不混进正文。
+- **终止判定严格**:合法结束 = 收到 `[DONE]` 或 `finish_reason`;两者都没有
+  ⇒ `StreamError`(EEOF 截断),部分文本保留为 error,绝不触发 FINAL。
+  `finish_reason=length/content_filter` 且含 FINAL/工具调用 ⇒ 暂停为 partial,
+  不执行工具、不收口(工具参数未收全也绝不执行)。
+- **取消**:`StreamControl` 对真实 HTTP 连接执行 socket shutdown + close,
+  阻塞的 SSE read 会立即退出;Run 暂停、部分 assistant 保留、预算只记一次。
 - 工具调用参数分片接收、完整组装并校验后才执行;状态实时更新,可折叠/展开
   (Ctrl+O),展示参数、结果、stdout 摘录。
 - Slash Commands 带补全:`/help /model /target /resume /status /budget
@@ -72,8 +78,9 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 - `tests/test_app_session.py`:提交、取消、暂停后 resume、新 run、print mode;
   全部用 scripted 适配器,**不产生外部模型调用**。
 - `tests/test_app_tui.py`:Textual headless pilot(真实按键/布局/overlay/resize)。
-- `tests/test_streaming_conversation.py`:Mock SSE、分片工具参数、取消/断流、
-  多轮持久化与重启恢复、TUI 首个 token 立即可见。
+- `tests/test_streaming_conversation.py`:Mock SSE/真实本地 HTTP SSE、EOF 截断、
+  分片工具参数、取消关闭阻塞读取、断流预算、多轮持久化与重启恢复、对话写入失败、
+  transcript 补齐、TUI 首个 token 立即可见。
 - `tools/tui_smoke.py`:真 pty 冒烟(启动/输入/多行/resize/历史/Ctrl+Q/SIGTERM)。
 
 ## 6. 对话持久化
@@ -101,6 +108,11 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 
 - 流式只覆盖 OpenAI 兼容 SSE;注入自定义非流式 transport 的适配器会走
   `chat()` fallback(整段作为一个 delta)。reasoning 默认折叠,未做展开快捷键。
+- **持久化失败不吞**:assistant/tool 对话写入在锁竞争上短重试,最终失败抛
+  `ConversationPersistError` 并暂停轮次(不报告正常完成);工具已产生副作用时
+  先把 tool 结果写进 checkpoint,恢复后从 `tool_calls` 补记录,**不重跑工具**。
+- **Transcript 补齐**:conversation 为准;缺失的 assistant 从 checkpoint、缺失的
+  tool 从 `tool_calls` 幂等合并,按 tool_call_id/parent 顺序恢复,不重复注入上下文。
 - `conversation_entries` 是开发期 schema v16 基线;已有旧库需先运行
   `tools/db_rebaseline.py`(会做一致性备份)。
 - 不复制 Pi 的 Extension / Plan Mode / Subagent;保持单 Agent。
