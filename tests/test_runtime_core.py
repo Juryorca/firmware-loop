@@ -515,3 +515,108 @@ def test_turn_refuses_user_stop_and_foreign_owner(setup):
     res2 = r.turn(rid, "t1", None, [])
     assert res2.handback == "owner_lost"
     assert model.calls == []
+
+
+def _compact_hist():
+    def call(cid, path):
+        return {"role": "assistant", "content": "", "tool_calls": [{
+            "id": cid, "type": "function",
+            "function": {"name": "fs_read", "arguments": json.dumps({"path": path})}}]}
+
+    return [
+        call("a1", "a.txt"), {"role": "tool", "tool_call_id": "a1", "content": "x" * 8000},
+        call("a2", "b.txt"), {"role": "tool", "tool_call_id": "a2", "content": "y" * 8000},
+    ]
+
+
+def test_reserve_then_takeover_blocks_ordinary_model_call(setup):
+    con, dom, root = setup
+    model = ScriptedModel(script=[{"content": "FINAL: 不应调用", "tool_calls": []}])
+    r = Runner(con, root, model, mcp=False, watchdog=False)
+    rid = r.start("t1")
+    orig = r._reserve_call
+
+    def steal(rid, n):
+        ok = orig(rid, n)
+        if ok:
+            con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (rid,))
+        return ok
+
+    r._reserve_call = steal
+    res = r.run(rid, "t1")
+    assert model.calls == [], "预留后接管:不得发起模型请求"
+    assert res.handback == "owner_lost"
+    row = con.execute("SELECT state,pid FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["state"] == "running" and row["pid"] == 999999
+
+
+def test_reserve_then_cancel_blocks_ordinary_model_call(setup):
+    con, dom, root = setup
+    model = ScriptedModel(script=[{"content": "FINAL: 不应调用", "tool_calls": []}])
+    r = Runner(con, root, model, mcp=False, watchdog=False)
+    rid = r.start("t1")
+    orig = r._reserve_call
+
+    def cancel_after(rid, n):
+        ok = orig(rid, n)
+        if ok:
+            con.execute("UPDATE runs SET state='paused', handback_reason='user_stop: 测试'"
+                        " WHERE id=?", (rid,))
+        return ok
+
+    r._reserve_call = cancel_after
+    res = r.run(rid, "t1")
+    assert model.calls == [], "预留后取消:不得发起模型请求"
+    assert res.state == "paused"
+    assert (res.handback or "").startswith("user_stop")
+
+
+def test_summary_reserve_then_takeover_blocks_model_call(setup):
+    con, dom, root = setup
+    model = ScriptedModel(script=[])
+    r = Runner(con, root, model,
+               limits=Limits(max_model_calls=10, context_tokens=1000,
+                             output_reserve_tokens=10, keep_recent_tokens=100),
+               mcp=False, watchdog=False)
+    rid = r.start("t1")
+    orig = r._reserve_call
+    calls = []
+
+    def steal(rid, n):
+        ok = orig(rid, n)
+        calls.append(n)
+        if len(calls) == 1:
+            con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (rid,))
+        return ok
+
+    r._reserve_call = steal
+    res = r.turn(rid, "t1", None, _compact_hist())
+    assert len(calls) >= 2, "应先触发摘要预留,再触发主调用预留"
+    assert model.calls == [], "摘要预留后接管:不得调用摘要或普通模型"
+    assert res.handback == "owner_lost"
+
+
+def test_summary_reserve_then_cancel_blocks_model_call(setup):
+    con, dom, root = setup
+    model = ScriptedModel(script=[])
+    r = Runner(con, root, model,
+               limits=Limits(max_model_calls=10, context_tokens=1000,
+                             output_reserve_tokens=10, keep_recent_tokens=100),
+               mcp=False, watchdog=False)
+    rid = r.start("t1")
+    orig = r._reserve_call
+    calls = []
+
+    def cancel_after(rid, n):
+        ok = orig(rid, n)
+        calls.append(n)
+        if len(calls) == 1:
+            con.execute("UPDATE runs SET state='paused', handback_reason='user_stop: 测试'"
+                        " WHERE id=?", (rid,))
+        return ok
+
+    r._reserve_call = cancel_after
+    res = r.turn(rid, "t1", None, _compact_hist())
+    assert len(calls) >= 2
+    assert model.calls == []
+    assert res.state == "paused" and (res.handback or "").startswith("user_stop")

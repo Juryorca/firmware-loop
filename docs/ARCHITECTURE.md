@@ -75,7 +75,9 @@ conclusions runs checkpoints tool_calls events mirror_checks research_logs docum
     AND pid/starttime 全匹配` rowcount=0 ⇒ 不插入;
   - `_persist`/`_persist_counters`:计数用同一条条件 UPDATE + `MAX` 写,检查与写入不可分割;
   - `_reserve_call`:model_calls 预留要求 state='running' + owner 全匹配;预留失败调用方
-    不得发起模型请求,预留成功后、请求前再核验一次 owner;
+    不得发起模型请求。预留成功后、请求前统一用 `is_running_owner`(state 必须是 running,
+    且 pid/starttime 匹配)再核验一次;摘要调用与普通调用都走同一检查,取消/接管后
+    不得再发出请求;工具批次也用同一检查,暂停后剩余工具不执行。
   - `except BaseException`:只有"仍 running 且仍是 owner"才写 paused;接管后旧进程
     不覆盖新 owner 状态,也不写 checkpoint;
   - `turn` 恢复 running:handback(user_stop)/state/owner 与更新是同一条 UPDATE,
@@ -95,7 +97,7 @@ conclusions runs checkpoints tool_calls events mirror_checks research_logs docum
 
 对应测试:`test_runtime_core`(租约/心跳/批次/handback;接管后预留/计数/checkpoint 拒绝写、
 异常路径不覆盖新 owner、user_stop/异主 resume 拒绝)、`test_watchdog`(CAS 与 pgid 安全)、
-`test_cross_process_resume`(跨进程 resume 幂等)。
+`test_cross_process_resume`(跨进程 resume 幂等;预留后接管/取消不发起摘要或普通模型调用)。
 
 ## 4. 工具接入(统一注册契约,不统一内部实现)
 

@@ -397,6 +397,23 @@ class Runner:
         cur = _proc_starttime(os.getpid())
         return row["pid_starttime"] in (None, cur)
 
+    def is_running_owner(self, rid: str) -> bool:
+        """统一检查:run 仍 running 且当前进程是 owner。
+
+        `_owns` 只回答"pid/starttime 是否还是我",不回答"run 是否已被取消";
+        模型请求前必须用这个更严格的检查。
+        """
+        row = self.con.execute(
+            "SELECT state,pid,pid_starttime FROM runs WHERE id=?", (rid,)).fetchone()
+        if not row or row["state"] != "running":
+            return False
+        if row["pid"] is None:
+            return True
+        if row["pid"] != os.getpid():
+            return False
+        cur = _proc_starttime(os.getpid())
+        return row["pid_starttime"] in (None, cur)
+
     def _claim_run(self, rid: str) -> None:
         """原子接管 run:活主存在 ⇒ 拒绝;CAS 失败 ⇒ 被别人抢先。
 
@@ -839,9 +856,14 @@ class Runner:
             last_content_hashes: list[str] = []
             since = _now()
             while budget is None or budget > 0:
-                if not self._owns(rid):          # 被别的进程接管:立刻退出,不覆盖对方状态
+                if not self.is_running_owner(rid):   # 被接管/已暂停:立刻退出
                     state = "paused"
-                    _event(self.con, "run.owner_lost", rid, {"pid": os.getpid()})
+                    if self._owns(rid):
+                        # 仍是 owner 但状态已不是 running:外部取消/预算暂停等
+                        stopped = self._external_stop(rid) or "run 状态已变化"
+                        _event(self.con, "run.stopped_external", rid, {"reason": stopped})
+                    else:
+                        _event(self.con, "run.owner_lost", rid, {"pid": os.getpid()})
                     break
                 stopped = self._external_stop(rid)
                 if stopped:
@@ -885,6 +907,8 @@ class Runner:
                         run_calls += 1
                         if not self._reserve_call(rid, run_calls):
                             raise RuntimeError("预算预留失败: 所有权/状态已变化")
+                        if not self.is_running_owner(rid):
+                            raise RuntimeError("摘要请求前所有权/状态已变化")
                         text = _render_for_summary(chunk)
                         reply = _coerce_reply(self.model.chat(
                             [{"role": "user", "content": text}], []))
@@ -959,8 +983,8 @@ class Runner:
                     _persist()
                     break
                 # 预留成功后、真正发请求前再确认一次所有权:接管后旧进程不得再发起调用
-                if not self._owns(rid) or (self.stop_event is not None
-                                           and self.stop_event.is_set()):
+                if not self.is_running_owner(rid) or (self.stop_event is not None
+                                                      and self.stop_event.is_set()):
                     state = "paused"
                     _persist()
                     break
@@ -1152,12 +1176,16 @@ class Runner:
                         _event(self.con, "run.tool_cap", rid,
                                {"requested": len(reply.tool_calls), "executed": cap})
                     lost_owner = False
+                    stopped_external = False
                     for ci, call in enumerate(calls_this_turn):
-                        if not self._owns(rid):
-                            # 模型调用期间被接管:剩余工具(可能含 state_* 写操作)一律不执行;
-                            # 协议要求每个 tool_call_id 都有结果 ⇒ 逐个补 cancelled
+                        if not self.is_running_owner(rid):
+                            # 接管/取消后剩余工具(含 state_* 写操作)一律不执行;
+                            # 协议要求每个 tool_call_id 都有结果 ⇒ 逐个补 cancelled。
+                            # 仍是 owner 但状态非 running = 外部取消/预算暂停,不是 owner_lost。
+                            same_owner = self._owns(rid)
                             for c2 in calls_this_turn[ci:]:
-                                err2 = "owner_lost: 运行已被其他进程接管"
+                                err2 = ("run_stopped: 运行已暂停/取消" if same_owner
+                                        else "owner_lost: 运行已被其他进程接管")
                                 history.append({"role": "tool", "tool_call_id": c2.get("id"),
                                                 "name": c2.get("name"),
                                                 "content": json.dumps(
@@ -1177,7 +1205,10 @@ class Runner:
                                                        "error": str(e)[:300]})
                                     conv_failed = True
                                     break
-                            lost_owner = True
+                            if same_owner:
+                                stopped_external = True
+                            else:
+                                lost_owner = True
                             break
                         sig = call["name"] + "|" + json.dumps(call.get("args") or {}, sort_keys=True,
                                                               ensure_ascii=False)
