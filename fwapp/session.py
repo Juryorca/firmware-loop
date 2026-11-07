@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from fwcore import db as _db
 from fwcore.compact import estimate_tokens
 from fwcore.models import ScriptedAdapter
-from fwcore.runtime import Runner
+from fwcore.runtime import RunResult, Runner
 
 from .config import AppConfig, adapter_for
 from .services import Services, latest_run
@@ -180,6 +180,9 @@ class AgentSession:
         client_id = f"tui-{uuid.uuid4().hex}"     # 同一提交重试幂等
         with self._lock:
             busy = self._busy
+        if not busy:
+            # 新的一轮用户输入生效:清除上一轮的取消标记
+            self._cancel_event.clear()
         if busy:
             # 排队也持久化(状态 queued);执行时同一 client_id 推进为 ok,不产生第二条
             if self.run_id:
@@ -252,10 +255,16 @@ class AgentSession:
 
     def cancel(self, reason: str = "用户取消") -> bool:
         rid = self.run_id
-        if not rid:
-            return False
-        # 先置会话取消标记并关掉正在进行的网络请求(不等 DB 写)
+        # 取消标记先置位:即使 run 还没创建(worker 正在 start),也能在
+        # 创建后立即取消,而不是把取消丢掉。
         self._cancel_event.set()
+        if not rid:
+            with self._lock:
+                queued = list(self._pending)
+                self._pending.clear()
+                self._returned.extend(text for text, _cid in queued)
+            self.emit("cancelled", reason, run=None)
+            return True
         runner = self._runner_ref
         closed = False
         ctrl = getattr(runner, "stream_control", None) if runner is not None else None
@@ -331,7 +340,6 @@ class AgentSession:
                         runner.model = self._adapter_for(self.model_name)
                         self._runner_model_name = self.model_name
                     if kind == "turn":
-                        self._cancel_event.clear()
                         self._do_turn(runner, str(arg), client_id)
                     elif kind == "continue":
                         self._do_continue(runner)
@@ -383,6 +391,13 @@ class AgentSession:
         if not rid:
             rid = runner.start(self.target, text)      # start 内持久化首条用户消息
             self.run_id = rid
+            if self._cancel_event.is_set():
+                # 取消发生在 start 之前/期间:创建后立即暂停,绝不发起模型调用
+                runner.cancel(rid, "用户取消")
+                res = RunResult(rid, "paused", 0, 0, "", False, [],
+                                "user_stop: 用户取消", [])
+                self._publish_result(res)
+                return
             res = runner.run(rid, self.target, goal=text)
         else:
             res = runner.resume(rid, goal=text, user_client_id=client_id)

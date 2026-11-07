@@ -69,8 +69,20 @@ conclusions runs checkpoints tool_calls events mirror_checks research_logs docum
   (状态+旧 owner 全匹配);另有活主(同主机、pid 活、starttime 一致)时 **拒绝** 并发 resume。
   ＞ SQLite 事务只保证单条 UPDATE 原子,不保证"读状态→接管"这段逻辑。
 - **心跳不抢所有权**:`_heartbeat` 是 CAS(pid/starttime 对不上就返回 False);turn 每个循环先
-  `_owns` 校验,失去所有权立即退出。`_persist`/`_limit_hit`/`_checkpoint`/`_finish_state`/
-  rounds 写入全部有 owner 守卫 —— 旧 owner 不得覆盖新 owner 的状态/历史/计数。
+  `_owns` 校验,失去所有权立即退出。
+- **所有权是所有生命周期写的原子条件**(不是"先 `_owns` 再写"):
+  - `_checkpoint`:step 更新与 checkpoint 插入在同一事务,`UPDATE ... WHERE state IN ('running','paused')
+    AND pid/starttime 全匹配` rowcount=0 ⇒ 不插入;
+  - `_persist`/`_persist_counters`:计数用同一条条件 UPDATE + `MAX` 写,检查与写入不可分割;
+  - `_reserve_call`:model_calls 预留要求 state='running' + owner 全匹配;预留失败调用方
+    不得发起模型请求,预留成功后、请求前再核验一次 owner;
+  - `except BaseException`:只有"仍 running 且仍是 owner"才写 paused;接管后旧进程
+    不覆盖新 owner 状态,也不写 checkpoint;
+  - `turn` 恢复 running:handback(user_stop)/state/owner 与更新是同一条 UPDATE,
+    取消与恢复的竞争不会复活已取消的 run;
+  - `_limit_hit`/`_finish_state`/rounds/取消写入同样使用 owner+state CAS。
+  ＞ 仍然存在"预留成功后瞬间被接管"的极小窗口,但旧进程不会再预留/发起新请求;
+  SQLite 事务不保证跨网络调用的租约,故以"预留+请求前复核+看护"兜底。
 - **工具批次围栏**:模型调用期间被接管 ⇒ 同一回复里剩余工具(含 `state_*` 写操作)不执行,
   逐个补 cancelled 保证协议完整。
 - **看护先赢竞争再动手**:hard / stale 两分支都是 `UPDATE ... WHERE state='running'`(rowcount=0 跳过),
@@ -81,7 +93,8 @@ conclusions runs checkpoints tool_calls events mirror_checks research_logs docum
 - **预算可核对**:`runs.budget_note` 记录每次 start/resume 生效的 limits 与最近 limit_hit;
   计数每步落库;预算只暂停(不写结论),resume 延续同一计数。
 
-对应测试:`test_runtime_core`(租约/心跳/批次/handback)、`test_watchdog`(CAS 与 pgid 安全)、
+对应测试:`test_runtime_core`(租约/心跳/批次/handback;接管后预留/计数/checkpoint 拒绝写、
+异常路径不覆盖新 owner、user_stop/异主 resume 拒绝)、`test_watchdog`(CAS 与 pgid 安全)、
 `test_cross_process_resume`(跨进程 resume 幂等)。
 
 ## 4. 工具接入(统一注册契约,不统一内部实现)

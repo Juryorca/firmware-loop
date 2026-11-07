@@ -359,11 +359,30 @@ class Runner:
         st = _proc_starttime(me)
         cur = None
         with _db.Tx(self.con) as c:
-            cur = c.execute(
+            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 "UPDATE runs SET " + set_sql +
                 " WHERE id=? AND state='running'"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
                 (*params, rid, me, st))
+        return cur is not None and cur.rowcount > 0
+
+    def _update_if_owner(self, rid: str, set_sql: str, params: tuple, *,
+                         states: tuple[str, ...] = ("running", "paused")) -> bool:
+        """原子写:只有"仍是 owner 且 state 在允许集合"才更新。
+
+        `_checkpoint/_persist` 的检查与写入必须是同一条 UPDATE,否则
+        检查后、事务前仍可被别的进程接管(TOCTOU)。
+        """
+        me = os.getpid()
+        st = _proc_starttime(me)
+        marks = ",".join("?" for _ in states)
+        cur = None
+        with _db.Tx(self.con) as c:
+            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                "UPDATE runs SET " + set_sql +
+                f" WHERE id=? AND state IN ({marks})"
+                " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                (*params, rid, *states, me, st))
         return cur is not None and cur.rowcount > 0
 
     def _owns(self, rid: str) -> bool:
@@ -463,7 +482,7 @@ class Runner:
             return None
         return os.path.relpath(p, self.root) if os.path.isabs(p) else p
 
-    def _checkpoint(self, rid: str, step: int, history: list[dict]) -> None:
+    def _checkpoint(self, rid: str, step: int, history: list[dict]) -> bool:
         """存检查点。
 
         防爆(2026-11-04 62GB 事故):
@@ -471,14 +490,21 @@ class Runner:
         - **保留上限**:只留最近 `limits.checkpoints_keep` 条;
         - **库体积硬顶**:超过 `limits.max_db_bytes` 继续删最老的检查点,仍超 ⇒ 暂停 run(不写结论)。
         """
-        if not self._owns(rid):
-            return
         payload = json.dumps(_shrink_history(history, artifact_of=self._artifact_of),
                              ensure_ascii=False)
+        me = os.getpid()
+        st = _proc_starttime(me)
         with _db.Tx(self.con) as c:
+            # 检查与写入同一条 UPDATE:扫描后接管也不能让旧 owner 写 checkpoint
+            cur = c.execute(
+                "UPDATE runs SET step=?, updated_at=? WHERE id=?"
+                " AND state IN ('running','paused')"
+                " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                (step, _now(), rid, me, st))
+            if not cur.rowcount:
+                return False
             c.execute("INSERT INTO checkpoints(id,run_id,step,messages,created_at) VALUES(?,?,?,?,?)",
                       (new_id("CK"), rid, step, payload, _now()))
-            c.execute("UPDATE runs SET step=?, updated_at=? WHERE id=?", (step, _now(), rid))
             try:
                 keep = max(1, int(self.limits.checkpoints_keep))
             except (TypeError, ValueError):
@@ -488,6 +514,7 @@ class Runner:
                 "(SELECT id FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT ?)",
                 (rid, rid, keep))
         self._enforce_db_cap(rid)
+        return True
 
     def _enforce_db_cap(self, rid: str) -> None:
         """库体积硬顶:超了就删最老的检查点;仍超 ⇒ 暂停(保留可恢复性,不改变研究事实)。"""
@@ -520,11 +547,10 @@ class Runner:
         _event(self.con, "run.limit_hit", rid, {"reason": reason, **(detail or {})})
 
     # ---------------- 流式模型调用 ----------------
-    def _reserve_call(self, rid: str, n: int) -> None:
-        """发起请求前先把计数落库:断流/崩溃不会把这次已发起的调用丢掉。"""
-        with _db.Tx(self.con) as c:
-            c.execute("UPDATE runs SET model_calls=MAX(model_calls,?), updated_at=?"
-                      " WHERE id=?", (n, _now(), rid))
+    def _reserve_call(self, rid: str, n: int) -> bool:
+        """发起请求前先把计数落库;只有仍是 running 的 owner 才能预留。"""
+        return self._update_if_running(
+            rid, "model_calls=MAX(model_calls,?), updated_at=?", (n, _now()))
 
     def _emit_stream(self, payload: dict) -> None:
         cb = self.on_stream
@@ -533,10 +559,16 @@ class Runner:
         with contextlib.suppress(Exception):
             cb(payload)
 
-    def _set_paused(self, rid: str, reason: str) -> None:
-        with contextlib.suppress(Exception):
-            self._update_if_running(rid, "state='paused', handback_reason=?, updated_at=?",
-                                    (reason[:400], _now()))
+    def _set_paused(self, rid: str, reason: str) -> bool:
+        """原子暂停;锁竞争短重试。失败返回 False(由调用方决定是否降级)。"""
+        for attempt in range(5):
+            try:
+                return self._update_if_running(
+                    rid, "state='paused', handback_reason=?, updated_at=?",
+                    (reason[:400], _now()))
+            except _db.LockedError:
+                time.sleep(0.05 * (attempt + 1))
+        return False
 
     def _conversation_write(self, *args, **kwargs):
         """对话写入:短重试只针对锁竞争;最终失败必须显式抛错,不能吞掉。"""
@@ -551,6 +583,15 @@ class Runner:
                     continue
                 break
         raise ConversationPersistError(f"对话写入失败: {last}") from last
+
+    def _persist_counters(self, rid: str, calls: int, tools: int, elapsed: float) -> bool:
+        """计数落库也必须带 owner 条件(检查与写入同一条 UPDATE)。"""
+        return self._update_if_owner(
+            rid,
+            "model_calls=MAX(model_calls,?), tool_calls=MAX(tool_calls,?),"
+            " elapsed_s=MAX(elapsed_s,?)",
+            (calls, tools, elapsed),
+            states=("running", "paused"))
 
     def _persist_assistant(self, rid: str, reply: Reply, *, status: str,
                            call_seq: int, error: str = "") -> None:
@@ -754,14 +795,28 @@ class Runner:
         state = "running"
         if not self._heartbeat(rid):     # 先确认/刷新 owner;已被接管 ⇒ 立即退出
             return RunResult(rid, "paused", step, rounds, "", False, [], "owner_lost", history)
-        with contextlib.suppress(Exception):
-            row = self.con.execute("SELECT handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
-            if not (row and (row["handback_reason"] or "").startswith("user_stop")):
-                with _db.Tx(self.con) as c:
-                    # 只允许 paused/finished → running;不能把被接管的 running 覆盖,
-                    # 也不能复活 user_stop(上面已排除)
-                    c.execute("UPDATE runs SET state='running', updated_at=?"
-                              " WHERE id=? AND state IN ('paused','finished')", (_now(), rid))
+        me = os.getpid()
+        st = _proc_starttime(me)
+        row = None
+        with _db.Tx(self.con) as c:
+            # 检查 handback / owner / 状态与更新必须是同一条 UPDATE:
+            # 否则取消(写 user_stop)可能正好落在检查与写 running 之间。
+            c.execute(
+                "UPDATE runs SET state='running', updated_at=?"
+                " WHERE id=? AND state IN ('paused','finished')"
+                " AND (handback_reason IS NULL OR handback_reason NOT LIKE 'user_stop%')"
+                " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                (_now(), rid, me, st))
+            row = c.execute(
+                "SELECT state,handback_reason,pid,pid_starttime FROM runs WHERE id=?",
+                (rid,)).fetchone()
+        if row is None:
+            return RunResult(rid, "paused", step, rounds, "", False, [], "owner_lost", history)
+        if row["pid"] not in (None, me) or row["pid_starttime"] not in (None, st):
+            return RunResult(rid, "paused", step, rounds, "", False, [], "owner_lost", history)
+        if row["state"] != "running":
+            reason = row["handback_reason"] or "run_not_running"
+            return RunResult(rid, "paused", step, rounds, "", False, [], reason, history)
         self._watchdog_start()           # 心跳在起看护之前,避免旧 pid 被误判 owner_dead
         self._ensure_mcp(rid)          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
@@ -774,13 +829,9 @@ class Runner:
         t0 = time.time()
 
         def _persist() -> None:
-            if not self._owns(rid):
-                return
-            with _db.Tx(self.con) as c:
-                # MAX:计数只增不减 —— 迟到的写不能把新 owner 已累计的调用数改小
-                c.execute("UPDATE runs SET model_calls=MAX(model_calls,?),"
-                          " tool_calls=MAX(tool_calls,?), elapsed_s=MAX(elapsed_s,?) WHERE id=?",
-                          (run_calls, run_tools, run_elapsed + (time.time() - t0), rid))
+            # 检查与写入同一条 UPDATE;并发接管后旧 owner 不能改计数
+            self._persist_counters(rid, run_calls, run_tools,
+                                   run_elapsed + (time.time() - t0))
 
         try:
             seen: dict[str, int] = {}
@@ -832,7 +883,8 @@ class Runner:
                         if self.limits.calls_exhausted(run_calls + 1):
                             raise RuntimeError("预算不足:拒绝摘要调用(历史保持原样)")
                         run_calls += 1
-                        self._reserve_call(rid, run_calls)
+                        if not self._reserve_call(rid, run_calls):
+                            raise RuntimeError("预算预留失败: 所有权/状态已变化")
                         text = _render_for_summary(chunk)
                         reply = _coerce_reply(self.model.chat(
                             [{"role": "user", "content": text}], []))
@@ -901,7 +953,17 @@ class Runner:
                                     {"calls": run_calls, "limit": self.limits.max_model_calls})
                     break
                 run_calls += 1
-                self._reserve_call(rid, run_calls)      # 请求前预留:断流/崩溃也不丢预算
+                if not self._reserve_call(rid, run_calls):
+                    run_calls -= 1
+                    state = "paused"
+                    _persist()
+                    break
+                # 预留成功后、真正发请求前再确认一次所有权:接管后旧进程不得再发起调用
+                if not self._owns(rid) or (self.stop_event is not None
+                                           and self.stop_event.is_set()):
+                    state = "paused"
+                    _persist()
+                    break
                 _ctx = _context_stats(_sys + _state, history)
                 try:
                     reply = self._model_call(rid, msgs, self.registry.describe(), run_calls)
@@ -1172,9 +1234,18 @@ class Runner:
         except BaseException as e:
             with contextlib.suppress(Exception):
                 _persist()          # 异常/中断也要把本轮计数落库(否则恢复后预算凭空多出)
+            me = os.getpid()
+            st = _proc_starttime(me)
             with _db.Tx(self.con) as c:
-                c.execute("UPDATE runs SET state='paused', updated_at=? WHERE id=?", (_now(), rid))
-                _event(c, "run.paused", rid, {"error": f"{type(e).__name__}: {e}"})
+                # 只有仍是 running 的 owner 才能把异常写成 paused;
+                # 已被接管时绝不能覆盖新 owner 的状态。
+                cur = c.execute(
+                    "UPDATE runs SET state='paused', updated_at=?"
+                    " WHERE id=? AND state='running'"
+                    " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                    (_now(), rid, me, st))
+                if cur.rowcount:
+                    _event(c, "run.paused", rid, {"error": f"{type(e).__name__}: {e}"})
             self._checkpoint(rid, step, history)
             raise
 
@@ -1201,6 +1272,11 @@ class Runner:
             blockers.append(f"三镜刷新超期({self.research.rounds_since_mirror(target)} 轮未做,"
                             f"下限 {self.research.mirror_every})")
         handback = self._handback(rid, state, blockers)
+        # 取消发生在 model 调用/锁竞争窗口时,_set_paused 可能失败;
+        # 暂停态必须保留明确的 user_stop 原因,不能落成 None。
+        if (state == "paused" and handback is None and self.stop_event is not None
+                and self.stop_event.is_set()):
+            handback = "user_stop: 用户取消"
         ready = not blockers
         me = os.getpid()
         st = _proc_starttime(me)

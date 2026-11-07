@@ -90,7 +90,7 @@ def test_cancel_pauses_run_at_safe_point(tmp_path):
         row = sess.services.con.execute(
             "SELECT state,handback_reason FROM runs WHERE id=?", (sess.run_id,)).fetchone()
         assert row["state"] == "paused"
-        assert (row["handback_reason"] or "").startswith("user_stop")
+        assert (row["handback_reason"] or "").startswith("user_stop"), dict(row)
     finally:
         rt.dispose()
 

@@ -460,3 +460,58 @@ def test_persist_never_lowers_counters(setup):
     box["rid"] = rid
     r.run(rid, "t1")
     assert con.execute("SELECT model_calls FROM runs WHERE id=?", (rid,)).fetchone()[0] >= 500
+
+
+def test_lifecycle_writes_require_current_owner(setup):
+    """接管后:预算预留/计数/checkpoint 都不能由旧进程写入。"""
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[]), mcp=False, watchdog=False)
+    rid = r.start("t1")
+    con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (rid,))
+    assert r._reserve_call(rid, 1) is False
+    assert r._persist_counters(rid, 9, 9, 9.0) is False
+    assert r._checkpoint(rid, 3, []) is False
+    row = con.execute("SELECT model_calls,tool_calls,step,state FROM runs WHERE id=?",
+                      (rid,)).fetchone()
+    assert (row["model_calls"], row["tool_calls"], row["step"], row["state"]) == (0, 0, 0, "running")
+    assert con.execute("SELECT COUNT(*) n FROM checkpoints WHERE run_id=?",
+                       (rid,)).fetchone()["n"] == 0
+
+
+def test_exception_does_not_pause_after_takeover(setup):
+    """异常路径也不能无条件 SET paused;旧 owner 不得覆盖新 owner。"""
+    con, dom, root = setup
+    box = {}
+
+    class StealThenBoom(ScriptedModel):
+        def chat(self, messages, tools):
+            con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (box["rid"],))
+            raise RuntimeError("boom")
+
+    r = Runner(con, root, StealThenBoom(script=[]), mcp=False, watchdog=False)
+    rid = r.start("t1")
+    box["rid"] = rid
+    with pytest.raises(RuntimeError):
+        r.run(rid, "t1")
+    row = con.execute("SELECT state,pid FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["state"] == "running" and row["pid"] == 999999
+    assert con.execute("SELECT COUNT(*) n FROM checkpoints WHERE run_id=?",
+                       (rid,)).fetchone()["n"] == 0
+
+
+def test_turn_refuses_user_stop_and_foreign_owner(setup):
+    con, dom, root = setup
+    model = ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}])
+    r = Runner(con, root, model, mcp=False, watchdog=False)
+    rid = r.start("t1")
+    con.execute("UPDATE runs SET state='paused', handback_reason='user_stop: 手工取消'"
+                " WHERE id=?", (rid,))
+    res = r.turn(rid, "t1", None, [])
+    assert res.state == "paused" and res.handback == "user_stop: 手工取消"
+    assert model.calls == [], "取消后 turn 不得发起模型调用"
+
+    con.execute("UPDATE runs SET state='paused', handback_reason=NULL, pid=999999,"
+                " pid_starttime=1 WHERE id=?", (rid,))
+    res2 = r.turn(rid, "t1", None, [])
+    assert res2.handback == "owner_lost"
+    assert model.calls == []
