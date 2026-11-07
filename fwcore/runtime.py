@@ -19,8 +19,8 @@ import os
 import socket
 import time
 from collections.abc import Callable
-from typing import Any
 from dataclasses import dataclass
+from typing import Any
 
 from . import db as _db
 from .compact import compact_history, estimate_tokens, should_compact
@@ -29,6 +29,7 @@ from .contextinfo import build_status
 from .domain import ConversationPersistError, Domain, new_id
 from .limits import Limits
 from .models import Adapter, ModelHTTPError, Reply, ScriptedAdapter, assistant_message  # noqa: F401
+from .output import DEFAULT_MAX_BYTES
 from .policy import Policy
 from .streaming import StreamCancelled, StreamControl, StreamError, as_event
 from .research import Research
@@ -346,7 +347,6 @@ class Runner:
                 "UPDATE runs SET heartbeat_at=?, pid=?, pid_starttime=?, host=?, updated_at=?"
                 " WHERE id=? AND (pid IS NULL OR (pid=? AND (pid_starttime IS NULL OR pid_starttime=?)))",
                 (_now(), me, st, _host(), _now(), rid, me, st))
-            pass
         return cur is not None and cur.rowcount > 0
 
     def _update_if_running(self, rid: str, set_sql: str, params: tuple) -> bool:
@@ -359,7 +359,7 @@ class Runner:
         st = _proc_starttime(me)
         cur = None
         with _db.Tx(self.con) as c:
-            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # nosec B608
                 "UPDATE runs SET " + set_sql +
                 " WHERE id=? AND state='running'"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -378,7 +378,7 @@ class Runner:
         marks = ",".join("?" for _ in states)
         cur = None
         with _db.Tx(self.con) as c:
-            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # nosec B608
                 "UPDATE runs SET " + set_sql +
                 f" WHERE id=? AND state IN ({marks})"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -783,16 +783,25 @@ class Runner:
         status = str(out.get("status") or "ok")
         cstatus = {"ok": "ok", "error": "error", "timeout": "error",
                    "cancelled": "cancelled"}.get(status, "error")
-        payload = {k: out.get(k) for k in ("status", "error", "note", "exit_code",
-                                           "stdout_tail", "stderr_tail", "text")
+        payload = {k: out.get(k) for k in (
+                       "status", "error", "note", "exit_code",
+                       "stdout_tail", "stderr_tail", "text",
+                       "stdout_truncated", "stderr_truncated",
+                       "stdout_truncated_by", "stderr_truncated_by",
+                       "stdout_total_lines", "stderr_total_lines",
+                       "stdout_total_bytes", "stderr_total_bytes",
+                       "stdout_full_output_path", "stderr_full_output_path",
+                       "full_output_path")
                    if out.get(k) not in (None, "")}
         for key in ("stdout_tail", "stderr_tail", "text"):
             value = payload.get(key)
             if isinstance(value, str):
-                payload[key] = value[:8000]
+                # Pi 的 live tool output 是 2000 行/50 KiB；持久化也沿用这个
+                # 上限，不再使用独立的 8k 拍脑袋值。
+                payload[key] = value[:DEFAULT_MAX_BYTES]
         if out.get("tool_call_id"):
             payload["tool_call_id"] = out["tool_call_id"]
-        content = json.dumps(payload, ensure_ascii=False)[:8000]
+        content = json.dumps(payload, ensure_ascii=False)
         call_id = str(call.get("id") or call.get("name") or "?")
         try:
             self._conversation_write(
@@ -1181,7 +1190,6 @@ class Runner:
                         _event(self.con, "run.tool_cap", rid,
                                {"requested": len(reply.tool_calls), "executed": cap})
                     lost_owner = False
-                    stopped_external = False
                     for ci, call in enumerate(calls_this_turn):
                         if not self.is_running_owner(rid):
                             # 接管/取消后剩余工具(含 state_* 写操作)一律不执行;
@@ -1210,9 +1218,7 @@ class Runner:
                                                        "error": str(e)[:300]})
                                     conv_failed = True
                                     break
-                            if same_owner:
-                                stopped_external = True
-                            else:
+                            if not same_owner:
                                 lost_owner = True
                             break
                         sig = call["name"] + "|" + json.dumps(call.get("args") or {}, sort_keys=True,
@@ -1684,25 +1690,34 @@ def _render_for_summary(messages: list[dict], limit: int = 2_000_000) -> str:
     return "\n".join(lines)[:limit]
 
 
-def _bounded_tool_result(out: dict, limit: int = 16000) -> str:
-    """工具结果给模型看的版本:整体 JSON 合法,关键字段优先保留。
+def _bounded_tool_result(out: dict, limit: int | None = None) -> str:
+    """工具结果给模型看的版本。
 
-    - `db_tool_call_id`:数据库 TC-…(state_add_evidence 认这个,不是协议 id)
-    - 产物路径/哈希/状态/错误/退出码/摘要一律保留;大字段只给节选 + 原长度
-    - 输出只在 tool result/检查点中有界保存;不自动占 workspace artifact
+    默认不再用 16k/8k 之类的任意上限：工具输出本身已经按 Pi 的
+    `2000 行 / 50 KiB 尾部` 截断，并带 `full_output_path`。这里只做
+    JSON 合法性与元数据保留；`limit` 仅保留给调用方显式做硬预算。
     """
     out = dict(out)
     if out.get("tool_call_id"):
         # 数据库 TC-… 与协议 tool_call_id(模型给的 call_…)不是一回事:
         # 内容里只保留 db_tool_call_id,协议 id 留在消息层,避免模型拿错
         out["db_tool_call_id"] = out.pop("tool_call_id")
+    # 原始 stdout/stderr 是解析用前缀，不是模型输出；超过 Pi 上限时只留元数据。
+    for key in ("stdout", "stderr"):
+        value = out.get(key)
+        if isinstance(value, str) and len(value.encode("utf-8")) > DEFAULT_MAX_BYTES:
+            out[f"{key}_omitted_bytes"] = len(value.encode("utf-8"))
+            out.pop(key, None)
     full = json.dumps(out, ensure_ascii=False, default=str)
-    if len(full) <= limit:
+    if limit is None or len(full) <= limit:
         return full
     keep = ("status", "db_tool_call_id", "result_path", "stdout_path",
             "stderr_path", "result_sha256", "sha256", "exit_code", "error", "note",
             "path", "bytes", "truncated", "duration_ms", "replayed", "next",
-            "needs_user_input", "provider", "capability")
+            "needs_user_input", "provider", "capability", "full_output_path",
+            "stdout_full_output_path", "stderr_full_output_path",
+            "stdout_truncated", "stderr_truncated",
+            "stdout_truncated_by", "stderr_truncated_by")
     base = {k: out[k] for k in keep if k in out}
     big = {k: v for k, v in out.items()
            if isinstance(v, str) and len(v) > 200 and k not in base}
@@ -1721,9 +1736,8 @@ def _bounded_tool_result(out: dict, limit: int = 16000) -> str:
     s = json.dumps(base, ensure_ascii=False, default=str)
     if len(s) <= limit:
         return s
-    base.pop("excerpt", None)          # 极端情况:只留结构化元数据,保证不越界且合法
+    base.pop("excerpt", None)
     return json.dumps(base, ensure_ascii=False, default=str)
-
 
 def _sanitize_history(history: list[dict], lookup=None) -> list[dict]:
     """旧版硬截断留下的工具回复可能是非法 JSON;加载时包成合法结构,原文节选保留。

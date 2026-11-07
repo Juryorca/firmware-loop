@@ -3,7 +3,7 @@
 要点
 - **不重写研究工具**,只给它们"能力描述 + 参数 schema + 执行边界";模型据此自主选择。
 - 高风险(起仿真、跑 fuzz)标记 risk=high ⇒ 走 policy 的确认/默认拒绝。
-- 输出裁剪后返回;不自动落 artifacts,需要持久化时由 Agent 用 bash 重定向。
+- 输出按 Pi 语义做尾部裁剪(2000 行/50 KiB);截断时保留 full_output_path;不自动落 workspace artifacts。
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import os
 import re
 
+from .output import DEFAULT_MAX_BYTES
 from .tools import Registry, ToolContext, shell_exec
 
 
@@ -34,7 +35,7 @@ def observer(name: str):
     return deco
 
 
-def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 12000,
+def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = DEFAULT_MAX_BYTES,
          tool: str | None = None, meta: dict | None = None) -> dict:
     out = shell_exec(ctx, {"command": cmd, "timeout": timeout})
     text = ""

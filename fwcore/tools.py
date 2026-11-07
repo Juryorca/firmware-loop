@@ -27,6 +27,7 @@ if TYPE_CHECKING:  # 只用于类型,避免循环导入
 
 from . import db as _db
 from .domain import Domain, new_id
+from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, OutputAccumulator
 from .policy import Policy
 
 
@@ -193,15 +194,21 @@ def _kill_group(proc: subprocess.Popen) -> None:
 def _capture_process(argv: list[str], *, cwd: str, env: dict[str, str] | None,
                      timeout: float, cancel_check: Callable[[], bool] | None = None,
                      max_bytes: int = 8 * 1024 * 1024,
-                     tail_chars: int = 12000, pgid_dir: str | None = None) -> dict:
-    """执行一个进程并把输出留在内存(Pi 风格);不创建 stdout/stderr 文件。
+                     max_output_bytes: int = DEFAULT_MAX_BYTES,
+                     max_lines: int = DEFAULT_MAX_LINES,
+                     tail_chars: int | None = None,
+                     pgid_dir: str | None = None) -> dict:
+    """执行一个进程并把输出留在内存（Pi 风格）；不创建 workspace artifact。
 
-    只做进程生命周期与有界输出:
-      - 独立进程组;超时/取消整组杀掉;
-      - 每个流保留最多 max_bytes 前缀供调用方解析;
-      - 模型看 tail_chars 尾部;更长时标记 truncated;
-      - 不写 workspace artifact;需要长期保存由 Agent 自己用 bash 重定向。
+    输出语义与 Pi 的 OutputAccumulator 对齐：
+      - 模型看**尾部**，同时受 2000 行/50 KiB 两个上限约束（先到者生效）；
+      - 完整输出仅在截断时写入系统临时文件，返回 full_output_path；
+      - 每个流另留 max_bytes 前缀供适配器解析。
+
+    `tail_chars` 仅为兼容旧调用保留；传入时等价于设置尾部字节上限。
     """
+    if tail_chars is not None:
+        max_output_bytes = int(tail_chars)
     import hashlib
 
     try:
@@ -230,11 +237,12 @@ def _capture_process(argv: list[str], *, cwd: str, env: dict[str, str] | None,
     sel.register(proc.stdout, selectors.EVENT_READ, "stdout")
     sel.register(proc.stderr, selectors.EVENT_READ, "stderr")
     bufs = {"stdout": bytearray(), "stderr": bytearray()}
-    tails = {"stdout": bytearray(), "stderr": bytearray()}
     totals = {"stdout": 0, "stderr": 0}
     hashes = {"stdout": hashlib.sha256(), "stderr": hashlib.sha256()}
-    truncated = {"stdout": False, "stderr": False}
-    tail_limit = max(256, tail_chars * 4)
+    accs = {stream: OutputAccumulator(max_lines=max_lines,
+                                      max_bytes=max_output_bytes,
+                                      temp_file_prefix=f"fwcore-{stream}")
+            for stream in ("stdout", "stderr")}
     timed_out = False
     cancelled = False
     deadline = time.time() + float(timeout)
@@ -245,11 +253,7 @@ def _capture_process(argv: list[str], *, cwd: str, env: dict[str, str] | None,
         room = max(0, max_bytes - len(bufs[stream]))
         if room:
             bufs[stream].extend(data[:room])
-        if len(data) > room:
-            truncated[stream] = True
-        tails[stream].extend(data)
-        if len(tails[stream]) > tail_limit * 4:
-            del tails[stream][: len(tails[stream]) - tail_limit]
+        accs[stream].append(data)
 
     try:
         while True:
@@ -300,20 +304,40 @@ def _capture_process(argv: list[str], *, cwd: str, env: dict[str, str] | None,
 
     out = {"status": status, "exit_code": code,
            "stdout": _decode("stdout"), "stderr": _decode("stderr")}
+    full_paths: list[str] = []
     for stream in ("stdout", "stderr"):
-        data = bytes(tails[stream])
-        binary = b"\x00" in data
+        acc = accs[stream]
+        acc.finish()
+        snap = acc.snapshot(persist_if_truncated=True)
+        tr = snap["truncation"]
+        data = bytes(bufs[stream])
+        binary = bool(snap["binary"] or b"\x00" in data)
+        path = snap["full_output_path"]
+        if path:
+            full_paths.append(path)
         if binary:
-            out[f"{stream}_tail"] = f"[binary output: {totals[stream]} bytes; redirect to a file / use xxd/strings]"
+            tail = (f"[binary output: {totals[stream]} bytes; "
+                    f"full output: {path or 'redirect to a file'}]")
         else:
-            out[f"{stream}_tail"] = data.decode("utf-8", errors="replace")[-tail_chars:]
-        out[f"{stream}_truncated"] = bool(truncated[stream] or totals[stream] > tail_chars)
+            tail = snap["content"]
+        out[f"{stream}_tail"] = tail
+        out[f"{stream}_truncated"] = bool(tr["truncated"])
+        out[f"{stream}_truncated_by"] = tr["truncated_by"]
+        out[f"{stream}_total_lines"] = tr["total_lines"]
+        out[f"{stream}_total_bytes"] = tr["total_bytes"]
+        out[f"{stream}_output_lines"] = tr["output_lines"]
+        out[f"{stream}_output_bytes"] = tr["output_bytes"]
+        out[f"{stream}_max_lines"] = tr["max_lines"]
+        out[f"{stream}_max_bytes"] = tr["max_bytes"]
+        out[f"{stream}_full_output_path"] = path
         out[f"{stream}_binary"] = binary
         out[f"{stream}_bytes"] = totals[stream]
         out[f"{stream}_sha256"] = hashes[stream].hexdigest()
+        acc.close()
+    if full_paths:
+        out["full_output_path"] = full_paths[0]
     out["output_truncated"] = bool(out["stdout_truncated"] or out["stderr_truncated"])
     return out
-
 
 def _record(ctx: ToolContext, tool: str, args: dict, status: str, note: str = "",
             call_key: str | None = None) -> None:
@@ -365,7 +389,8 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
     语义:
     - 默认按 argv 直接执行;含 shell 语法(`; | && $() >` 等)或显式 mode=shell 时用 `bash -lc`;
     - `mode=auto` 的 `* ? ~` 是普通字符,需要 glob/tilde 展开时显式 mode=shell;
-    - 只返回有界尾部 + 完整输出的哈希/字节数;需要长期保存由 Agent 自己重定向到文件。
+    - 只返回 Pi 风格有界尾部(2000 行/50 KiB)+ 哈希/字节数;截断时带 full_output_path;
+      需要长期保存由 Agent 自己重定向到文件。
     """
     cmd = args.get("command")
     if not cmd:
@@ -651,7 +676,7 @@ def _caps(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "capabilities": inv}
 
 
-TAIL_CHARS = 12000
+TAIL_CHARS = DEFAULT_MAX_BYTES
 
 
 def _tail_info(path: str, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]:

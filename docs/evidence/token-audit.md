@@ -1,3 +1,5 @@
+> **注（2026-11-08）**：本页是旧 `<8k` 上限下的历史测量；当前工具输出已改为 Pi 语义（2000 行/50 KiB 尾部 + `full_output_path`），旧数字不要当作当前上限。
+
 # Token 用量审计(真实 run,离线)
 
 数据源:权威 SQLite 的 `events.kind='model.call'`(每次真实调用一条,含 provider usage)。

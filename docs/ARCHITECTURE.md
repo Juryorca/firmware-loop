@@ -116,7 +116,7 @@ feature 适配器(ida)、MCP(`mcp_<server>_<tool>`)。
 执行链:`Registry.call`(call_key 幂等 + risk/Authz + capability)→ 适配器 → `run_process`
 (独立 PGID、取消杀组、输出上限、ok_exit_codes)→ 产物落 `state/artifacts/<run>/` →
 `tool_calls` 行(status/exit/sha/provider/arch/observation)→ `db_tool_call_id`(TC-…) →
-`_bounded_tool_result`(≤8k、始终合法 JSON、保留路径/哈希/错误)→ 模型。
+`_bounded_tool_result`(Pi 2000 行/50 KiB 尾部、始终合法 JSON、保留路径/哈希/错误/`full_output_path`)→ 模型。
 能力层:`fw-core capabilities` 探针(`ready/partial/deps_missing/arch_mismatch/missing`);
 manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失。
 
@@ -175,4 +175,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 71 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 72 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

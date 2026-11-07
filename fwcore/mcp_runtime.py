@@ -16,6 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers  # noqa: F401
+from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail
 from .tools import Registry, ToolSpec
 
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
@@ -146,9 +147,16 @@ class MCPBridge:
             if out.get("is_error"):
                 return {"status": "error", "error": (out.get("text") or "MCP tool error")[:500],
                         "meta": meta, "observation": {"status": "error", "text": out.get("text", "")[:2000]}}
-            return {"status": "ok", "text": out.get("text", "")[:8000],
+            text = out.get("text") or ""
+            bounded = truncate_tail(text, max_lines=DEFAULT_MAX_LINES,
+                                    max_bytes=DEFAULT_MAX_BYTES)
+            return {"status": "ok", "text": bounded["content"],
+                    "truncated": bounded["truncated"],
+                    "truncated_by": bounded["truncated_by"],
+                    "total_lines": bounded["total_lines"],
+                    "total_bytes": bounded["total_bytes"],
                     "meta": meta,
-                    "observation": {"status": "ok", "text": out.get("text", "")[:2000],
+                    "observation": {"status": "ok", "text": text[:2000],
                                     "content_items": len(out.get("content") or [])}}
         return _handler
 

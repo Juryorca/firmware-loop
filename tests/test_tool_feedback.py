@@ -34,8 +34,18 @@ def test_shell_exec_returns_bounded_tail_without_artifacts(tmp_path):
     assert out["status"] == "ok"
     assert out["stdout_tail"] and len(out["stdout_tail"]) <= TAIL_CHARS
     assert out["stdout_truncated"] is True
+    assert out["stdout_truncated_by"] == "lines"
+    assert out["stdout_output_lines"] == 2000 and out["stdout_total_lines"] == 5000
     assert "5000" in out["stdout_tail"]          # 尾部内容确实可用
-    assert out["stdout_sha256"] and "stdout_path" not in out  # Pi 风格:不自动落 artifact
+    assert out["stdout_sha256"] and "stdout_path" not in out  # Pi 风格:不自动落 workspace artifact
+    full_path = out.get("full_output_path")
+    assert full_path and os.path.isfile(full_path)
+    try:
+        with open(full_path, encoding="utf-8") as f:
+            full = f.read()
+        assert "1\n" in full and "5000\n" in full
+    finally:
+        os.unlink(full_path)
 
 
 def test_binary_output_is_flagged_not_dumped(tmp_path):

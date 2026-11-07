@@ -60,3 +60,12 @@ def test_large_fs_read_survives_to_model(tmp_path):
     assert payload.get("db_tool_call_id", "").startswith("TC-")
     assert "tool_call_id" not in payload              # 内容里不再放协议 id(避免混用)
     assert msgs[[m.get("role") for m in msgs].index("tool")]["tool_call_id"] == "call_x"
+
+
+def test_default_payload_keeps_pi_sized_tail_without_arbitrary_16k_cut():
+    out = {"status": "ok", "stdout_tail": "x" * 30_000,
+           "full_output_path": "/tmp/fwcore-output-test.log"}
+    d = json.loads(_bounded_tool_result(out))
+    assert len(d["stdout_tail"]) == 30_000
+    assert d["full_output_path"] == "/tmp/fwcore-output-test.log"
+    assert "_truncated" not in d

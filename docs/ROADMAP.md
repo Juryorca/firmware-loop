@@ -11,7 +11,7 @@
 - **模型协议**:`finish_reason`/`usage` 贯通;每次调用 `model.call` 记账;FINAL 任意行首;重复内容与无工具空转看护;
   thinking 模式默认回传 `reasoning_content`。
 - **工具**:统一 manifest(`tools/registry/*.json`,8 个)+ 内置 `state_*`/`shell_exec`/`fs_*` + IDA feature 适配器 + MCP;
-  结果是 ≤8k 合法 JSON,带 `db_tool_call_id`/产物路径/哈希。
+  结果是 Pi 风格有界输出(2000 行/50 KiB 尾部);截断时带 `full_output_path`,并保留 `db_tool_call_id`/产物路径/哈希。
 - **上下文**:静态 system + append-only history + 尾部状态(含 `[Context status]`);阈值压缩(90%@1M 窗口),
   分块摘要**覆盖全部被丢弃历史**,失败保留原历史 + 冷却;摘要调用计入预算。
 - **研究质量门**:`vulnerable` 需 supported + 因果复核;`no_finding` 需 ≥1 条已复核证据;面处置需证据/理由;
@@ -27,7 +27,7 @@
 - **Agent 内容架构**:`fwcore/prompts/system.md` + 根 `AGENTS.md` 组成 system;LOOP 迁入 `research-loop` Skill;
   `.agents/skills/` 渐进式加载;Slash Commands 保留并由 fwapp 分发;SQLite `knowledge_entries` 保存 curated 研究知识,
   旧案例 Markdown 仅作来源。
-- **验证**:`bash tools/fwcore_verify.sh` = pytest(71 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
+- **验证**:`bash tools/fwcore_verify.sh` = pytest(72 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
 
 ## 待办
 

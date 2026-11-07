@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .output import DEFAULT_MAX_BYTES
 from .tools import Registry, ToolContext, ToolSpec, _capture_process
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -259,7 +260,7 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-TAIL_CHARS = 12000
+TAIL_CHARS = DEFAULT_MAX_BYTES
 
 
 def _tail_info(path: str | None, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]:
@@ -282,7 +283,7 @@ def _tail_info(path: str | None, max_chars: int = TAIL_CHARS) -> tuple[str, bool
     return text[-max_chars:], (len(text) > max_chars or size > max_chars * 4), False
 
 
-def _tail(paths: list[str | None], keep: int = 12000) -> str:
+def _tail(paths: list[str | None], keep: int = DEFAULT_MAX_BYTES) -> str:
     text = ""
     for p in paths:
         if not (p and os.path.isfile(p)):
@@ -506,7 +507,7 @@ def build_spec(reg: Registry, root: str, m: Manifest) -> ToolSpec:
         text = (out.get("text") or out.get("stdout") or out.get("stderr")
                 or out.get("stdout_tail") or out.get("stderr_tail") or "")
         if text:
-            out["output_tail"] = text[-12000:]
+            out["output_tail"] = text[-DEFAULT_MAX_BYTES:]
             if observer_fn is not None:
                 try:
                     out["observation"] = observer_fn(text)

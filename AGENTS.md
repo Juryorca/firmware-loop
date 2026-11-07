@@ -390,7 +390,8 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - 多会话:①headless 天然隔离(每会话一进程 + `--isolated`),只费内存;②冲突只有一种 —— **两个会话连同一个可调试浏览器**(共用标签页)⇒ 同一时间只在一个会话 `enabled:true`;③`state/<目标>/` 单写者 ⇒ 一个目标只开一个会话。
 
 ### 工具输出与证据(2026-11-08)
-- 工具输出默认留在 tool result/session（有界尾部）；**不自动在 `artifacts/` 建 stdout/stderr 文件**（Pi 风格）。
+- 工具输出默认留在 tool result/session；模型只看到 Pi 风格的**尾部**（`2000` 行或 `50 KiB`，先到者生效）。
+- 被截断时结果带 `full_output_path`（系统临时文件，不是 workspace artifact）；完整输出用它查看，不在 `artifacts/` 自动建 stdout/stderr 文件。
 - 需要长期保存时，Agent 自己用 bash 重定向到 `state/<target>/artifacts/` 或 `state/_scratch/`。
 - `observation` 记录研究事实；`evidence` 必须显式给 `path` 或 `capture`，并复核后才能支撑结论。工具跑过 ≠ 证据。
 
