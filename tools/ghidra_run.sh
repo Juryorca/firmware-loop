@@ -6,9 +6,12 @@
 set -u
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 FIND=""
-for cand in "${GHIDRA_HOME:-}" "${GHIDRA_INSTALL_DIR:-}" \
-            "$HOME"/tools/ghidra_*/support/analyzeHeadless \
-            /opt/ghidra*/support/analyzeHeadless; do
+# 优先读本地工具元数据;环境变量/已知安装位置只作简单兜底,不做目录大扫描。
+if [ -f "$ROOT/state/tools.json" ] || [ -n "${FW_TOOL_CONFIG:-}" ]; then
+  FIND="$(cd "$ROOT" && python3 -m fwcore.toolmeta --path ghidra 2>/dev/null || true)"
+fi
+for cand in "$FIND" "${GHIDRA_HOME:-}" "${GHIDRA_INSTALL_DIR:-}" \
+            "$(command -v analyzeHeadless 2>/dev/null || true)"; do
   [ -n "$cand" ] || continue
   if [ -x "$cand" ]; then FIND="$cand"; break; fi
 done

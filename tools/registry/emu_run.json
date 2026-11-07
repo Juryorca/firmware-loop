@@ -1,6 +1,6 @@
 {
   "name": "emu_run",
-  "description": "在提取的 rootfs 上跑用户态仿真(需要 rootfs 路径与命令);高风险,需确认",
+  "description": "[legacy] 历史 strace 仿真入口;新调用用 qemu_user(显式 binary/rootfs/argv)。高风险,需确认",
   "input_schema": {
     "type": "object",
     "properties": {

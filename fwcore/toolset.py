@@ -11,6 +11,7 @@ import os
 import shutil
 from dataclasses import dataclass
 
+from . import toolmeta
 from .providers import (
     ARCH_MISMATCH,
     DEPS_MISSING,
@@ -106,12 +107,18 @@ def _repo_check(root: str, paths: tuple[str, ...]) -> tuple[str, list[dict]]:
     return _worst(statuses), rows
 
 
-def _external_check(names: tuple[str, ...]) -> tuple[str, list[dict]]:
+def _external_check(root: str, names: tuple[str, ...]) -> tuple[str, list[dict]]:
     rows = []
     found = 0
     for name in names:
-        p = shutil.which(name)
-        rows.append({"name": name, "path": p})
+        entry = toolmeta.runtime(root, name)
+        if entry.get("path"):
+            p = entry["path"] if os.path.isfile(entry["path"]) else None
+            source = "metadata" if p else "metadata-missing"
+        else:
+            p = shutil.which(name)
+            source = "PATH"
+        rows.append({"name": name, "path": p, "source": source})
         if p:
             found += 1
     if found == len(names):
@@ -128,7 +135,7 @@ def check_toolset(root: str, *, inventory_data: list[dict] | None = None) -> dic
     results = []
     for item in DEFAULT_TOOLSET:
         repo_status, repo_rows = _repo_check(root, item.repo)
-        ext_status, ext_rows = _external_check(item.external)
+        ext_status, ext_rows = _external_check(root, item.external)
         cap_rows = []
         for cap in item.capabilities:
             row = inv.get(cap)
@@ -181,6 +188,7 @@ def check_toolset(root: str, *, inventory_data: list[dict] | None = None) -> dic
         "external_ok": all(row["path"] for item in results for row in item["external"]),
         "capabilities_ok": all(cap["status"] == READY
                                for item in results for cap in item["capabilities"]),
+        "tool_metadata": toolmeta.describe(root),
     }
 
 

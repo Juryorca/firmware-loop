@@ -96,6 +96,7 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 | `firmware-validation` | 建场、仿真/容器、差分/fuzz、证据复核 |
 | `report-submission` | advisory/CVE/厂商提交（只填不提交） |
 | `research-knowledge-curation` | 研究知识检索与直接沉淀（无中间审核态） |
+| `tool-management` | 工具元数据、Python 环境队列、安装与接入（用户 `/tool-setup` 触发） |
 | `fwcore-development` | 产品开发会话方法（开发用，不是研究流程） |
 
 ## 5. Slash Commands
@@ -104,7 +105,7 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 - 执行：`fwapp/modes/interactive.py` 的 `_cmd_*`；通过 `fwapp/services.py` 调用现有 Session/Service。
 - 只有用户输入 `/xxx` 才触发；模型不能调用、不能伪造、不能把 Command 当 Skill。
 - 新增命令必须同时：登记元数据、实现 handler、补参数/错误/补全测试。
-- 当前命令：`/help /model /target /resume /status /budget /hypotheses /evidence /skills /knowledge /new /continue /clear /expand /quit`。
+- 当前命令：`/help /model /target /resume /status /budget /hypotheses /evidence /skills /knowledge /tools /tool-setup /new /continue /clear /expand /quit`。
 
 ## 6. Knowledge Base：Research Knowledge，不是 Case Archive
 
@@ -231,8 +232,8 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 - 旧案例的 51 条源条目未被逐条搬进 DB；按“Research Knowledge”原则提炼为 14 条知识（含 6 条工具判据），旧文件保留；
 - 旧 Pi 的 scan/screenshot/continue guard 尚未产品化（工具台账附录 A 记录）；
-- Chrome MCP、`write/edit`、Ghidra wrapper 等仍未接线，按台账处理，不在本轮伪装完成；
-- 真实付费模型验证不在本轮范围。
+- Chrome MCP 只有配置/探针，不在只读检查里自动启动；`write/edit` 未接入 fwcore 工具层；
+- Ghidra/QEMU/IDA 已按 provider/adapter 接入，缺依赖状态如实显示；真实付费模型验证不在本轮范围。
 
 ## 13. 旧知识/流程的逐段去向（补充）
 
@@ -298,18 +299,58 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 验收：干净 checkout 能直接获得仓库脚本；普通 QEMU 缺失算默认问题，特殊 patched QEMU 缺失不算；状态检查不改变环境。
 
-## 15. Python 环境与工具安装辅助
+## 15. 工具元数据与 Python 环境队列
 
-- `fwcore/pyenvs.py` 管理**有序** Python 环境；配置只放本地：
-  - `<root>/state/toolenv.json`: `{"python_envs": ["/path/python", ...]}`
-  - 或 `FW_PYTHON_ENVS`（路径分隔符分隔）
-  - 顺序即优先级；import/依赖不满足就跳过，不破坏已有环境。
-- CLI：`python3 -m fwcore.pyenvs --list` / `--select angr`。
+两者职责不同，禁止混用。
+
+### 15.1 已有工具：`state/tools.json`
+
+`fwcore/toolmeta.py` 读取本地工具元数据（`FW_TOOL_CONFIG` 可覆盖），只记录定位一个已有工具需要的信息：
+
+```json
+{
+  "unblob": {
+    "path": "/opt/unblob/bin/unblob",
+    "python": "/opt/unblob/bin/python",
+    "cwd": ".",
+    "env": {}
+  },
+  "angr": {"python": "/opt/angr/bin/python", "cwd": "."},
+  "ghidra": {"path": "/opt/ghidra/support/analyzeHeadless"},
+  "qemu-aarch64-patched": {"path": "/opt/qemu/bin/qemu-aarch64-patched"}
+}
+```
+
+- `path` = 实际可执行文件；`python` = Python 工具解释器；`cwd` = 工作目录；`env` = 额外环境变量。
+- Provider 优先读元数据；系统命令没有元数据时才按 `PATH` 查找。
+- 配置路径不存在时如实报错，不静默换路径，也不搜索 Python 环境。
+- `python3 -m fwcore.toolmeta` 查看元数据摘要。
+
+`pyenvs` **不是**工具注册表：现有工具（unblob/angr/Ghidra/QEMU 特殊构建等）不能靠扫描虚拟环境队列发现。
+
+### 15.2 Python 环境队列：只给 Agent 跑代码/装包
+
+`fwcore/pyenvs.py` 只负责：
+
+1. Agent 运行临时 Python 代码时选择能 import 所需模块的解释器；
+2. 决定 Python 包安装到哪个环境。
+
+配置只放本地：
+
+- `<root>/state/pyenvs.json`: `{"python_envs": ["/path/python", ...]}`（兼容旧 `state/toolenv.json`）
+- 或 `FW_PYTHON_ENVS`（路径分隔符分隔）
+- 最后兜底当前解释器；顺序即优先级，缺失/依赖不满足就跳过。
+
+CLI：`python3 -m fwcore.pyenvs --list` / `--select json`。
+
+### 15.3 工具集与安装
+
 - Toolset 的 `angr` 是必需项（唯一明确的 optional 是特殊 `qemu-aarch64-patched`）。
 - 截图链：`termshot.sh` 使用 `FW_PYTHON`（默认 python3），`ansi2png.py` 使用 `#!/usr/bin/env python3`；
-  间接依赖 `tmux`/`zsh` 已进入 toolset 检查。
-- `/tool-setup` 是**用户主动触发的工具管理入口**，加载 `tool-management` Skill；
-  `/tools` 只查看状态，不执行安装。
-- 安装/接入规范：先查 capability/provider，优先原生 CLI/MCP/API；Manifest 显式 Schema/argv；
-  Provider 管路径/版本/依赖/架构；必要时 Adapter；统一 `run_process`；真实调用验证；缺依赖如实报。
-- 不为每个工具造复杂 wrapper；IDA 保留生命周期特例，`fw_extract`/截图保留必要资源与证据约束。
+  间接依赖 `tmux`/`zsh`/`chromium` 已进入 toolset 检查。
+- `/tool-setup` 是用户主动触发的工具管理入口，加载 `tool-management` Skill；`/tools` 只读。
+- 安装/接入规范：先查 capability/provider；已有工具先补元数据；优先原生 CLI/MCP/API；
+  Manifest 显式 Schema/argv；Provider 管路径/版本/依赖/架构；必要时 Adapter；统一 `run_process`；
+  真实调用验证；缺依赖如实报。
+- 不预设用户有复杂多环境/多架构/多执行节点；优先简单、透明、可检查的路径和配置。
+- 不为统一而给每个工具加 Wrapper；只有生命周期、资源/证据约束或真实协议差异才保留 Adapter/Wrapper。

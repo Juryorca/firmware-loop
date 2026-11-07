@@ -20,7 +20,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from . import pyenvs
+from . import toolmeta
 
 READY = "ready"
 PARTIAL = "partial"
@@ -80,11 +80,13 @@ class Capability:
         return p, pr
 
 
-def _run(cmd: list[str], timeout: float = 10.0) -> tuple[int, str]:
+def _run(cmd: list[str], timeout: float = 10.0, *, cwd: str | None = None,
+         env: dict[str, str] | None = None) -> tuple[int, str]:
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           cwd=cwd, env={**os.environ, **(env or {})}, check=False)
         return r.returncode, (r.stdout + r.stderr).strip()
-    except Exception as e:  # 探针不能抛异常
+    except Exception as e:  # noqa: BLE001 - 探针不能把环境异常抛给状态页
         return 127, f"{type(e).__name__}: {e}"
 
 
@@ -135,9 +137,10 @@ def afl_tracer_provider(dirpath: str, arch: str, kind: str = "built",
         binpath, ldprefix = sample
         env = dict(os.environ, QEMU_LD_PREFIX=ldprefix)
         try:
-            r = subprocess.run([tracer, binpath, "--help"], capture_output=True, text=True, timeout=20, env=env)
+            r = subprocess.run([tracer, binpath, "--help"], capture_output=True, text=True,
+                               timeout=20, env=env, check=False)
             out = (r.stdout + r.stderr).lower()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - 探针失败要变成状态
             return Probe(PARTIAL, f"跑样本失败: {type(e).__name__}", path=tracer, env={"AFL_PATH": dirpath})
         if "invalid elf image" in out:
             return Probe(ARCH_MISMATCH, f"{os.path.basename(dirpath)} 的 tracer 不支持 {arch} guest",
@@ -154,50 +157,78 @@ def afl_tracer_provider(dirpath: str, arch: str, kind: str = "built",
                     probe=probe)
 
 
-def qemu_provider(binary: str, *, netlink: bool) -> Provider:
+def qemu_provider(binary: str, *, netlink: bool, root: str | None = None) -> Provider:
+    entry = toolmeta.runtime(root, binary) if root else {}
+
+    def _path() -> str | None:
+        if entry.get("path"):
+            return entry["path"] if os.path.isfile(entry["path"]) else None
+        return shutil.which(binary) or (binary if os.path.isfile(binary) else None)
+
     def probe() -> Probe:
-        path = shutil.which(binary) or (binary if os.path.isfile(binary) else None)
+        path = _path()
         if not path:
             return Probe(MISSING, f"未安装 {binary}")
-        rc, out = _run([path, "--version"], 5)
+        _rc, out = _run([path, "--version"], 5)
         ver = out.splitlines()[0] if out else ""
         return Probe(READY if netlink else PARTIAL,
                      "支持 NETLINK_NETFILTER(SOCK_DIAG/XFRM/GENERIC 类 daemon)" if netlink
                      else "上游白名单:NETLINK_NETFILTER 被拒(NFQUEUE 类 daemon 跑不了)",
                      version=ver, path=path, evidence="reachable")
     return Provider(id=f"{os.path.basename(binary)}", kind="built" if netlink else "system",
-                    resolve=lambda: {"argv_prefix": [shutil.which(binary) or binary], "netlink": netlink},
+                    resolve=lambda: {"argv_prefix": [_path() or binary], "netlink": netlink,
+                                     "cwd": entry.get("cwd"), "env": entry.get("env")},
                     probe=probe)
 
 
-def venv_python_provider(venv_python: str, module: str, *, kind: str = "venv") -> Provider:
-    """在**指定解释器**里探针,不依赖当前 shell 是否激活。"""
+def python_module_provider(python: str | None, module: str, *, kind: str = "venv",
+                           cwd: str | None = None, env: dict[str, str] | None = None) -> Provider:
+    """在**元数据指定的解释器**里探针;不搜索 Python 环境队列。"""
+    label = os.path.basename(os.path.dirname(os.path.dirname(python))) if python else "unconfigured"
+
     def probe() -> Probe:
-        if not os.path.isfile(venv_python):
-            return Probe(MISSING, f"缺解释器 {venv_python}")
-        rc, out = _run([venv_python, "-c", f"import {module};print(getattr({module},'__version__','?'))"], 30)
+        if not python:
+            return Probe(MISSING, f"未配置 {module} 的解释器(state/tools.json -> {module}.python)")
+        if not os.path.isfile(python):
+            return Probe(MISSING, f"配置的解释器不存在: {python}", path=python)
+        rc, out = _run([python, "-c", f"import {module};print(getattr({module},'__version__','?'))"],
+                       30, cwd=cwd, env=env)
         if rc != 0:
-            return Probe(DEPS_MISSING, f"{module} 未安装: {out.splitlines()[-1] if out else ''}", path=venv_python)
+            return Probe(DEPS_MISSING, f"{module} 未安装: {out.splitlines()[-1] if out else ''}",
+                         path=python)
         lines = [x for x in out.strip().splitlines() if x.strip() and not x.startswith(("import ", "Warning", "  "))]
         last = (lines or [""])[-1]
-        return Probe(READY, f"{module} {last}", version=last[:60], path=venv_python, evidence="verified")
-    return Provider(id=f"{os.path.basename(os.path.dirname(os.path.dirname(venv_python)))}-{module}",
-                    kind=kind, resolve=lambda: {"interpreter": venv_python, "module": module}, probe=probe)
+        return Probe(READY, f"{module} {last}", version=last[:60], path=python, evidence="verified")
+
+    return Provider(id=f"{label}-{module}", kind=kind,
+                    resolve=lambda: {"interpreter": python, "module": module, "cwd": cwd, "env": env or {}},
+                    probe=probe)
 
 
-def unblob_provider(venv_python: str) -> Provider:
-    """本体在 ≠ 各 extractor 都在:缺哪个就报哪个(部分能力)。"""
+def unblob_provider(root: str) -> Provider:
+    """读元数据定位 unblob;本体在 ≠ 各 extractor 都在,缺哪个就报哪个。"""
     required = {"jefferson": "JFFS2", "ubireader_extract_files": "UBI/UBIFS",
                 "lz4": "lz4(库)", "unar": "unar(包)"}
     tools = {"simg2img": "Android sparse", "fsck.erofs": "EROFS", "partclone.restore": "partclone",
              "7z": "7z 归档", "zstd": "zstd", "debugfs": "ext2/3/4"}
-    binpath = os.path.join(os.path.dirname(venv_python), "unblob")
+    entry = toolmeta.runtime(root, "unblob")
+    binpath = entry.get("path")
+    python = entry.get("python")
+    cwd, env = entry.get("cwd"), entry.get("env")
 
     def probe() -> Probe:
-        rc, out = _run([binpath, "--help"], 30)
+        if not binpath:
+            return Probe(MISSING, "未配置 state/tools.json -> unblob.path")
+        if not os.path.isfile(binpath):
+            return Probe(MISSING, f"配置的 unblob 不存在: {binpath}", path=binpath)
+        rc, out = _run([binpath, "--help"], 30, cwd=cwd, env=env)
         if rc != 0 or "--help" not in out:
-            return Probe(MISSING, f"unblob 本体不可用({binpath})")
-        missing_modules = [m for m in required if _run([venv_python, "-c", f"import {m}"], 20)[0] != 0]
+            return Probe(MISSING, f"unblob 本体不可用({binpath})", path=binpath)
+        if not python:
+            return Probe(PARTIAL, "unblob 可执行;未配置 python,无法核查 python extractors",
+                         path=binpath)
+        missing_modules = [m for m in required
+                           if _run([python, "-c", f"import {m}"], 20, cwd=cwd, env=env)[0] != 0]
         missing_tools = [t for t in tools if shutil.which(t) is None]
         detail = []
         if missing_modules:
@@ -206,7 +237,9 @@ def unblob_provider(venv_python: str) -> Provider:
             detail.append("缺外部工具: " + ", ".join(f"{t}({tools[t]})" for t in missing_tools))
         status = READY if not detail else PARTIAL
         return Probe(status, ";".join(detail) or "全部提取器可用", path=binpath)
-    return Provider(id="unblob-venv", kind="venv", resolve=lambda: {"interpreter": venv_python}, probe=probe)
+    return Provider(id="unblob", kind="venv",
+                    resolve=lambda: {"path": binpath, "interpreter": python, "cwd": cwd, "env": env},
+                    probe=probe)
 
 
 def repo_asset_provider(root: str, rel: str) -> Provider:
@@ -228,58 +261,64 @@ def repo_asset_provider(root: str, rel: str) -> Provider:
                     resolve=lambda: {"path": p}, probe=probe)
 
 
-def system_tool_provider(name: str, extra: list[str] | None = None, version_arg: list[str] | None = None) -> Provider:
+def system_tool_provider(root: str, name: str, extra: list[str] | None = None,
+                         version_arg: list[str] | None = None) -> Provider:
+    entry = toolmeta.runtime(root, name)
+
+    def _path() -> str | None:
+        if entry.get("path"):
+            return entry["path"] if os.path.isfile(entry["path"]) else None
+        return shutil.which(name)
+
     def probe() -> Probe:
-        path = shutil.which(name)
+        path = _path()
         if not path:
-            return Probe(MISSING, f"未安装 {name}")
-        rc, out = _run(([path] + (extra or ["--version"])), 10)
+            return Probe(MISSING, f"未安装或未配置 {name}")
+        rc, out = _run(([path] + (extra or ["--version"])), 10,
+                       cwd=entry.get("cwd"), env=entry.get("env"))
         ok = rc == 0
         ver = None
         if version_arg:
-            rc2, out2 = _run([path] + version_arg, 10)
+            rc2, out2 = _run([path] + version_arg, 10,
+                             cwd=entry.get("cwd"), env=entry.get("env"))
             ok = ok or rc2 == 0
             ver = out2.splitlines()[0][:60] if out2 else None
         first = (out.splitlines() or [""])[0][:120]
         return Probe(READY if ok else PARTIAL, first, version=ver, path=path)
-    return Provider(id=name, kind="system", resolve=lambda: {"path": shutil.which(name)}, probe=probe)
+    return Provider(id=name, kind="system",
+                    resolve=lambda: {"path": _path(), "cwd": entry.get("cwd"), "env": entry.get("env")},
+                    probe=probe)
 
 
-def ghidra_provider() -> Provider:
-    """Ghidra 12.x 常装在 ~/tools/ghidra_*/support,不一定在 PATH。"""
-    import glob as _g
+def ghidra_provider(root: str) -> Provider:
+    """Ghidra 入口优先读 state/tools.json;其次 GHIDRA_HOME/PATH,不做目录大扫描。"""
+    entry = toolmeta.runtime(root, "ghidra")
 
     def _find() -> str | None:
-        seen: list[str] = []
+        if entry.get("path") and os.path.isfile(entry["path"]):
+            return entry["path"]
         for key in ("GHIDRA_HOME", "GHIDRA_INSTALL_DIR"):
             v = os.environ.get(key)
             if v:
-                seen += [os.path.join(v, "support", "analyzeHeadless"), v]
-        seen += sorted(_g.glob(os.path.expanduser("~/tools/ghidra_*/support/analyzeHeadless")), reverse=True)
-        seen += sorted(_g.glob("/opt/ghidra*/support/analyzeHeadless"), reverse=True)
-        w = shutil.which("analyzeHeadless")
-        if w:
-            seen.insert(0, w)
-        for p in seen:
-            try:
-                if p and os.path.isfile(p) and os.access(p, os.X_OK):
+                p = os.path.join(v, "support", "analyzeHeadless")
+                if os.path.isfile(p):
                     return p
-            except OSError:
-                continue
-        return None
+        return shutil.which("analyzeHeadless")
 
     def probe() -> Probe:
         p = _find()
         if not p:
             return Probe(MISSING, "未找到 analyzeHeadless(Ghidra 未安装/未配置 GHIDRA_HOME)")
-        rc, out = _run([p, "-help"], 30)
+        _rc, out = _run([p, "-help"], 30)
         # analyzeHeadless 的 -help 用非 0 退出码表示用法;有 Usage 就说明入口可用
         if "Headless Analyzer Usage" in out or "analyzeHeadless" in out.lower():
             return Probe(READY, "analyzeHeadless 可执行(静态探针)", path=p, evidence="reachable")
         return Probe(PARTIAL, f"analyzeHeadless 存在但 -help 失败: {out[-160:]}", path=p)
 
     return Provider(id="ghidra-headless", kind="system",
-                    resolve=lambda: {"argv_prefix": [_find() or "analyzeHeadless"]}, probe=probe)
+                    resolve=lambda: {"argv_prefix": [_find() or "analyzeHeadless"],
+                                     "cwd": entry.get("cwd"), "env": entry.get("env")},
+                    probe=probe)
 
 
 def windows_ida_provider(root: str) -> Provider:
@@ -297,7 +336,7 @@ def windows_ida_provider(root: str) -> Provider:
         http = "000"
         if not started:
             rc, out = _run(["curl", "-s", "--noproxy", "*", "--max-time",
-                            str(max(1, int(cfg.probe_timeout))), "-o", "/dev/null",
+                            str(max(1.0, cfg.probe_timeout)), "-o", "/dev/null",
                             "-w", "%{http_code}", cfg.url], 5)
             http = out.strip() if rc == 0 else "000"
         up = started or http not in ("", "000")
@@ -361,35 +400,33 @@ def _mcp_paths(root: str) -> list[str]:
 
 
 def default_capabilities(root: str, home: str | None = None) -> dict[str, Capability]:
-    home = home or os.path.expanduser("~")
-    # 有序 Python 环境来自 pyenvs(用户配置优先),不再把 pwn/unblob 路径写死为唯一来源
-    pwn = pyenvs.select(root, ("angr",)).get("selected") or os.path.join(
-        os.environ.get("ENTER_HOME", os.path.join(home, "ENTER")), "envs", "pwn", "bin", "python")
-    unblob_py = next((p for p in pyenvs.load(root)
-                      if os.path.isfile(os.path.join(os.path.dirname(p), "unblob"))),
-                     os.path.join(home, "venvs", "unblob", "bin", "python"))
+    """能力清单只读元数据/PATH,不把 Python 环境队列当工具发现器。"""
+    _ = home  # 保留旧调用签名;能力定位不再依赖 home 下的多套目录
+    angr = toolmeta.runtime(root, "angr")
+    afl = toolmeta.runtime(root, "afl-aarch64")
+    afl_providers = ([afl_tracer_provider(os.path.dirname(afl["path"]), "aarch64",
+                                          sample_roots=_guest_roots(root))]
+                     if afl.get("path") else [])
     caps: dict[str, Capability] = {
         "fuzz.cgi": Capability("fuzz.cgi", "对厂商 CGI 做有界变异 fuzz",
                                [repo_asset_provider(root, "tools/cgi_fuzz.sh")]),
-        "fuzz.aarch64": Capability("fuzz.aarch64", "对 aarch64 guest 做覆盖率/变异 fuzz", [
-            afl_tracer_provider(os.path.join(home, ".local/bin/afl-aarch64"), "aarch64",
-                                sample_roots=_guest_roots(root)),
-            afl_tracer_provider("/usr/local/bin", "aarch64", kind="built",
-                                sample_roots=_guest_roots(root)),
-        ], target_arch="aarch64"),
+        "fuzz.aarch64": Capability("fuzz.aarch64", "对 aarch64 guest 做覆盖率/变异 fuzz",
+                                   afl_providers, target_arch="aarch64"),
         "emu.aarch64": Capability("emu.aarch64", "用户态仿真 aarch64(含 netlink 白名单解除)", [
-            qemu_provider("qemu-aarch64-patched", netlink=True),
-            qemu_provider("qemu-aarch64", netlink=False),
+            qemu_provider("qemu-aarch64-patched", netlink=True, root=root),
+            qemu_provider("qemu-aarch64", netlink=False, root=root),
         ], target_arch="aarch64"),
-        "symbolic.angr": Capability("symbolic.angr", "符号执行(angr)", [venv_python_provider(pwn, "angr")]),
-        "extract.unblob": Capability("extract.unblob", "固件/文件系统提取", [unblob_provider(unblob_py)]),
+        "symbolic.angr": Capability("symbolic.angr", "符号执行(angr)", [
+            python_module_provider(angr.get("python"), "angr", cwd=angr.get("cwd"), env=angr.get("env")),
+        ]),
+        "extract.unblob": Capability("extract.unblob", "固件/文件系统提取", [unblob_provider(root)]),
         "extract.binwalk": Capability("extract.binwalk", "签名扫描与提取",
-                                      [system_tool_provider("binwalk", ["--help"], version_arg=["--help"])]),
+                                      [system_tool_provider(root, "binwalk", ["--help"], version_arg=["--help"])]),
         "extract.squashfs-vendor": Capability("extract.squashfs-vendor", "厂商魔改 SquashFS",
-                                             [system_tool_provider("sasquatch", ["-h"], version_arg=[])]),
-        "trace.strace": Capability("trace.strace", "系统调用追踪", [system_tool_provider("strace", ["-V"])]),
+                                             [system_tool_provider(root, "sasquatch", ["-h"], version_arg=[])]),
+        "trace.strace": Capability("trace.strace", "系统调用追踪", [system_tool_provider(root, "strace", ["-V"])]),
         "debug.ghidra": Capability("debug.ghidra", "Ghidra 无头分析(脚本见 tools/ghidra_scripts)",
-                                  [ghidra_provider()]),
+                                  [ghidra_provider(root)]),
         "debug.ida": Capability("debug.ida", "Windows IDA 无头(经 WSL,复用 tools/ida_*)",
                                 [windows_ida_provider(root)]),
         "mcp.chrome": Capability("mcp.chrome", "浏览器自动化(取件/提交)", [

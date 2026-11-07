@@ -369,9 +369,17 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - 边界:只用于用户要求提交的报告;只填不点提交;不存不代填密码;登录态不进对外材料、不复制出工作区。
 - 多会话:①headless 天然隔离(每会话一进程 + `--isolated`),只费内存;②冲突只有一种 —— **两个会话连同一个可调试浏览器**(共用标签页)⇒ 同一时间只在一个会话 `enabled:true`;③`state/<目标>/` 单写者 ⇒ 一个目标只开一个会话。
 
+### 工具定位与 Python 环境(2026-11-06)
+- **已有工具**通过本地元数据 `state/tools.json` 定位(可用 `FW_TOOL_CONFIG` 覆盖):
+  `path`(实际可执行文件)/ `python`(Python 工具解释器)/ `cwd` / `env`。
+  `python3 -m fwcore.toolmeta` 查看;缺路径就如实报,不要另找一份。
+- **Python 环境队列** `state/pyenvs.json`(或 `FW_PYTHON_ENVS`)只用于 Agent 自己跑 Python 代码
+  和决定包安装位置;它不是工具注册表,不用来搜索 unblob/angr/Ghidra/QEMU。
+- 系统命令没有显式元数据时才按 `PATH` 查找;简单优先,不做多环境/多架构目录大扫描。
+
 ### 提取工具
-- binwalk: /usr/bin/binwalk( apt)
-- unblob: /home/juryorca/venvs/unblob/bin/unblob(独立 venv 26.6.4)
+- binwalk: 系统 PATH(或 `state/tools.json` 的 `binwalk.path`)
+- unblob: 用 `state/tools.json` 的 `unblob.path` / `unblob.python` 定位(独立 venv 26.6.4)
   ★ 特殊说明:unblob 是 binwalk 的互补而非替代 —— 厂商魔改/非标打包固件 binwalk
     提不出时用它;用法 `unblob -e <输出目录> <固件>`;它依赖一批外部提取器,
     缺哪个对应格式就静默失败(见下表);两个工具的产出目录都要检查

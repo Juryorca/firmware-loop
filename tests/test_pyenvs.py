@@ -11,7 +11,7 @@ from fwcore import pyenvs
 def test_config_order_and_missing_skip(tmp_path):
     root = str(tmp_path)
     os.makedirs(os.path.join(root, "state"))
-    with open(os.path.join(root, "state", "toolenv.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(root, "state", "pyenvs.json"), "w", encoding="utf-8") as f:
         json.dump({"python_envs": ["/no/such/python", sys.executable]}, f)
     envs = pyenvs.load(root)
     assert envs[0] == "/no/such/python"
@@ -27,3 +27,15 @@ def test_env_var_has_priority(tmp_path, monkeypatch):
     monkeypatch.setenv("FW_PYTHON_ENVS", os.pathsep.join(["/first/python", sys.executable]))
     envs = pyenvs.load(root)
     assert envs[:2] == ["/first/python", sys.executable]
+
+
+def test_defaults_do_not_hardcode_tool_venvs():
+    assert pyenvs.default_envs() == [sys.executable]
+
+
+def test_legacy_toolenv_is_still_read(tmp_path):
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, "state"))
+    with open(os.path.join(root, "state", "toolenv.json"), "w", encoding="utf-8") as f:
+        json.dump({"python_envs": ["/legacy/python", sys.executable]}, f)
+    assert pyenvs.load(root)[0] == "/legacy/python"

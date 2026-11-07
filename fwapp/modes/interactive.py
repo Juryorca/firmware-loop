@@ -471,7 +471,7 @@ class FwApp(App):
             self._notice("工具管理需要先选择 target；当前缺失:\n" + render_report(rep))
             return
         task = ("使用 tool-management Skill 处理默认工具集缺失项。"
-                "先读取 toolset/capabilities 与 state/toolenv.json，给出安装计划；"
+                "先读取 toolset/capabilities、state/tools.json 与 state/pyenvs.json；已有工具先补元数据，Py 环境队列只用于 Agent 代码/装包；"
                 "按授权范围安装/配置，跳过依赖冲突，最后做真实能力验证并恢复研究。"
                 "当前缺失: " + "; ".join(x["label"] for x in missing))
         self._append(MessageWidget("user", task))

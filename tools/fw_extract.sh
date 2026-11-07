@@ -14,6 +14,7 @@
 #   abort 一定整组回收子进程。
 set -u
 
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 FW_ARG="${1:?用法: fw_extract.sh <firmware> <outdir> [--no-unblob]}"
 OUT_ARG="${2:?缺输出目录}"
 shift 2
@@ -133,8 +134,12 @@ else
 fi
 
 if [ "$NO_UNBLOB" = "0" ]; then
-  UNBLOB="${FW_UNBLOB:-$HOME/venvs/unblob/bin/unblob}"
-  if [ -x "$UNBLOB" ]; then
+  # 已有工具通过元数据定位;不再假设 ~/venvs/unblob 一定存在。
+  UNBLOB="${FW_UNBLOB:-}"
+  if [ -z "$UNBLOB" ]; then
+    UNBLOB="$(cd "$ROOT" && python3 -m fwcore.toolmeta --path unblob 2>/dev/null || true)"
+  fi
+  if [ -n "$UNBLOB" ] && [ -x "$UNBLOB" ]; then
     ran_unblob=1
     run_guarded unblob setsid "$UNBLOB" -e "$OUT/unblob" -d "$MAX_DEPTH" "$FW" || rc_unblob=$?
     [ "$rc_unblob" = "9" ] && exit 9
