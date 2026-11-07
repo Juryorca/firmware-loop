@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
 
 from fwcore import db as _db
 from fwcore.domain import Domain
+from fwcore.limits import Limits
 from fwcore.migrate_all import migrate_target, parse_pool, verify_target
 from fwcore.models import Reply
 from fwcore.policy import Policy
@@ -415,3 +417,46 @@ def test_stale_awaiting_handback_is_not_reported_for_paused_run(setup):
     assert r._handback(rid, "paused", []) is None
     con.execute("UPDATE runs SET state='finished' WHERE id=?", (rid,))
     assert r._handback(rid, "finished", []) == "awaiting_user_close"
+
+
+def test_finish_state_does_not_override_external_pause(setup):
+    """取消/看护已把 run 暂停后,迟到的 finished 不能覆盖 paused/handback。"""
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    con.execute("UPDATE runs SET state='paused', handback_reason='user_stop: x' WHERE id=?", (rid,))
+    res = r._finish_state(rid, "t1", "finished", 1, 0, "FINAL: x", [])
+    row = con.execute("SELECT state,handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["state"] == "paused" and row["handback_reason"] == "user_stop: x"
+    assert res.state == "paused" and res.handback == "user_stop: x"
+
+
+def test_limit_hit_does_not_override_external_pause(setup):
+    con, dom, root = setup
+    r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    con.execute("UPDATE runs SET state='paused', handback_reason='user_stop: x' WHERE id=?", (rid,))
+    r._limit_hit(rid, "max_model_calls", {"calls": 1, "limit": 1})
+    row = con.execute("SELECT state,handback_reason,budget_note FROM runs WHERE id=?",
+                      (rid,)).fetchone()
+    assert row["state"] == "paused" and row["handback_reason"] == "user_stop: x"
+    assert "last_limit" not in json.loads(row["budget_note"] or "{}"), "不能把预算触发写进已暂停的 run"
+
+
+def test_persist_never_lowers_counters(setup):
+    """迟到的计数写不能把并发推进的更大计数改小(MAX 单调)。"""
+    con, dom, root = setup
+    box = {}
+
+    class Bump(ScriptedModel):
+        def chat(self, messages, tools):
+            rep = super().chat(messages, tools)
+            con.execute("UPDATE runs SET model_calls=500 WHERE id=?", (box["rid"],))
+            return rep
+
+    r = Runner(con, root, Bump(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               limits=Limits(max_model_calls=900), policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    box["rid"] = rid
+    r.run(rid, "t1")
+    assert con.execute("SELECT model_calls FROM runs WHERE id=?", (rid,)).fetchone()[0] >= 500

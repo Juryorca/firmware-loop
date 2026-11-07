@@ -331,6 +331,23 @@ class Runner:
             pass
         return cur is not None and cur.rowcount > 0
 
+    def _update_if_running(self, rid: str, set_sql: str, params: tuple) -> bool:
+        """CAS:只有"自己仍是 owner 且 run 仍 running"才写;检查与写入是同一条 UPDATE。
+
+        为什么不能"先 _owns 再写":两步之间存在窗口 —— 取消/看护/新 owner 可能刚好把
+        run 暂停或接管,迟到的写会覆盖 paused/handback/计数(已实测踩过)。
+        """
+        me = os.getpid()
+        st = _proc_starttime(me)
+        cur = None
+        with _db.Tx(self.con) as c:
+            cur = c.execute(
+                "UPDATE runs SET " + set_sql +
+                " WHERE id=? AND state='running'"
+                " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                (*params, rid, me, st))
+        return cur is not None and cur.rowcount > 0
+
     def _owns(self, rid: str) -> bool:
         """本进程是否当前 owner(pid + starttime)。pid 为 NULL 的旧行按"无主"放行。"""
         row = self.con.execute("SELECT pid,pid_starttime FROM runs WHERE id=?", (rid,)).fetchone()
@@ -359,6 +376,9 @@ class Runner:
             cur = _proc_starttime(row["pid"])
             if row["pid_starttime"] in (None, cur):
                 raise RuntimeError(f"run {rid} 正在被 pid {row['pid']} 执行(拒绝并发 resume)")
+        from .watchdog import Watchdog
+        wd = Watchdog(self.con, self.root)
+        snap = wd._pgids_entries(rid)      # 接管前快照:接管后新 owner 追加的进程组不能杀
         note = json.dumps({"limits": self._budget_snapshot(), "set_at": _now(), "via": "resume"},
                           ensure_ascii=False)
         with _db.Tx(self.con) as c:
@@ -379,10 +399,9 @@ class Runner:
                       " WHERE run_id=? AND status='running'", (rid,))
         dead_owner = bool(row["pid"]) and (row["host"] or "") == _host() and not _pid_alive(row["pid"])
         if dead_owner:
-            # 旧 owner 已死 ⇒ 它启动的工具进程组是孤儿,接管时一并清掉(防重复副作用/孤儿 fuzz)
+            # 旧 owner 已死 ⇒ 孤儿进程组清掉;只用接管前快照,别杀新 owner 刚起的工具
             with contextlib.suppress(Exception):
-                from .watchdog import Watchdog
-                Watchdog(self.con, self.root)._kill_pgids(rid)
+                wd._kill_pgids(rid, snap)
 
     def context(self, target: str) -> dict:
         d = self.domain.derived(target)
@@ -469,18 +488,18 @@ class Runner:
 
     def _limit_hit(self, rid: str, reason: str, detail: dict | None = None) -> None:
         """记录"执行边界触发"。**只暂停**,不写任何研究结论。"""
-        if not self._owns(rid):
+        row = self.con.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()
+        try:
+            note = json.loads(row["budget_note"]) if row and row["budget_note"] else {}
+        except (TypeError, ValueError):
+            note = {}
+        note["last_limit"] = {"reason": reason, "detail": detail or {}, "at": _now()}
+        # 只有"仍 running 且仍是 owner"才写:已被取消/看护暂停时不覆盖对方的状态与理由
+        if not self._update_if_running(
+                rid, "state='paused', updated_at=?, budget_note=?",
+                (_now(), json.dumps(note, ensure_ascii=False))):
             return
-        with _db.Tx(self.con) as c:
-            row = c.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()
-            try:
-                note = json.loads(row["budget_note"]) if row and row["budget_note"] else {}
-            except (TypeError, ValueError):
-                note = {}
-            note["last_limit"] = {"reason": reason, "detail": detail or {}, "at": _now()}
-            c.execute("UPDATE runs SET state='paused', updated_at=?, budget_note=? WHERE id=?",
-                      (_now(), json.dumps(note, ensure_ascii=False), rid))
-            _event(c, "run.limit_hit", rid, {"reason": reason, **(detail or {})})
+        _event(self.con, "run.limit_hit", rid, {"reason": reason, **(detail or {})})
 
     # ---------------- 一轮 = 一个模型-工具交互序列 ----------------
     def turn(self, rid: str, target: str, goal: str | None, history: list[dict],
@@ -516,7 +535,9 @@ class Runner:
             if not self._owns(rid):
                 return
             with _db.Tx(self.con) as c:
-                c.execute("UPDATE runs SET model_calls=?, tool_calls=?, elapsed_s=? WHERE id=?",
+                # MAX:计数只增不减 —— 迟到的写不能把新 owner 已累计的调用数改小
+                c.execute("UPDATE runs SET model_calls=MAX(model_calls,?),"
+                          " tool_calls=MAX(tool_calls,?), elapsed_s=MAX(elapsed_s,?) WHERE id=?",
                           (run_calls, run_tools, run_elapsed + (time.time() - t0), rid))
 
         try:
@@ -702,14 +723,13 @@ class Runner:
                     # 必须本轮真的推进了一条假设(决定性尝试结束 / 假设收口 / 假设被放弃)
                     advanced = self._round_advanced(target, since)
                     if advanced:
-                        if not self._owns(rid):
+                        if not self._update_if_running(rid, "rounds=?, updated_at=?",
+                                                       (rounds + 1, _now())):
                             state = "paused"
                             break
                         rounds += 1
                         _event(self.con, "round.ended", self.domain.target(target).id,
                                {"run_id": rid, "rounds": rounds})
-                        with _db.Tx(self.con) as c:
-                            c.execute("UPDATE runs SET rounds=? WHERE id=?", (rounds, rid))
                     else:
                         _event(self.con, "round.marker", rid,
                                {"note": "FINAL 但本轮没有推进任何假设 ⇒ 不计轮"})
@@ -821,9 +841,22 @@ class Runner:
                             f"下限 {self.research.mirror_every})")
         handback = self._handback(rid, state, blockers)
         ready = not blockers
+        me = os.getpid()
+        st = _proc_starttime(me)
         with _db.Tx(self.con) as c:
-            c.execute("UPDATE runs SET state=?, updated_at=?, handback_reason=COALESCE(?, handback_reason)"
-                      " WHERE id=?", (state, _now(), handback, rid))
+            # CAS:仍 running 且仍是 owner 才写。取消/看护可能已把它暂停(我们仍满足 _owns),
+            # 迟到的 finished 不能覆盖 paused/handback —— 检查与写入必须是同一条 UPDATE。
+            cur = c.execute("UPDATE runs SET state=?, updated_at=?,"
+                            " handback_reason=COALESCE(?, handback_reason)"
+                            " WHERE id=? AND state='running'"
+                            " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                            (state, _now(), handback, rid, me, st))
+            if not cur.rowcount:
+                row = c.execute("SELECT state,handback_reason FROM runs WHERE id=?",
+                                (rid,)).fetchone()
+                return RunResult(rid, row["state"] if row else "paused", step, rounds,
+                                 final, False, blockers,
+                                 row["handback_reason"] if row else None, history)
             _event(c, "run.finished", rid, {"state": state, "steps": step, "ready": ready,
                                             "handback": handback, "blockers": blockers[:5]})
         return RunResult(rid, state, step, rounds, final, ready, blockers, handback, history)
@@ -994,7 +1027,9 @@ class Runner:
             idle = idle + 1 if res2.rounds == rounds_before else 0
             res = res2
             if idle >= 2:
-                self._limit_hit(rid, "stalled_no_progress", {"idle_rounds": idle})
+                # 空闲轮是"执行层停滞",单独记事件;只在仍 running 时暂停(不覆盖已 paused 的状态)
+                _event(self.con, "run.stalled_no_progress", rid, {"idle_rounds": idle})
+                self._update_if_running(rid, "state='paused', updated_at=?", (_now(),))
                 res.state = "paused"
                 return res
         return res
@@ -1057,14 +1092,17 @@ class Runner:
                 continue
             why = ("pid 已消失" if same_host and alive is not True else
                    f"跨主机心跳 {round(age, 1)}s 未更新")
+            from .watchdog import Watchdog as _WD
+            snap = _WD(self.con, self.root)._pgids_entries(r["id"])   # 扫描时快照
             with _db.Tx(self.con) as c:
                 cur = c.execute(
                     "UPDATE runs SET state='paused', handback_reason=?, updated_at=?"
                     " WHERE id=? AND state='running' AND IFNULL(pid,-1)=?"
-                    "   AND IFNULL(pid_starttime,-1)=?",
+                    "   AND IFNULL(pid_starttime,-1)=? AND IFNULL(host,'')=?",
                     (f"recovered_stale: {why}", _now(), r["id"],
                      -1 if r["pid"] is None else r["pid"],
-                     -1 if r["pid_starttime"] is None else r["pid_starttime"]))
+                     -1 if r["pid_starttime"] is None else r["pid_starttime"],
+                     r["host"] or ""))
                 if not cur.rowcount:
                     continue          # 扫描后已被 resume 接管 ⇒ 不能停它
                 # 只有**同主机**的孤立工具才杀:pgid 是主机本地概念,跨主机按同名 pgid 杀
@@ -1074,7 +1112,7 @@ class Runner:
                 if same_host and r["pid"] and alive is False:
                     with contextlib.suppress(Exception):
                         from .watchdog import Watchdog
-                        Watchdog(self.con, self.root)._kill_pgids(r["id"])
+                        Watchdog(self.con, self.root)._kill_pgids(r["id"], snap)
                 c.execute("UPDATE tool_calls SET status='cancelled',"
                           " note=COALESCE(note,'') || ' [recovered stale]'"
                           " WHERE run_id=? AND status='running'", (r["id"],))

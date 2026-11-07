@@ -302,3 +302,36 @@ def test_recover_stale_does_not_kill_without_recorded_pid(tmp_path):
         assert child.poll() is None, "没有 pid 证据时不能杀"
     finally:
         child.kill()
+
+
+def test_watchdog_scan_does_not_pause_owner_taken_over_mid_scan(tmp_path, monkeypatch):
+    """扫描读到旧 owner(stale)后、更新前发生接管:旧扫描不能暂停/误杀新 owner。"""
+    import fwcore.watchdog as wdm
+
+    con, dom, root, rid, hid = _mk(tmp_path)
+    child = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        art = os.path.join(root, "state", "artifacts", rid)
+        os.makedirs(art, exist_ok=True)
+        with open(os.path.join(art, ".pgids"), "w", encoding="utf-8") as f:
+            f.write(f"{os.getpgid(child.pid)} {_proc_starttime(child.pid) or 0}\n")
+        con.execute("UPDATE runs SET heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
+
+        def fake_entries(self, run_id):
+            # 在"读行之后、CAS 之前"接管:新 owner 活着、心跳新鲜、仍 running
+            con.execute("UPDATE runs SET pid=?, pid_starttime=?, host=?, heartbeat_at=?,"
+                        " state='running' WHERE id=?",
+                        (child.pid, _proc_starttime(child.pid), wdm._host(),
+                         wdm._now(), run_id))
+            con.commit()
+            return []
+
+        monkeypatch.setattr(wdm.Watchdog, "_pgids_entries", fake_entries)
+        acts = wdm.Watchdog(con, root, Limits(), heartbeat_timeout_s=60).scan_once()
+        row = con.execute("SELECT state,pid FROM runs WHERE id=?", (rid,)).fetchone()
+        assert row["state"] == "running" and row["pid"] == child.pid
+        assert not [a for a in acts if a.get("run") == rid]
+        time.sleep(0.3)
+        assert child.poll() is None, "旧扫描不得杀接管后新 owner 的进程组"
+    finally:
+        child.kill()

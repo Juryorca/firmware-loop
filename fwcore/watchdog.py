@@ -68,9 +68,8 @@ class Watchdog:
             return sum(os.path.getsize(p + s) for s in ("", "-wal", "-shm") if os.path.exists(p + s))
         return 0
 
-    def _kill_pgids(self, run_id: str) -> list[int]:
-        """杀掉该 run 记录过的工具进程组(独立于循环)。"""
-        killed: list[int] = []
+    def _pgids_entries(self, run_id: str) -> list[tuple[int, int | None]]:
+        """读该 run 的 .pgids 快照(扫描时先取,避免把接管后新 owner 的进程组算进来)。"""
         pgfile = os.path.join(self.root, "state", "artifacts", run_id, ".pgids")
         entries: list[tuple[int, int | None]] = []
         if os.path.isfile(pgfile):
@@ -83,7 +82,14 @@ class Watchdog:
                         start = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
                         entries.append((int(parts[0]), start))
             except OSError:
-                entries = []
+                return []
+        return entries
+
+    def _kill_pgids(self, run_id: str, entries: list[tuple[int, int | None]] | None = None) -> list[int]:
+        """杀掉该 run 记录过的工具进程组(独立于循环);entries 给出时只杀这份快照。"""
+        killed: list[int] = []
+        if entries is None:
+            entries = self._pgids_entries(run_id)
         for pg, start in entries:
             if start is None:
                 # 没有 starttime 的记录无法证明 pgid 没被复用 ⇒ 宁可不杀(防误伤);
@@ -152,16 +158,23 @@ class Watchdog:
                                            ("owner_dead", owner_dead)) if hit]
             if hard:
                 why = "owner_dead" if "owner_dead" in hard else ",".join(hard)
+                # 扫描时快照 .pgids:接管后的新 owner 会往里追加自己的进程组,
+                # 按"现在的文件"杀会误杀新 owner 的工具
+                snap = self._pgids_entries(r["id"])
                 killed: list[int] = []
                 with _db.Tx(con) as c:
-                    # **条件更新**:扫描与更新之间主进程可能已经 finished/resume 接管;
-                    # 不加 state='running' 条件会把"刚跑完的 run"改成 paused(实测踩过)
+                    # CAS 必须带扫描时看到的 owner(pid+starttime+host):
+                    # 只看 state='running' 会把"接管后的新 owner"误暂停/误杀(扫描→更新之间可发生)
                     cur = c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=?"
-                                    " WHERE id=? AND state='running'",
-                                    (f"watchdog_paused: {why}", _now(), r["id"]))
+                                    " WHERE id=? AND state='running' AND IFNULL(pid,-1)=?"
+                                    "   AND IFNULL(pid_starttime,-1)=? AND IFNULL(host,'')=?",
+                                    (f"watchdog_paused: {why}", _now(), r["id"],
+                                     -1 if r["pid"] is None else r["pid"],
+                                     -1 if r["pid_starttime"] is None else r["pid_starttime"],
+                                     r["host"] or ""))
                     if not cur.rowcount:
                         continue
-                    killed = self._kill_pgids(r["id"])
+                    killed = self._kill_pgids(r["id"], snap)
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
                                json.dumps({"hard": hard, "checkpoints": n_ck, "db_bytes": size,
@@ -193,15 +206,20 @@ class Watchdog:
                         continue
                 # 与 hard 分支同一条规则:**先赢下状态竞争**再杀组/写事件;
                 # 否则扫描→更新之间 run 可能已 finished/被 resume 接管,会误杀新 owner 的进程组
+                snap = self._pgids_entries(r["id"])
                 killed: list[int] = []
                 with _db.Tx(con) as c:
                     cur = c.execute("UPDATE runs SET state='paused', handback_reason=?, updated_at=?"
-                                    " WHERE id=? AND state='running'",
+                                    " WHERE id=? AND state='running' AND IFNULL(pid,-1)=?"
+                                    "   AND IFNULL(pid_starttime,-1)=? AND IFNULL(host,'')=?",
                                     (f"watchdog_paused: stale {round(now - hb, 1) if hb else 'unknown'}s",
-                                     _now(), r["id"]))
+                                     _now(), r["id"],
+                                     -1 if r["pid"] is None else r["pid"],
+                                     -1 if r["pid_starttime"] is None else r["pid_starttime"],
+                                     r["host"] or ""))
                     if not cur.rowcount:
                         continue
-                    killed = self._kill_pgids(r["id"])
+                    killed = self._kill_pgids(r["id"], snap)
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
                                json.dumps({"stale_s": round(now - hb, 1) if hb else None,

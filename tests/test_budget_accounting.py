@@ -170,6 +170,7 @@ def test_run_budget_is_persisted_and_exposed(tmp_path):
     note = json.loads(con.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()[0])
     assert note["via"] == "resume" and note["limits"]["max_seconds"] == 456.0
 
+    con.execute("UPDATE runs SET state='running' WHERE id=?", (rid,))   # 模拟仍在执行
     r2._limit_hit(rid, "max_model_calls", {"calls": 5, "limit": 5})
     note = json.loads(con.execute("SELECT budget_note FROM runs WHERE id=?", (rid,)).fetchone()[0])
     assert note["last_limit"]["reason"] == "max_model_calls"
