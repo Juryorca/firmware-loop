@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 14   # 开发期**基线**:不再逐版本迁移(见 _migrate)
+SCHEMA_VERSION = 16   # 开发期**基线**:不再逐版本迁移(见 _migrate)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -191,6 +191,25 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   created_at TEXT NOT NULL
 );
 
+-- 对话历史(面向用户;append-only)。与 checkpoints 职责不同:
+--   checkpoints = 模型执行历史(assistant/tool 协议消息,可压缩)
+--   conversation_entries = 用户可见的对话(用户输入/assistant 回复/工具结果摘要)
+CREATE TABLE IF NOT EXISTS conversation_entries (
+  id           TEXT PRIMARY KEY,
+  run_id       TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  role         TEXT NOT NULL CHECK (role IN ('user','assistant','tool')),
+  content      TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'ok'
+     CHECK (status IN ('ok','queued','partial','error','cancelled')),
+  -- 客户端幂等键:同一提交重试不会产生两条用户消息
+  client_id    TEXT,
+  tool_call_id TEXT,
+  parent_id    TEXT,
+  meta         TEXT,
+  created_at   TEXT NOT NULL,
+  UNIQUE (run_id, client_id)
+);
+
 -- 事件流(审计/回放;只追加)
 CREATE TABLE IF NOT EXISTS events (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,6 +266,7 @@ CREATE INDEX IF NOT EXISTS idx_evidence_target ON evidence(target_id);
 CREATE INDEX IF NOT EXISTS idx_evidence_verified ON evidence(target_id, verified);
 CREATE INDEX IF NOT EXISTS idx_events_ref ON events(ref);
 CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts);
+CREATE INDEX IF NOT EXISTS idx_conversation_run ON conversation_entries(run_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_key ON tool_calls(run_id, call_key)
   WHERE call_key IS NOT NULL;
 """

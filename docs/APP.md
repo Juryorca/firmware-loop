@@ -52,11 +52,15 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 
 - 全屏布局、终端 resize、Transcript 滚动;退出/异常/SIGTERM 恢复终端。
 - 多行输入:Enter 发送、Shift+Enter / Ctrl+J 换行、Alt+Enter 排队、↑ 历史。
-- 工具调用按状态着色,可折叠/展开(Ctrl+O),展示参数、结果、stdout 摘录。
+- **真流式**:模型 SSE → Adapter → Runner → Session → TUI 全链路增量;
+  assistant 消息在首个 token 到达时即出现并持续追加,reasoning 只进隐藏的
+  thinking 块,不混进正文。
+- 工具调用参数分片接收、完整组装并校验后才执行;状态实时更新,可折叠/展开
+  (Ctrl+O),展示参数、结果、stdout 摘录。
 - Slash Commands 带补全:`/help /model /target /resume /status /budget
   /hypotheses /evidence /new /continue /clear /expand /quit`。
 - 选择器:模型、目标、历史 run(搜索 + 列表)。
-- 研究面板:进度、假设池、观察、证据、Gate 阻塞(每 2 秒从 SQLite 刷新)。
+- 研究面板:进度、假设池、观察、证据、结论、Gate 阻塞(每 2 秒从 SQLite 刷新)。
 - 状态栏:模型、target、run、状态、调用/工具数、Token(含 cache)、
   上下文占用、运行时长、假设/证据/阻塞、最近预算触发。
 - 快捷键:F1 帮助、F2/Ctrl+G 研究面板、Ctrl+L 模型、Ctrl+R 恢复、
@@ -68,15 +72,37 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 - `tests/test_app_session.py`:提交、取消、暂停后 resume、新 run、print mode;
   全部用 scripted 适配器,**不产生外部模型调用**。
 - `tests/test_app_tui.py`:Textual headless pilot(真实按键/布局/overlay/resize)。
+- `tests/test_streaming_conversation.py`:Mock SSE、分片工具参数、取消/断流、
+  多轮持久化与重启恢复、TUI 首个 token 立即可见。
 - `tools/tui_smoke.py`:真 pty 冒烟(启动/输入/多行/resize/历史/Ctrl+Q/SIGTERM)。
 
-## 6. 已知限制
+## 6. 对话持久化
 
-- 模型适配器目前是**非流式**:TUI 展示"model call 完成"事件与 busy 状态,
-  不逐 token 流式渲染;要流式需在 `fwcore/models.py` 增加流式接口(未做)。
-- 连续多轮用户消息里,只有 run 的初始 goal 会持久化;后续每轮 goal 只存在于
-  当次运行的历史(旧轮在重载后不显示为用户气泡)。这是 Core 的既有边界,
-  应用层没有另建一份会话存储。
+`conversation_entries`(schema v16)是**面向用户**的 append-only 对话,
+与 `checkpoints`(模型执行历史)分工明确:
+
+| 表 | 内容 | 谁用 |
+|---|---|---|
+| `conversation_entries` | user / assistant / tool 的可见消息,稳定 ID、`run_id`、`parent_id`、`status`、时间戳 | TUI transcript、`/resume` 恢复、模型上下文中的用户多轮输入 |
+| `checkpoints` | assistant/tool 协议消息,可压缩/裁剪 | 模型请求历史、崩溃恢复 |
+
+- 每次用户提交都持久化(带 `client_id`,同一提交重试幂等);
+  `runs.goal` 只保留初始目标,后续输入不再覆盖它。
+- 状态:`ok` / `queued`(排队中,执行时同一 `client_id` 推进为 `ok`)/
+  `cancelled` / `partial` / `error`;排队、取消、断流都保留明确状态。
+- assistant 回复与工具结果按执行顺序追加;取消/断流写 `cancelled`/`error`,
+  部分内容保留,不产生虚假完成记录。
+- 模型上下文在动态 state 尾部注入完整用户对话(当前 goal 不重复);
+  注入的是数据,不是新的用户指令。
+- 关闭 TUI / 进程崩溃后重新 `/resume` 同一 run:用户消息、assistant 回复、
+  工具记录按原顺序恢复,不丢失、不重复;新 run 从空对话开始。
+
+## 7. 已知限制
+
+- 流式只覆盖 OpenAI 兼容 SSE;注入自定义非流式 transport 的适配器会走
+  `chat()` fallback(整段作为一个 delta)。reasoning 默认折叠,未做展开快捷键。
+- `conversation_entries` 是开发期 schema v16 基线;已有旧库需先运行
+  `tools/db_rebaseline.py`(会做一致性备份)。
 - 不复制 Pi 的 Extension / Plan Mode / Subagent;保持单 Agent。
 - TUI 依赖 `textual>=8`(`pip install -e ".[tui]"`);缺失时交互模式给出安装提示,
   Print Mode 与研究子命令不受影响。

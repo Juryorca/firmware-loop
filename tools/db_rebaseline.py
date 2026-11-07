@@ -23,7 +23,8 @@ from fwcore.db import BASELINE_COLUMNS, INDEXES, SCHEMA, SCHEMA_VERSION
 
 TABLES = ("targets", "surfaces", "hypotheses", "attempts", "observations",
           "evidence", "evidence_checks", "conclusions", "tool_calls", "runs",
-          "checkpoints", "events", "documents", "mirror_checks", "research_logs")
+          "checkpoints", "events", "documents", "mirror_checks", "research_logs",
+          "conversation_entries")
 
 
 def counts(con: sqlite3.Connection) -> dict[str, int]:
@@ -34,7 +35,7 @@ def counts(con: sqlite3.Connection) -> dict[str, int]:
         try:
             # 表名来自本文件固定白名单(TABLES),不含外部输入
 
-            out[t] = con.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()[0]  # nosemgrep: python.lang.security.audit.formatted-sql-query
+            out[t] = con.execute(f"SELECT COUNT(*) n FROM {t}").fetchone()[0]  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         except sqlite3.OperationalError:
             out[t] = -1
     return out
@@ -64,15 +65,26 @@ def rebaseline(db: str) -> int:
     print(f"[info] {db}: schema_version={have['value'] if have else 'none'}, 目标={SCHEMA_VERSION}")
 
     con.executescript(SCHEMA)
+    # conversation_entries 的 status CHECK 在 v16 增加了 queued;
+    # CREATE TABLE IF NOT EXISTS 不会改旧约束 ⇒ 重建表并保留数据。
+    row = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='conversation_entries'"
+    ).fetchone()
+    if row and "queued" not in (row["sql"] or ""):
+        con.execute("ALTER TABLE conversation_entries RENAME TO conversation_entries_old")
+        con.executescript(SCHEMA)
+        con.execute("INSERT INTO conversation_entries SELECT * FROM conversation_entries_old")
+        con.execute("DROP TABLE conversation_entries_old")
+        print("[rebuild] conversation_entries(status 增加 queued)")
     for table, cols in BASELINE_COLUMNS.items():
         if table not in TABLES:
             raise ValueError(f"BASELINE_COLUMNS 里有未知表: {table!r}")
-        existing = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}  # nosemgrep: python.lang.security.audit.formatted-sql-query
+        existing = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         for col, decl in cols:
             if not col.replace("_", "").isalnum():
                 raise ValueError(f"非法列名: {col!r}")
             if col not in existing:
-                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")  # nosemgrep: python.lang.security.audit.formatted-sql-query
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 print(f"[add] {table}.{col}")
     con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
                 (str(SCHEMA_VERSION),))
@@ -100,7 +112,7 @@ def rebaseline(db: str) -> int:
               "WHERE t.id IS NULL"), "run 指向不存在的目标"),
             (("SELECT COUNT(*) FROM evidence_checks c LEFT JOIN evidence e ON e.id=c.evidence_id "
               "WHERE e.id IS NULL"), "复核记录指向不存在的证据")):
-        n = con.execute(sql).fetchone()[0]  # nosemgrep: python.lang.security.audit.formatted-sql-query
+        n = con.execute(sql).fetchone()[0]  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         if n:
             problems.append(f"{label}: {n} 条")
     con.close()

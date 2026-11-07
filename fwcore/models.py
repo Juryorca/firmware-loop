@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -68,6 +69,54 @@ class ScriptedAdapter:
     i: int = 0
     calls: list[dict] = field(default_factory=list)
     _seq: int = 0
+    # 流式测试参数:分片大小 / 每片延迟 / 在第 N 个文本片后抛错(验证部分回复)
+    chunk_size: int = 4
+    stream_delay: float = 0.0
+    fail_after_chunks: int | None = None
+
+    def stream(self, messages: list[dict], tools: list[dict], *, control=None):
+        """scripted 的流式实现:先走 `chat`(保留子类/测试钩子),再拆成增量事件。
+
+        真正的网络级 SSE 由 OpenAICompatModel.stream 实现;这里保证
+        ScriptedAdapter 也满足新接口,便于 TUI/取消/分片组装的自动化验证。
+        """
+        from .streaming import StreamError, StreamEvent
+
+        reply = self.chat(messages, tools)
+        yield StreamEvent("start")
+        emitted = 0
+        for part in _chunks(reply.content or "", max(1, int(self.chunk_size))):
+            if control is not None:
+                control.raise_if_cancelled()
+            if self.stream_delay:
+                time.sleep(self.stream_delay)
+            emitted += 1
+            if self.fail_after_chunks is not None and emitted > self.fail_after_chunks:
+                raise StreamError("模拟流中断")
+            yield StreamEvent("text_delta", text=part)
+        for part in _chunks(reply.reasoning or "", max(1, int(self.chunk_size))):
+            if control is not None:
+                control.raise_if_cancelled()
+            if self.stream_delay:
+                time.sleep(self.stream_delay)
+            yield StreamEvent("reasoning_delta", text=part)
+        for idx, call in enumerate(reply.tool_calls):
+            raw = call.get("args_raw")
+            if not isinstance(raw, str):
+                raw = json.dumps(call.get("args") or {}, ensure_ascii=False)
+            yield StreamEvent("toolcall_start", index=idx,
+                              call_id=call.get("id") or f"call_{idx}",
+                              name=call.get("name") or "",
+                              invalid=bool(call.get("args_invalid")))
+            for part in _chunks(raw, max(1, int(self.chunk_size))):
+                if control is not None:
+                    control.raise_if_cancelled()
+                if self.stream_delay:
+                    time.sleep(self.stream_delay)
+                yield StreamEvent("toolcall_delta", index=idx, arguments=part)
+        usage = reply.usage if isinstance(reply.usage, dict) else {}
+        yield StreamEvent("done", finish_reason=reply.finish_reason or
+                          ("tool_calls" if reply.tool_calls else "stop"), usage=usage)
 
     def chat(self, messages: list[dict], tools: list[dict]) -> Reply:
         self.calls.append({"messages": len(messages), "tools": [t["name"] for t in tools]})
@@ -106,6 +155,7 @@ class OpenAICompatAdapter:
     echo_reasoning: bool = field(default_factory=lambda: os.environ.get("FW_REASONING_CONTENT") == "1")
     temperature: float = 0.2
     transport: object = None
+    stream_transport: object = None
     name: str = "openai-compat"
 
     def __post_init__(self) -> None:
@@ -113,7 +163,18 @@ class OpenAICompatAdapter:
               "api_key_env": self.api_key_env, "temperature": self.temperature}
         if self.transport is not None:
             kw["transport"] = self.transport
+        if self.stream_transport is not None:
+            kw["stream_transport"] = self.stream_transport
         self._client = OpenAICompatModel(**kw)
+
+    @property
+    def supports_stream(self) -> bool:
+        # 注入自定义非流式 transport 时,沿用 chat()(测试/网关兼容);
+        # 真实端点(默认 transport)或显式 stream_transport 才走 SSE。
+        return self.stream_transport is not None or self.transport is None
+
+    def stream(self, messages: list[dict], tools: list[dict], *, control=None):
+        yield from self._client.stream(messages, tools, control=control)
 
     def chat(self, messages: list[dict], tools: list[dict]) -> Reply:
         r = self._client.chat(messages, tools)
@@ -192,3 +253,8 @@ def load_model_config(root: str | None = None) -> tuple[str, str, str]:
         base = base or cfg.get("base_url", "")
         model = model or cfg.get("model", "")
     return key, base, model
+
+
+def _chunks(text: str, size: int):
+    for i in range(0, len(text), size):
+        yield text[i:i + size]

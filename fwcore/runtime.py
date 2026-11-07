@@ -19,6 +19,7 @@ import os
 import socket
 import time
 from collections.abc import Callable
+from typing import Any
 from dataclasses import dataclass
 
 from . import db as _db
@@ -27,8 +28,9 @@ from .compact import find_cut as _find_cut
 from .contextinfo import build_status
 from .domain import Domain, new_id
 from .limits import Limits
-from .models import Adapter, Reply, ScriptedAdapter, assistant_message  # noqa: F401 (对外兼容)
+from .models import Adapter, ModelHTTPError, Reply, ScriptedAdapter, assistant_message  # noqa: F401
 from .policy import Policy
+from .streaming import StreamCancelled, StreamControl, StreamError, as_event
 from .research import Research
 from .toolkit import register_repo_tools
 from .tools import Registry, ToolContext, default_registry
@@ -84,7 +86,10 @@ class Runner:
                  watchdog_heartbeat_timeout: float = 900.0,
                  mcp: bool = False, mcp_config_paths: list[str] | None = None,
                  mcp_timeout: float = 20.0, mcp_call_timeout: float = 120.0,
-                 summarizer: Callable[[list[dict]], str] | None = None):
+                 summarizer: Callable[[list[dict]], str] | None = None,
+                 on_stream: Callable[[dict], None] | None = None,
+                 stream: bool = True,
+                 stop_event=None):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -117,6 +122,12 @@ class Runner:
         self._mcp_call_timeout = mcp_call_timeout
         # 上下文压缩的摘要器(测试注入 fake;默认用模型,计入预算)
         self.summarizer = summarizer
+        # 流式:事件回调(worker 线程调用)+ 当前请求的取消令牌
+        self.on_stream = on_stream
+        self.stream_enabled = stream
+        # 会话级取消(不等 DB 写锁):turn 循环在安全点检查
+        self.stop_event = stop_event
+        self.stream_control: StreamControl | None = None
         self._last_usage: dict = {}
         self._compact_cooldown_until = -1
         self._last_compact: dict | None = None
@@ -174,6 +185,9 @@ class Runner:
                        getattr(self.model, "name", None), now, now, now, note))
             _event(c, "run.started", rid, {"target": target, "goal": goal,
                                             "limits": self._budget_snapshot()})
+        if goal:
+            self.domain.add_conversation(rid, "user", goal, client_id=f"start:{rid}",
+                                         meta={"source": "start"})
         # 授权已确定 ⇒ 这时才允许启动 MCP(启动有副作用:子进程/外网/登录态);
         # rid 已存在 ⇒ MCP 的 pgid 能登记进本 run(崩溃后可清孤儿)
         self._ensure_mcp(rid)
@@ -501,6 +515,196 @@ class Runner:
             return
         _event(self.con, "run.limit_hit", rid, {"reason": reason, **(detail or {})})
 
+    # ---------------- 流式模型调用 ----------------
+    def _reserve_call(self, rid: str, n: int) -> None:
+        """发起请求前先把计数落库:断流/崩溃不会把这次已发起的调用丢掉。"""
+        with _db.Tx(self.con) as c:
+            c.execute("UPDATE runs SET model_calls=MAX(model_calls,?), updated_at=?"
+                      " WHERE id=?", (n, _now(), rid))
+
+    def _emit_stream(self, payload: dict) -> None:
+        cb = self.on_stream
+        if cb is None:
+            return
+        with contextlib.suppress(Exception):
+            cb(payload)
+
+    def _set_paused(self, rid: str, reason: str) -> None:
+        with contextlib.suppress(Exception):
+            self._update_if_running(rid, "state='paused', handback_reason=?, updated_at=?",
+                                    (reason[:400], _now()))
+
+    def _persist_assistant(self, rid: str, reply: Reply, *, status: str,
+                           call_seq: int, error: str = "") -> None:
+        """对话记录只存**面向用户**的内容;reasoning 只记长度,不混进正文。"""
+        if not (reply.content or reply.reasoning or reply.tool_calls):
+            return
+        meta = {
+            "model": str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
+            "finish_reason": reply.finish_reason or "",
+            "usage": reply.usage or {},
+            "tool_calls": [c.get("id") for c in reply.tool_calls],
+            "reasoning_len": len(reply.reasoning or ""),
+        }
+        if error:
+            meta["error"] = error[:300]
+        with contextlib.suppress(Exception):
+            self.domain.add_conversation(
+                rid, "assistant", reply.content, status=status,
+                client_id=f"asst:{rid}:{call_seq}", meta=meta)
+
+    @staticmethod
+    def _reply_from_stream(content: list[str], reasoning: list[str],
+                           calls: dict, finish: str, usage: dict) -> Reply:
+        out = []
+        for idx in sorted(calls):
+            slot = calls[idx]
+            raw = "".join(slot.get("args") or [])
+            invalid = bool(slot.get("invalid"))
+            try:
+                args = json.loads(raw or "{}")
+                if not isinstance(args, dict):
+                    raise ValueError("tool arguments 不是对象")
+            except (json.JSONDecodeError, ValueError):
+                args = {"__invalid_json__": raw}
+                invalid = True
+            out.append({"id": slot.get("id") or f"call_{idx}",
+                        "name": slot.get("name") or "",
+                        "args": args, "args_raw": raw, "args_invalid": invalid})
+        if not finish:
+            finish = "tool_calls" if out else "stop"
+        return Reply(content="".join(content), reasoning="".join(reasoning),
+                     tool_calls=out, finish_reason=finish, usage=usage or {})
+
+    def _model_call(self, rid: str, msgs: list[dict], tools: list[dict],
+                    call_seq: int) -> Reply:
+        """一次模型调用:流式事件 → 完整 Reply;工具参数只有收全后才组装。"""
+        ctrl = StreamControl()
+        self.stream_control = ctrl
+        streamer = getattr(self.model, "stream", None)
+        streamer_fn: Any = streamer if callable(streamer) else None
+        if getattr(self.model, "supports_stream", True) is False:
+            streamer_fn = None
+        if not (self.stream_enabled and streamer_fn is not None):
+            try:
+                reply = _coerce_reply(self.model.chat(msgs, tools))
+            finally:
+                self.stream_control = None
+            self._emit_stream({"type": "assistant_start", "run": rid, "call": call_seq})
+            if reply.content:
+                self._emit_stream({"type": "assistant_delta", "run": rid,
+                                   "call": call_seq, "text": reply.content})
+            if reply.reasoning:
+                self._emit_stream({"type": "reasoning_delta", "run": rid,
+                                   "call": call_seq, "text": reply.reasoning})
+            self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
+                               "text": reply.content, "reasoning": reply.reasoning,
+                               "finish_reason": reply.finish_reason,
+                               "usage": reply.usage or {}, "status": "ok",
+                               "tool_calls": len(reply.tool_calls)})
+            self._persist_assistant(rid, reply, status="ok", call_seq=call_seq)
+            return reply
+        content: list[str] = []
+        reasoning: list[str] = []
+        calls: dict = {}
+        finish = ""
+        usage: dict = {}
+        started = False
+
+        def start() -> None:
+            nonlocal started
+            if not started:
+                started = True
+                self._emit_stream({"type": "assistant_start", "run": rid, "call": call_seq})
+
+        try:
+            for raw in streamer_fn(msgs, tools, control=ctrl):
+                ev = as_event(raw)
+                if ev.type == "start":
+                    start()
+                elif ev.type == "text_delta":
+                    start()
+                    content.append(ev.text)
+                    self._emit_stream({"type": "assistant_delta", "run": rid,
+                                       "call": call_seq, "text": ev.text})
+                elif ev.type == "reasoning_delta":
+                    start()
+                    reasoning.append(ev.text)
+                    self._emit_stream({"type": "reasoning_delta", "run": rid,
+                                       "call": call_seq, "text": ev.text})
+                elif ev.type == "toolcall_start":
+                    start()
+                    slot = calls.setdefault(ev.index, {"id": "", "name": "", "args": [],
+                                                       "invalid": False})
+                    if ev.call_id:
+                        slot["id"] = ev.call_id
+                    if ev.name:
+                        slot["name"] = ev.name
+                    if ev.invalid:
+                        slot["invalid"] = True
+                    self._emit_stream({"type": "toolcall_start", "run": rid, "call": call_seq,
+                                       "index": ev.index, "call_id": slot["id"],
+                                       "name": slot["name"]})
+                elif ev.type == "toolcall_delta":
+                    start()
+                    slot = calls.setdefault(ev.index, {"id": "", "name": "", "args": [],
+                                                       "invalid": False})
+                    slot["args"].append(ev.arguments)
+                    self._emit_stream({"type": "toolcall_delta", "run": rid, "call": call_seq,
+                                       "index": ev.index, "text": ev.arguments})
+                elif ev.type == "done":
+                    finish = ev.finish_reason or finish
+                    if ev.usage:
+                        usage = ev.usage
+                elif ev.type == "error":
+                    raise StreamError(ev.error or "stream error")
+            start()
+            reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
+            self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
+                               "text": reply.content, "reasoning": reply.reasoning,
+                               "finish_reason": reply.finish_reason,
+                               "usage": reply.usage or {}, "status": "ok",
+                               "tool_calls": len(reply.tool_calls)})
+            self._persist_assistant(rid, reply, status="ok", call_seq=call_seq)
+            return reply
+        except StreamCancelled:
+            reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
+            self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
+                               "text": reply.content, "reasoning": reply.reasoning,
+                               "finish_reason": reply.finish_reason, "usage": reply.usage,
+                               "status": "cancelled", "tool_calls": len(reply.tool_calls)})
+            self._persist_assistant(rid, reply, status="cancelled", call_seq=call_seq)
+            raise
+        except Exception as e:
+            reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
+            self._emit_stream({"type": "assistant_error", "run": rid, "call": call_seq,
+                               "text": reply.content, "reasoning": reply.reasoning,
+                               "error": str(e)[:500]})
+            self._persist_assistant(rid, reply, status="error", call_seq=call_seq,
+                                    error=str(e))
+            if isinstance(e, StreamError):
+                raise
+            if isinstance(e, ModelHTTPError):
+                raise StreamError(str(e)) from e
+            raise
+        finally:
+            self.stream_control = None
+
+    def _record_tool_conversation(self, rid: str, call: dict, out: dict) -> None:
+        status = str(out.get("status") or "ok")
+        cstatus = {"ok": "ok", "error": "error", "timeout": "error",
+                   "cancelled": "cancelled"}.get(status, "error")
+        payload = {k: out.get(k) for k in ("status", "error", "note", "exit_code")
+                   if out.get(k) not in (None, "")}
+        if out.get("tool_call_id"):
+            payload["tool_call_id"] = out["tool_call_id"]
+        content = json.dumps(payload, ensure_ascii=False)[:2000]
+        with contextlib.suppress(Exception):
+            self.domain.add_conversation(
+                rid, "tool", content, status=cstatus,
+                tool_call_id=call.get("id"),
+                meta={"tool": call.get("name"), "status": status})
+
     # ---------------- 一轮 = 一个模型-工具交互序列 ----------------
     def turn(self, rid: str, target: str, goal: str | None, history: list[dict],
              budget: int | None = None) -> RunResult:
@@ -555,6 +759,11 @@ class Runner:
                     state = "paused"
                     _event(self.con, "run.stopped_external", rid, {"reason": stopped})
                     break
+                if self.stop_event is not None and self.stop_event.is_set():
+                    self._set_paused(rid, "user_stop: 用户取消")
+                    state = "paused"
+                    _persist()
+                    break
                 if budget is not None:
                     budget -= 1
                 if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
@@ -585,6 +794,7 @@ class Runner:
                         if self.limits.calls_exhausted(run_calls + 1):
                             raise RuntimeError("预算不足:拒绝摘要调用(历史保持原样)")
                         run_calls += 1
+                        self._reserve_call(rid, run_calls)
                         text = _render_for_summary(chunk)
                         reply = _coerce_reply(self.model.chat(
                             [{"role": "user", "content": text}], []))
@@ -618,7 +828,10 @@ class Runner:
                 # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
                 # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
                 _sys = self.research.rules_prompt(target)
-                _state = self.research.state_prompt(target, goal, rid)
+                _conv = self.domain.conversation(rid, roles=("user",))
+                if goal and _conv and (_conv[-1].get("content") or "").strip() == goal.strip():
+                    _conv = _conv[:-1]          # 当前目标单独放在「本轮目标」,不重复
+                _state = self.research.state_prompt(target, goal, rid, conversation=_conv)
                 _status = build_status(
                     model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
                     window=self.limits.context_tokens or None,
@@ -650,8 +863,29 @@ class Runner:
                                     {"calls": run_calls, "limit": self.limits.max_model_calls})
                     break
                 run_calls += 1
+                self._reserve_call(rid, run_calls)      # 请求前预留:断流/崩溃也不丢预算
                 _ctx = _context_stats(_sys + _state, history)
-                reply = _coerce_reply(self.model.chat(msgs, self.registry.describe()))
+                try:
+                    reply = self._model_call(rid, msgs, self.registry.describe(), run_calls)
+                except StreamCancelled:
+                    _event(self.con, "model.cancelled", rid, {"calls": run_calls})
+                    state = "paused"
+                    _persist()
+                    break
+                except StreamError as e:
+                    _event(self.con, "model.error", rid,
+                           {"error": str(e)[:300], "phase": "stream", "calls": run_calls})
+                    self._set_paused(rid, f"model_error: {str(e)[:300]}")
+                    state = "paused"
+                    _persist()
+                    self._checkpoint(rid, step, history)
+                    break
+                if self.stop_event is not None and self.stop_event.is_set():
+                    # 非流式 chat 期间到达的取消:返回后立刻停,不执行工具
+                    self._set_paused(rid, "user_stop: 用户取消")
+                    state = "paused"
+                    _persist()
+                    break
                 # **每一次**真实调用都记账(含 tool_calls / FINAL / 推理-only / 截断);
                 # 服务端没给 usage ⇒ usage_known=false,不猜 token 数
                 _u = dict(reply.usage or {})
@@ -672,6 +906,9 @@ class Runner:
                         "reasoning_tokens"),
                     "finish_reason": reply.finish_reason or "",
                     "tool_calls": len(reply.tool_calls),
+                    "streamed": bool(self.stream_enabled and callable(
+                        getattr(self.model, "stream", None))),
+                    "status": "ok",
                 })
                 # 推理-only 的回复(content 空但 reasoning 非空)也要按 assistant 记录,
                 # 否则历史里只剩一条空白回复,既丢诊断信息也会让 thinking 模式协议不完整
@@ -749,13 +986,20 @@ class Runner:
                         skipped = calls_this_turn[cap:]
                         calls_this_turn = calls_this_turn[:cap]
                         for c in skipped:
+                            err = (f"未执行:单轮工具调用上限 {cap}"
+                                   "(把命令合并成更少的调用)")
                             history.append({"role": "tool", "tool_call_id": c.get("id"),
                                             "name": c.get("name"),
                                             "content": json.dumps(
-                                                {"status": "cancelled",
-                                                 "error": f"未执行:单轮工具调用上限 {cap}"
-                                                          "(把命令合并成更少的调用)"},
+                                                {"status": "cancelled", "error": err},
                                                 ensure_ascii=False)})
+                            with contextlib.suppress(Exception):
+                                self.domain.add_conversation(
+                                    rid, "tool", json.dumps(
+                                        {"status": "cancelled", "error": err},
+                                        ensure_ascii=False),
+                                    status="cancelled", tool_call_id=c.get("id"),
+                                    meta={"tool": c.get("name"), "status": "cancelled"})
                         _event(self.con, "run.tool_cap", rid,
                                {"requested": len(reply.tool_calls), "executed": cap})
                     lost_owner = False
@@ -764,12 +1008,19 @@ class Runner:
                             # 模型调用期间被接管:剩余工具(可能含 state_* 写操作)一律不执行;
                             # 协议要求每个 tool_call_id 都有结果 ⇒ 逐个补 cancelled
                             for c2 in calls_this_turn[ci:]:
+                                err2 = "owner_lost: 运行已被其他进程接管"
                                 history.append({"role": "tool", "tool_call_id": c2.get("id"),
                                                 "name": c2.get("name"),
                                                 "content": json.dumps(
-                                                    {"status": "cancelled",
-                                                     "error": "owner_lost: 运行已被其他进程接管"},
+                                                    {"status": "cancelled", "error": err2},
                                                     ensure_ascii=False)})
+                                with contextlib.suppress(Exception):
+                                    self.domain.add_conversation(
+                                        rid, "tool", json.dumps(
+                                            {"status": "cancelled", "error": err2},
+                                            ensure_ascii=False),
+                                        status="cancelled", tool_call_id=c2.get("id"),
+                                        meta={"tool": c2.get("name"), "status": "cancelled"})
                             lost_owner = True
                             break
                         sig = call["name"] + "|" + json.dumps(call.get("args") or {}, sort_keys=True,
@@ -779,6 +1030,7 @@ class Runner:
                             stalled = True
                         run_tools += 1
                         out = self._exec_tool_call(ctx, call, rid)
+                        self._record_tool_conversation(rid, call, out)
                         history.append({"role": "tool", "tool_call_id": call.get("id"),
                                         "name": call["name"],
                                         # 有界且**始终合法**的 JSON:硬截断会把大字段切在中间,
@@ -1034,7 +1286,8 @@ class Runner:
                 return res
         return res
 
-    def resume(self, rid: str, goal: str | None = None, budget: int | None = None) -> RunResult:
+    def resume(self, rid: str, goal: str | None = None, budget: int | None = None,
+               user_client_id: str | None = None) -> RunResult:
         row = self.con.execute(
             "SELECT r.*, t.name AS target_name FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?", (rid,)
         ).fetchone()
@@ -1043,6 +1296,10 @@ class Runner:
         history = self._load_history(rid)
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)
+        if goal:
+            # 用户追加指令属于对话历史;client_id 让同一提交重试幂等
+            self.domain.add_conversation(rid, "user", goal, client_id=user_client_id,
+                                         meta={"source": "resume"})
         self._ensure_mcp(rid)
         with _db.Tx(self.con) as c:
             _event(c, "run.resumed", rid, {"step": row["step"],

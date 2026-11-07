@@ -17,6 +17,7 @@ import json
 import queue
 import sqlite3
 import threading
+import uuid
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -97,7 +98,7 @@ class AgentSession:
         self._mcp = mcp
         self._watchdog = watchdog
         self._q: queue.Queue = queue.Queue()
-        self._pending: list[str] = []
+        self._pending: list[tuple[str, str]] = []
         self._returned: list[str] = []
         self._lock = threading.Lock()
         self._busy = False
@@ -108,6 +109,8 @@ class AgentSession:
         self._tool_cache: dict[str, tuple] = {}
         self._usage_cache: tuple | None = None
         self._started = False
+        self._runner_ref: Runner | None = None
+        self._cancel_event = threading.Event()
         self._runner_model_name: str | None = None
         self._model_cursor: int | None = None
 
@@ -125,6 +128,14 @@ class AgentSession:
         self._started = True
 
     def close(self) -> None:
+        with self._lock:
+            queued, self._pending = list(self._pending), []
+        for text, cid in queued:
+            if self.run_id:
+                with contextlib.suppress(Exception):
+                    self.services.domain.add_conversation(
+                        self.run_id, "user", text, status="cancelled", client_id=cid,
+                        meta={"source": "tui-queue", "cancelled": True})
         self._closed = True
         self._q.put(None)
         if self._thread is not None:
@@ -139,7 +150,7 @@ class AgentSession:
     @property
     def pending(self) -> list[str]:
         with self._lock:
-            return list(self._pending)
+            return [text for text, _cid in self._pending]
 
     @property
     def last_error(self) -> str | None:
@@ -164,12 +175,21 @@ class AgentSession:
         text = (text or "").strip()
         if not text:
             return
+        client_id = f"tui-{uuid.uuid4().hex}"     # 同一提交重试幂等
         with self._lock:
-            if self._busy:
-                self._pending.append(text)
-                self.emit("queued", text)
-                return
-        self._q.put(("turn", text))
+            busy = self._busy
+        if busy:
+            # 排队也持久化(状态 queued);执行时同一 client_id 推进为 ok,不产生第二条
+            if self.run_id:
+                with contextlib.suppress(Exception):
+                    self.services.domain.add_conversation(
+                        self.run_id, "user", text, status="queued",
+                        client_id=client_id, meta={"source": "tui-queue"})
+            with self._lock:
+                self._pending.append((text, client_id))
+            self.emit("queued", text)
+            return
+        self._q.put(("turn", text, client_id))
 
     def new_session(self, text: str | None = None) -> None:
         if self.busy:
@@ -230,24 +250,53 @@ class AgentSession:
         rid = self.run_id
         if not rid:
             return False
-        try:
-            ctl = Runner(self.services.con, self.cfg.root, ScriptedAdapter(script=[]),
-                         mcp=False, watchdog=False)
-            ctl.cancel(rid, reason)
-        except Exception as e:
-            self.emit("error", f"取消失败: {e}")
-            return False
+        # 先置会话取消标记并关掉正在进行的网络请求(不等 DB 写)
+        self._cancel_event.set()
+        runner = self._runner_ref
+        closed = False
+        ctrl = getattr(runner, "stream_control", None) if runner is not None else None
+        if ctrl is not None:
+            with contextlib.suppress(Exception):
+                ctrl.cancel()
+                closed = True
+        paused = False
+        last_error: Exception | None = None
+        for _ in range(40):                     # 最多 ~2s:worker 可能在写大 checkpoint
+            try:
+                ctl = Runner(self.services.con, self.cfg.root, ScriptedAdapter(script=[]),
+                             mcp=False, watchdog=False)
+                ctl.cancel(rid, reason)
+                paused = True
+                break
+            except Exception as e:              # LockedError 等:控制已发,再试落库
+                last_error = e
+                time.sleep(0.05)
+        if not (closed or paused):
+            # 事件已置位:worker 会在安全点暂停;DB 状态由 turn 落库
+            self.emit("warning", f"取消已生效,DB 暂停稍后落库: {last_error}")
         with self._lock:
-            self._returned.extend(self._pending)
+            queued = list(self._pending)
             self._pending.clear()
+            self._returned.extend(text for text, _cid in queued)
+        for text, cid in queued:
+            with contextlib.suppress(Exception):
+                self.services.domain.add_conversation(
+                    rid, "user", text, status="cancelled", client_id=cid,
+                    meta={"source": "tui-queue", "cancelled": True})
         self.emit("cancelled", reason, run=rid)
         return True
 
     def dequeue(self) -> list[str]:
-        """把排队消息还给编辑器(Pi 的 Alt+Up 语义)。"""
+        """把排队消息还给编辑器(Pi 的 Alt+Up 语义);DB 中标记为 cancelled。"""
         with self._lock:
-            out, self._pending = self._pending, []
-        return out
+            items, self._pending = list(self._pending), []
+        for text, cid in items:
+            if self.run_id:
+                with contextlib.suppress(Exception):
+                    self.services.domain.add_conversation(
+                        self.run_id, "user", text, status="cancelled", client_id=cid,
+                        meta={"source": "tui-queue", "cancelled": True})
+        return [text for text, _cid in items]
 
     # ---------------- worker ----------------
     def _loop(self) -> None:
@@ -259,24 +308,29 @@ class AgentSession:
                 item = self._q.get()
                 if item is None:
                     break
-                kind, arg = item
+                kind = item[0]
+                arg = item[1] if len(item) > 1 else None
+                client_id = item[2] if len(item) > 2 else None
                 with self._lock:
                     self._busy = True
                 self.emit("busy", kind)
                 try:
                     if runner is None:
                         runner = self._make_runner(con)
+                        self._runner_ref = runner
                         self._runner_model_name = self.model_name
                     elif self._runner_model_name != self.model_name:
                         runner.model = self._adapter_for(self.model_name)
                         self._runner_model_name = self.model_name
                     if kind == "turn":
-                        self._do_turn(runner, str(arg))
+                        self._cancel_event.clear()
+                        self._do_turn(runner, str(arg), client_id)
                     elif kind == "continue":
                         self._do_continue(runner)
                     elif kind == "restart":
                         runner.close()
                         runner = self._make_runner(con)
+                        self._runner_ref = runner
                         self._runner_model_name = self.model_name
                 except Exception as e:                 # 应用层兜底:显示,不吞
                     self._last_error = str(e)
@@ -286,11 +340,12 @@ class AgentSession:
                         self._busy = False
                         nxt = self._pending.pop(0) if self._pending else None
                     if nxt and not self._closed:
-                        self._q.put(("turn", nxt))
+                        self._q.put(("turn", nxt[0], nxt[1]))
         finally:
             if runner is not None:
                 with contextlib.suppress(Exception):
                     runner.close()
+            self._runner_ref = None
             if con is not None:
                 with contextlib.suppress(Exception):
                     con.close()
@@ -305,26 +360,32 @@ class AgentSession:
             con, self.cfg.root, self._adapter_for(self.model_name),
             limits=self.cfg.limits, watchdog=self._watchdog, mcp=self._mcp,
             watchdog_poll_s=5.0, mcp_call_timeout=120.0,
+            on_stream=self._on_stream, stop_event=self._cancel_event,
         )
 
-    def _do_turn(self, runner: Runner, text: str) -> None:
+    def _on_stream(self, ev: dict) -> None:
+        kind = str(ev.get("type") or "stream")
+        self._events.append(UiEvent(kind=kind, text=str(ev.get("text") or ""), data=dict(ev)))
+
+    def _do_turn(self, runner: Runner, text: str, client_id: str | None = None) -> None:
         if not self.target:
             self.emit("error", "没有目标:先用 `fw-core init <target>` 创建,或在选择器里选目标")
             return
         rid = self.run_id
         if not rid:
-            rid = runner.start(self.target, text)
+            rid = runner.start(self.target, text)      # start 内持久化首条用户消息
             self.run_id = rid
             res = runner.run(rid, self.target, goal=text)
         else:
-            res = runner.resume(rid, goal=text)
+            res = runner.resume(rid, goal=text, user_client_id=client_id)
         self._publish_result(res)
 
     def _do_continue(self, runner: Runner) -> None:
         if not self.run_id:
             self.emit("error", "没有可继续的 run")
             return
-        res = runner.resume(self.run_id, goal="继续推进未收口项")
+        self._cancel_event.clear()
+        res = runner.resume(self.run_id)    # 不伪造新的用户消息
         self._publish_result(res)
 
     def _publish_result(self, res) -> None:
@@ -420,38 +481,64 @@ class AgentSession:
 
     # ---------------- 转录 ----------------
     def transcript(self, limit: int = 400) -> list[TranscriptItem]:
+        """用户可见对话:优先 conversation_entries;旧 run 回退 checkpoint。"""
         items: list[TranscriptItem] = []
         if not self.run_id:
             return items
         con = self.services.con
+        tools = {r["call_key"] or r["id"]: dict(r) for r in con.execute(
+            "SELECT id,call_key,tool,args,status,note,exit_code,duration_ms,stdout_path,"
+            "result_path,created_at FROM tool_calls WHERE run_id=? ORDER BY created_at,id",
+            (self.run_id,)).fetchall()}
+        entries = self.services.domain.conversation(self.run_id, limit=limit)
+        if entries:
+            for e in entries:
+                role = e.get("role")
+                content = (e.get("content") or "").strip()
+                if role == "user":
+                    if content:
+                        suffix = ""
+                        if e.get("status") == "queued":
+                            suffix = "  (queued)"
+                        elif e.get("status") == "cancelled":
+                            suffix = "  (cancelled)"
+                        items.append(TranscriptItem("user", content + suffix))
+                elif role == "assistant":
+                    if content:
+                        items.append(TranscriptItem("assistant", content))
+                elif role == "tool":
+                    row = tools.get(e.get("tool_call_id") or "")
+                    if row is None:
+                        meta = _json(e.get("meta"), {})
+                        row = {"id": e.get("id"), "tool": meta.get("tool") or "tool",
+                               "args": "{}", "status": e.get("status") or "ok",
+                               "note": content, "created_at": e.get("created_at")}
+                    items.append(TranscriptItem("tool", "", {"call": row}))
+            return items
+
+        # 兼容迁移前/旧 run:从 checkpoint 重建(用户 goal 只显示一次)
         run = con.execute("SELECT goal FROM runs WHERE id=?", (self.run_id,)).fetchone()
         if run and run["goal"]:
             items.append(TranscriptItem("user", run["goal"]))
         ck = con.execute(
             "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC, rowid DESC LIMIT 1",
             (self.run_id,)).fetchone()
-        tools = {r["call_key"] or r["id"]: dict(r) for r in con.execute(
-            "SELECT id,call_key,tool,args,status,note,exit_code,duration_ms,stdout_path,"
-            "result_path,created_at FROM tool_calls WHERE run_id=? ORDER BY created_at,id",
-            (self.run_id,)).fetchall()}
         used_tools: set[str] = set()
         if ck:
             msgs = _json(ck["messages"], [])
             for m in msgs[-limit:]:
-                role = m.get("role")
-                if role == "assistant":
-                    content = m.get("content") or ""
-                    reasoning = m.get("reasoning_content") or ""
-                    if content.strip() or reasoning.strip():
-                        items.append(TranscriptItem("assistant", content, {"reasoning": reasoning}))
-                    for c in m.get("tool_calls") or []:
-                        key = c.get("id") or ""
-                        row = tools.get(key)
-                        if row:
-                            used_tools.add(key)
-                            items.append(TranscriptItem("tool", "", {"call": row}))
-                # user 消息是运行时注入的状态提示,不是用户输入 ⇒ 不渲染
-        # 检查点里没有的工具(运行中/失败在协议之外)补在末尾
+                if m.get("role") != "assistant":
+                    continue
+                content = m.get("content") or ""
+                reasoning = m.get("reasoning_content") or ""
+                if content.strip() or reasoning.strip():
+                    items.append(TranscriptItem("assistant", content, {"reasoning": reasoning}))
+                for c in m.get("tool_calls") or []:
+                    key = c.get("id") or ""
+                    row = tools.get(key)
+                    if row:
+                        used_tools.add(key)
+                        items.append(TranscriptItem("tool", "", {"call": row}))
         for key, row in tools.items():
             if key not in used_tools:
                 items.append(TranscriptItem("tool", "", {"call": row}))

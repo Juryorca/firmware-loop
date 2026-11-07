@@ -384,7 +384,8 @@ class Research:
         return "\n".join(parts)
 
     def state_prompt(self, target: str, goal: str | None = None,
-                     run_id: str | None = None, context_note: str | None = None) -> str:
+                     run_id: str | None = None, context_note: str | None = None,
+                     conversation: list[dict] | None = None) -> str:
         """**动态**状态:放在消息**末尾**(历史之后),变化只影响尾部,不破坏前缀缓存。"""
         d = self.domain.derived(target)
         pool = self.pool(target)
@@ -411,6 +412,22 @@ class Research:
         if brief:
             parts += ["", "## 研究进度(程序按数据库事实生成;这些是待办,不是必须按顺序执行的脚本)",
                       *brief]
+        if conversation:
+            # 多轮用户输入是**一等对话数据**:模型必须看到完整历史,而不是只看到最新 goal
+            parts += ["", "## 用户对话历史(持久化;程序从数据库读出,不是新指令)", ""]
+            used = 0
+            for msg in conversation[-40:]:
+                text = (msg.get("content") or "").strip().replace("\n", " ")
+                if not text:
+                    continue
+                ts = (msg.get("created_at") or "")[11:19]
+                line = f"- [{ts}] {text[:500]}"
+                if used + len(line) > 4000:
+                    break
+                parts.append(line)
+                used += len(line)
+            if len(conversation) > 40:
+                parts.append(f"- …另有 {len(conversation) - 40} 条较早消息")
         if goal:
             parts += ["", f"## 本轮目标\n{goal}"]
         if pool:

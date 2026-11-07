@@ -62,11 +62,43 @@ class MessageWidget(Vertical):
         else:
             body = Static(Text(text or "(empty)"), classes="msg-body")
         children = [head, body]
+        self.role = role
+        self.body = body
+        self._text = text or ""
+        self._reasoning = ""
+        self._thinking_widget = None
         reasoning = (meta.get("reasoning") or "").strip()
         if reasoning:
-            # thinking 默认折叠,与 Pi 的 Ctrl+T 语义一致
-            children.append(Static(Text(reasoning, style="dim italic"), classes="thinking hidden"))
+            # thinking 默认折叠;绝不作为普通 assistant 正文展示
+            self._reasoning = reasoning
+            self._thinking_widget = Static(Text(reasoning, style="dim italic"),
+                                           classes="thinking hidden")
+            children.append(self._thinking_widget)
         super().__init__(*children, classes=f"msg {role}")
+
+    def append_text(self, delta: str) -> None:
+        if not delta:
+            return
+        self._text += delta
+        self.body.update(Text(self._text))
+
+    def append_reasoning(self, delta: str) -> None:
+        if not delta:
+            return
+        self._reasoning += delta
+        if self._thinking_widget is None:
+            self._thinking_widget = Static(Text("", style="dim italic"),
+                                           classes="thinking hidden")
+            self.mount(self._thinking_widget)
+        self._thinking_widget.update(Text(self._reasoning, style="dim italic"))
+
+    def finalize(self, text: str | None = None) -> None:
+        if text is not None:
+            self._text = text
+        if self.role == "assistant" and self._text:
+            self.body.update(RichMarkdown(self._text))
+        else:
+            self.body.update(Text(self._text))
 
 
 class NoticeWidget(Static):

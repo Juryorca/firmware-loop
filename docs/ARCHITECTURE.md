@@ -20,9 +20,10 @@
 ## 2. ① 模块(全部有测试)
 
 ```
-fwcore/  db.py(SCHEMA v14/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
+fwcore/  db.py(SCHEMA v16/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
          tools.py(内置 ToolSpec)                toolreg.py(manifest→Registry,4 种注册路径)
-         runtime.py(循环/检查点/恢复/预算)       research.py(提示/池/三镜/进度)
+         runtime.py(循环/检查点/恢复/预算/流式消费)  streaming.py(事件/取消令牌)
+         research.py(提示/池/三镜/进度)
          compact.py(压缩)                        contextinfo.py(上下文状态)
          mcp_runtime.py(MCP 桥)                  adapters_ida.py + winenv(IDA/Windows)
          gates_db.py(权威 Gate)                  models/model_client(适配器/协议)
@@ -38,7 +39,7 @@ tools/registry/*.json  仓库工具 manifest(8 个)
 
 | 类别 | 存什么 | 谁读 | 进 Git |
 |---|---|---|---|
-| **SQLite**(`state/fwcore.sqlite3`) | 目标/面/假设/尝试/观察/证据/结论;runs/tool_calls/events/usage/checkpoints | 程序判定(`gates`/`derive`/`context`/`derived_check`) | 否 |
+| **SQLite**(`state/fwcore.sqlite3`) | 目标/面/假设/尝试/观察/证据/结论;runs/tool_calls/events/usage/checkpoints;**conversation_entries**(面向用户的 append-only 对话) | 程序判定(`gates`/`derive`/`context`/`derived_check`);TUI transcript | 否 |
 | **Artifacts**(`artifacts/`) | 固件/反汇编/原始工具输出/截图/PoC 等原始材料;DB 用 `tool_calls.output_path` 关联回查 | 人复核 + 复现包引用 | 否 |
 | **Markdown**(`notes.md`/`report/`) | `notes.md`=叙述/理由/下一步指针;`report/`=最终交付(advisory/INDEX/attack-surface/CLOSURE/复现包) | 人 | 只有 `report/` 里经过筛选的材料进 `state/`(不进库) |
 | **临时**(`state/_scratch/`) | 演练/E2E/评测输出、一次性报告 | 当次会话 | 否(有保留期,结束可删) |
@@ -156,4 +157,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 66 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 67 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

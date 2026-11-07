@@ -412,6 +412,67 @@ class Domain:
             _event(c, "research.log", t.id, {"kind": kind, "id": lid})
         return lid
 
+    # ---------------- 对话历史(append-only,面向用户) ----------------
+    CONVERSATION_ROLES = ("user", "assistant", "tool")
+    CONVERSATION_STATUS = ("ok", "queued", "partial", "error", "cancelled")
+
+    def add_conversation(self, run_id: str, role: str, content: str, *,
+                         status: str = "ok", client_id: str | None = None,
+                         tool_call_id: str | None = None,
+                         parent_id: str | None = None,
+                         meta: dict | None = None) -> str | None:
+        """追加一条对话记录;`client_id` 让同一提交重试保持幂等。
+
+        与 checkpoints 的分工:这里是**用户可见的对话**,不是模型执行历史。
+        工具记录只在执行结束后写入(status 反映真实 outcome),不写"虚假完成"。
+        """
+        if role not in self.CONVERSATION_ROLES:
+            raise InvariantViolation(f"对话 role 非法: {role}")
+        if status not in self.CONVERSATION_STATUS:
+            raise InvariantViolation(f"对话 status 非法: {status}")
+        if not self.con.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone():
+            raise NotFound(f"run 不存在: {run_id}")
+        cid = new_id("CV")
+        with Tx(self.con) as c:
+            if client_id:
+                row = c.execute(
+                    "SELECT id,status FROM conversation_entries WHERE run_id=? AND client_id=?",
+                    (run_id, client_id)).fetchone()
+                if row:
+                    # queued → ok:执行时把同一条消息的状态推进,不产生第二条
+                    if status != "queued" and row["status"] == "queued":
+                        c.execute("UPDATE conversation_entries SET status=? WHERE id=?",
+                                  (status, row["id"]))
+                    return row["id"]
+            if parent_id is None:
+                row = c.execute(
+                    "SELECT id FROM conversation_entries WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+                    (run_id,)).fetchone()
+                parent_id = row["id"] if row else None
+            c.execute(
+                "INSERT INTO conversation_entries(id,run_id,role,content,status,client_id,"
+                " tool_call_id,parent_id,meta,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (cid, run_id, role, content or "", status, client_id, tool_call_id,
+                 parent_id, json.dumps(meta or {}, ensure_ascii=False), _now()))
+            _event(c, "conversation.added", run_id,
+                   {"entry": cid, "role": role, "status": status})
+        return cid
+
+    def conversation(self, run_id: str, *, roles: tuple[str, ...] | None = None,
+                     limit: int | None = None) -> list[dict]:
+        """按追加顺序返回对话;`limit` 保留最近 N 条(仍按时间正序)。
+
+        固定 SQL + 内存过滤(role 是封闭枚举,不需要动态拼 SQL)。
+        """
+        rows = [dict(r) for r in self.con.execute(
+            "SELECT * FROM conversation_entries WHERE run_id=? ORDER BY rowid",
+            (run_id,)).fetchall()]
+        if roles:
+            rows = [r for r in rows if r["role"] in roles]
+        if limit is not None and limit > 0:
+            rows = rows[-limit:]
+        return rows
+
     def add_evidence(self, target: str, kind: str, *, path: str | None = None,
                      capture: str | None = None, attempt_id: str | None = None,
                      hypothesis_id: str | None = None, version: str | None = None,

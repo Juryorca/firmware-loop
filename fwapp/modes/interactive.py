@@ -91,6 +91,11 @@ class FwApp(App):
         self.sess: AgentSession = runtime.session
         self.diagnostics = list(diagnostics or [])
         self._tool_widgets: dict[str, ToolWidget] = {}
+        self._stream_msg: MessageWidget | None = None
+        self._stream_tools: dict[str, ToolWidget] = {}
+        self._stream_tool_by_index: dict[int, str] = {}
+        self._stream_tool_by_call: dict[str, ToolWidget] = {}
+        self._stream_args: dict[str, str] = {}
         self._expand_tools = False
         self._show_thinking = False
         self._last_sigint = 0.0
@@ -156,6 +161,7 @@ class FwApp(App):
         tv = self.query_one(TranscriptView)
         tv.remove_children()
         self._tool_widgets.clear()
+        self._reset_stream()
         for item in self.sess.transcript():
             if item.kind == "assistant":
                 self._append(MessageWidget("assistant", item.text, item.meta))
@@ -173,6 +179,7 @@ class FwApp(App):
         key = str(call.get("id") or "")
         if not key:
             return
+        self._take_pending_tool(call)
         w = self._tool_widgets.get(key)
         if w is None:
             w = ToolWidget(call, expanded=self._expand_tools)
@@ -199,11 +206,92 @@ class FwApp(App):
                          + (" · " + " ".join(usage) if usage else ""))
         self.query_one(PendingBar).update_pending(self.sess.pending)
 
+    def _reset_stream(self) -> None:
+        self._stream_msg = None
+        self._stream_tools.clear()
+        self._stream_tool_by_index.clear()
+        self._stream_tool_by_call.clear()
+        self._stream_args.clear()
+
+    def _stream_tool_event(self, data: dict) -> None:
+        try:
+            idx = int(data.get("index") or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        key = self._stream_tool_by_index.get(idx)
+        if key is None:
+            call_id = str(data.get("call_id") or "")
+            key = "stream:" + (call_id or str(idx))
+            call = {"id": key, "tool": data.get("name") or "tool", "args": "{}",
+                    "status": "pending", "note": ""}
+            w = ToolWidget(call, expanded=self._expand_tools)
+            self._stream_tools[key] = w
+            self._stream_tool_by_index[idx] = key
+            if call_id:
+                self._stream_tool_by_call[call_id] = w
+            self._append(w)
+        w = self._stream_tools.get(key)
+        if w is None:
+            return
+        frag = data.get("text") or ""
+        if frag:
+            self._stream_args[key] = self._stream_args.get(key, "") + frag
+            w.update_call({**w.call_data, "args": self._stream_args[key]})
+
+    def _take_pending_tool(self, call: dict) -> ToolWidget | None:
+        """工具开始真正执行时,把流式预览组件换成权威 ToolWidget。"""
+        key = str(call.get("call_key") or "")
+        w = self._stream_tool_by_call.pop(key, None) if key else None
+        if w is None:
+            for _k, cand in list(self._stream_tools.items()):
+                if cand.call_data.get("tool") == call.get("tool"):
+                    w = cand
+                    break
+        if w is None:
+            return None
+        self._stream_tools = {k: v for k, v in self._stream_tools.items() if v is not w}
+        self._stream_tool_by_index = {k: v for k, v in self._stream_tool_by_index.items()
+                                      if self._stream_tools.get(v) is not None}
+        for cid, cw in list(self._stream_tool_by_call.items()):
+            if cw is w:
+                self._stream_tool_by_call.pop(cid, None)
+        w.remove()
+        return w
+
     def _handle_event(self, ev) -> None:
-        if ev.kind == "turn_done":
-            final = (ev.data.get("final") or "").strip()
-            if final:
-                self._append(MessageWidget("assistant", final))
+        if ev.kind == "assistant_start":
+            if self._stream_msg is None:
+                self._stream_msg = MessageWidget("assistant", "")
+                self._append(self._stream_msg)
+        elif ev.kind == "assistant_delta":
+            if self._stream_msg is None:
+                self._stream_msg = MessageWidget("assistant", "")
+                self._append(self._stream_msg)
+            self._stream_msg.append_text(ev.data.get("text") or ev.text)
+        elif ev.kind == "reasoning_delta":
+            if self._stream_msg is None:
+                self._stream_msg = MessageWidget("assistant", "")
+                self._append(self._stream_msg)
+            self._stream_msg.append_reasoning(ev.data.get("text") or ev.text)
+        elif ev.kind == "assistant_done":
+            text = ev.data.get("text") or ""
+            if self._stream_msg is None:
+                self._stream_msg = MessageWidget("assistant", text)
+                self._append(self._stream_msg)
+            self._stream_msg.finalize(text)
+            status = ev.data.get("status") or "ok"
+            if status != "ok":
+                self._notice("assistant 未完成: " + status, "warning")
+            self._stream_msg = None
+        elif ev.kind == "assistant_error":
+            if self._stream_msg is not None:
+                self._stream_msg.finalize(ev.data.get("text") or "")
+            self._notice("模型流中断: " + str(ev.data.get("error") or "")[:300], "error")
+            self._stream_msg = None
+        elif ev.kind in ("toolcall_start", "toolcall_delta"):
+            self._stream_tool_event(ev.data)
+        elif ev.kind == "turn_done":
+            # assistant 内容已由流式 assistant_done 渲染,不再重复 append final
             state = ev.data.get("state")
             hb = ev.data.get("handback")
             blockers = ev.data.get("blockers") or []

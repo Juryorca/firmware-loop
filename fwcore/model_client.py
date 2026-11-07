@@ -9,12 +9,16 @@
 
 from __future__ import annotations
 
+import contextlib
+import http.client
 import json
 import os
-import http.client
 from urllib.parse import urlsplit
 from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable
 from typing import Protocol
+
+from .streaming import StreamCancelled, StreamControl, StreamError, StreamEvent
 
 
 def _emit_reasoning() -> bool:
@@ -145,12 +149,11 @@ class OpenAICompatModel:
     api_key_env: str = "FW_API_KEY"
     temperature: float = 0.2
     transport: Transport = http_transport
+    # 流式传输可注入(测试用 Mock SSE);默认走下面的 http SSE 实现
+    stream_transport: Callable | None = None
     last_request: dict | None = field(default=None, repr=False)
 
-    def chat(self, messages: list[dict], tools: list[dict]) -> dict:
-        key = self.api_key or os.environ.get(self.api_key_env, "")
-        if not key:
-            raise RuntimeError(f"缺少 API key(环境变量 {self.api_key_env})")
+    def _payload(self, messages: list[dict], tools: list[dict], *, stream: bool) -> dict:
         payload: dict = {"model": self.model, "messages": to_api_messages(messages),
                          "temperature": self.temperature}
         if tools:
@@ -162,6 +165,63 @@ class OpenAICompatModel:
                 }} for t in tools
             ]
             payload["tool_choice"] = "auto"
+        if stream:
+            payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
+        return payload
+
+    def stream(self, messages: list[dict], tools: list[dict], *,
+               control: StreamControl | None = None) -> Iterable[StreamEvent]:
+        """真正的 SSE 增量流;`control.cancel()` 会关闭底层连接。"""
+        key = self.api_key or os.environ.get(self.api_key_env, "")
+        if not key:
+            raise RuntimeError(f"缺少 API key(环境变量 {self.api_key_env})")
+        payload = self._payload(messages, tools, stream=True)
+        self.last_request = payload
+        url = self.base_url.rstrip("/") + "/chat/completions"
+        _check_url(url)
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
+        if self.stream_transport is not None:
+            lines = self.stream_transport(url, headers, payload)
+            closer = getattr(lines, "close", None)
+            if control is not None and callable(closer):
+                control.bind(closer)
+            yield from _parse_sse(lines, control)
+            return
+        u = urlsplit(url)
+        cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+        host = u.hostname
+        if not host:
+            raise ModelHTTPError(0, f"端点缺少 host: {url[:80]}")
+        path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+        conn = cls(host, u.port, timeout=120)
+        resp = None
+        try:
+            conn.request("POST", path, body=json.dumps(payload).encode(), headers=headers)
+            resp = conn.getresponse()
+            if control is not None:
+                control.bind(resp.close)
+                control.bind(conn.close)
+            if resp.status >= 400:
+                body = resp.read()
+                raise ModelHTTPError(resp.status, body.decode("utf-8", errors="replace"))
+            yield from _parse_sse(resp, control)
+        except OSError as e:
+            if control is not None and control.cancelled:
+                raise StreamCancelled("请求已取消") from e
+            raise ModelHTTPError(0, f"连接失败: {str(e)[:200]}") from e
+        finally:
+            if resp is not None:
+                with contextlib.suppress(Exception):
+                    resp.close()
+            with contextlib.suppress(Exception):
+                conn.close()
+
+    def chat(self, messages: list[dict], tools: list[dict]) -> dict:
+        key = self.api_key or os.environ.get(self.api_key_env, "")
+        if not key:
+            raise RuntimeError(f"缺少 API key(环境变量 {self.api_key_env})")
+        payload = self._payload(messages, tools, stream=False)
         self.last_request = payload
         _check_url(self.base_url.rstrip("/") + "/chat/completions")
         try:
@@ -214,3 +274,61 @@ def assistant_message(content: str, calls: list[dict], reasoning: str = "") -> d
                      "function": {"name": fn.get("name"), "arguments": args}})
     base["tool_calls"] = norm
     return base
+
+
+def _parse_sse(lines: Iterable, control: StreamControl | None) -> Iterable[StreamEvent]:
+    """把 OpenAI 兼容 SSE 行解析成 StreamEvent。
+
+    只做协议解析:不执行工具、不写 DB;`done` 之后由 Runner 组装并校验参数。
+    """
+    started = False
+    finish = ""
+    usage: dict = {}
+    seen_calls: set[int] = set()
+    for raw in lines:
+        if control is not None:
+            control.raise_if_cancelled()
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        line = raw.strip()
+        if not line or line.startswith(":"):
+            continue
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            obj = json.loads(data)
+        except json.JSONDecodeError as e:
+            raise StreamError(f"SSE JSON 解析失败: {e}: {data[:200]}") from e
+        usage = obj.get("usage") or usage
+        choices = obj.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        if not started:
+            started = True
+            yield StreamEvent("start")
+        reasoning = delta.get("reasoning_content")
+        if reasoning:
+            yield StreamEvent("reasoning_delta", text=reasoning)
+        content = delta.get("content")
+        if content:
+            yield StreamEvent("text_delta", text=content)
+        for tc in delta.get("tool_calls") or []:
+            idx = int(tc.get("index") or 0)
+            fn = tc.get("function") or {}
+            if idx not in seen_calls and (tc.get("id") or fn.get("name")):
+                seen_calls.add(idx)
+                yield StreamEvent("toolcall_start", index=idx,
+                                  call_id=tc.get("id") or "", name=fn.get("name") or "")
+            args = fn.get("arguments")
+            if args:
+                yield StreamEvent("toolcall_delta", index=idx, arguments=args)
+        if choice.get("finish_reason"):
+            finish = choice["finish_reason"]
+    if not started:
+        yield StreamEvent("start")
+    yield StreamEvent("done", finish_reason=finish, usage=usage)

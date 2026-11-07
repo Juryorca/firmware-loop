@@ -6,7 +6,7 @@
 ## 当前状态(产品事实)
 
 - **独立产品**:fwcore 不依赖 Pi(`.pi/` 不入库);模型调用/工具/状态/证据/Watchdog/checkpoint/resume 全在自己代码里。
-- **权威状态**:SQLite(schema v14)存假设/尝试/观察/证据/结论/面/run/checkpoint/tool_calls/events;
+- **权威状态**:SQLite(schema v16)存假设/尝试/观察/证据/结论/面/run/checkpoint/tool_calls/events;
   文件只放叙述(notes.md)、对外材料(report/)与原件(intel/)。
 - **模型协议**:`finish_reason`/`usage` 贯通;每次调用 `model.call` 记账;FINAL 任意行首;重复内容与无工具空转看护;
   thinking 模式默认回传 `reasoning_content`。
@@ -24,7 +24,7 @@
 - **全量迁移**:14 个历史目标的 notes/attack-surface 已导入 DB(`documents` 保原文;
   面/假设/观察/证据/复核/结论/三镜进结构化表;叙述与模糊内容进 `research_logs`);
   `fw-core migrate --all` 幂等,`--verify` 逐目标核对;运行路径**无 Markdown 回退**。
-- **验证**:`bash tools/fwcore_verify.sh` = pytest(66 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
+- **验证**:`bash tools/fwcore_verify.sh` = pytest(67 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
 
 ## 待办
 
