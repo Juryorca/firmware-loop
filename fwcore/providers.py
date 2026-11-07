@@ -20,6 +20,8 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from . import pyenvs
+
 READY = "ready"
 PARTIAL = "partial"
 DEPS_MISSING = "deps_missing"
@@ -214,7 +216,11 @@ def repo_asset_provider(root: str, rel: str) -> Provider:
     def probe() -> Probe:
         if not os.path.isfile(p):
             return Probe(MISSING, f"仓库资产缺失: {rel}")
-        if not os.access(p, os.X_OK):
+        try:
+            executable = os.access(p, os.X_OK)
+        except OSError:
+            executable = False
+        if not executable:
             return Probe(PARTIAL, f"仓库资产不可执行: {rel}", path=p)
         return Probe(READY, f"仓库资产可执行: {rel}", path=p, evidence="discovered")
 
@@ -332,9 +338,11 @@ def mcp_provider(name: str, config_paths: list[str]) -> Provider:
             return Probe(MISSING, f"配置里没有 {name}")
         if srv.get("enabled") is False:
             return Probe(NOT_STARTED, "配置存在但 enabled=false")
-        return Probe(READY, "已配置(" + ("url" if srv.get("url") else "stdio") +
-                     ");独立运行时尚未实现 MCP 客户端 ⇒ 只到 configured",
-                     path=(srv.get("url") or srv.get("command")), evidence="configured")
+        if srv.get("url"):
+            return Probe(PARTIAL, "已配置 HTTP transport;当前 MCP 运行时只支持 stdio,未连接",
+                         path=srv.get("url"), evidence="configured")
+        return Probe(NOT_STARTED, "已配置 stdio;只读探针不启动服务,MCP 尚未连接",
+                     path=srv.get("command"), evidence="configured")
     return Provider(id=f"mcp-{name}", kind="mcp", resolve=lambda: {"config": _load()}, probe=probe)
 
 
@@ -347,10 +355,19 @@ def _guest_roots(root: str) -> list[str]:
     return sorted(roots)
 
 
+def _mcp_paths(root: str) -> list[str]:
+    env = os.environ.get("FW_MCP_CONFIG")
+    return [env] if env else [os.path.join(root, "state", "mcp.json")]
+
+
 def default_capabilities(root: str, home: str | None = None) -> dict[str, Capability]:
     home = home or os.path.expanduser("~")
-    pwn = os.path.join(os.environ.get("ENTER_HOME", os.path.join(home, "ENTER")), "envs", "pwn", "bin", "python")
-    unblob_py = os.path.join(home, "venvs", "unblob", "bin", "python")
+    # 有序 Python 环境来自 pyenvs(用户配置优先),不再把 pwn/unblob 路径写死为唯一来源
+    pwn = pyenvs.select(root, ("angr",)).get("selected") or os.path.join(
+        os.environ.get("ENTER_HOME", os.path.join(home, "ENTER")), "envs", "pwn", "bin", "python")
+    unblob_py = next((p for p in pyenvs.load(root)
+                      if os.path.isfile(os.path.join(os.path.dirname(p), "unblob"))),
+                     os.path.join(home, "venvs", "unblob", "bin", "python"))
     caps: dict[str, Capability] = {
         "fuzz.cgi": Capability("fuzz.cgi", "对厂商 CGI 做有界变异 fuzz",
                                [repo_asset_provider(root, "tools/cgi_fuzz.sh")]),
@@ -376,8 +393,8 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
         "debug.ida": Capability("debug.ida", "Windows IDA 无头(经 WSL,复用 tools/ida_*)",
                                 [windows_ida_provider(root)]),
         "mcp.chrome": Capability("mcp.chrome", "浏览器自动化(取件/提交)", [
-            mcp_provider("chrome-devtools", [os.path.join(root, "state", "mcp.json")]),
-            mcp_provider("chrome-live", [os.path.join(root, "state", "mcp.json")]),
+            mcp_provider("chrome-devtools", _mcp_paths(root)),
+            mcp_provider("chrome-live", _mcp_paths(root)),
         ]),
     }
     return caps

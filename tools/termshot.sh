@@ -15,7 +15,7 @@
 #   * 收尾写 .provenance(脚本路径+sha256、argv、png sha256、时间),截图从"信任"变"可审计"。
 set -u
 
-PY=/home/juryorca/ENTER/envs/pwn/bin/python
+PY="${FW_PYTHON:-python3}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 MAN="${1:-}"; ID="${2:-}"
 if [ -z "$MAN" ] || [ -z "$ID" ]; then
@@ -92,7 +92,7 @@ sleep 0.6
 ANSI="$(mktemp /tmp/termshot-XXXXXX.ansi)"
 tmux capture-pane -t "$SESSION" -e -p > "$ANSI"
 tmux kill-session -t "$SESSION" 2>/dev/null
-"$HERE/ansi2png.py" "$ANSI" "$OUT"
+"$PY" "$HERE/ansi2png.py" "$ANSI" "$OUT"
 rm -f "$ANSI"
 
 "$PY" - "$OUT" "$PROV" "$MAN" "$ID" "$WHY" "$SHA" "$CMD" <<'PYEOF'

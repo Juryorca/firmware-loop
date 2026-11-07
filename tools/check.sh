@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 环境预检:每项一行 OK/FAIL;有 FAIL 时 agent 须停手报告
-PY=/home/juryorca/ENTER/envs/pwn/bin/python
+PY="${FW_PYTHON:-$(python3 -m fwcore.pyenvs --select angr 2>/dev/null || command -v python3)}"
 pass=0; fail=0
 cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."   # 自定位到项目根,脚本与 cwd 无关
 ok(){ echo "OK   $1"; pass=$((pass+1)); }

@@ -57,7 +57,8 @@ def test_signal_and_fuzz_structured(tmp_path):
     con, dom, root, reg, ctx = _setup(tmp_path)
     sig = reg.call(ctx, "research_signal", {"log": "/dev/null"})["observation"]
     assert sig["status"] == "hit" and sig["hit_count"] == 1
-    fz = reg.call(ctx, "fuzz_cgi", {"args": "--x", "timeout": 5})["observation"]
+    fz = reg.call(ctx, "fuzz_cgi", {"cgi": "/bin/true", "rootfs": "/",
+                                     "rounds": 1, "timeout": 5})["observation"]
     assert fz["tuples"] == 141 and fz["crash"] is True
 
 

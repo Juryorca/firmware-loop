@@ -1,4 +1,4 @@
-#!/home/juryorca/ENTER/envs/pwn/bin/python
+#!/usr/bin/env python3
 """Faithful ANSI (tmux capture-pane -e) -> terminal-look PNG via chromium headless.
 
 The window width is computed from the longest visible line so the terminal

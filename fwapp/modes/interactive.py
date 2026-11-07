@@ -429,7 +429,7 @@ class FwApp(App):
         if name not in BY_NAME:
             self._notice(f"未知命令: /{name}(/help 查看)", "error")
             return
-        handler = getattr(self, f"_cmd_{name}", None)
+        handler = getattr(self, f"_cmd_{name.replace('-', '_')}", None)
         if handler is None:
             self._notice(f"/{name} 尚未实现", "error")
             return
@@ -457,6 +457,27 @@ class FwApp(App):
 
     def _cmd_evidence(self, arg: str) -> None:
         self.push_screen(ResearchScreen(self.sess, tab="evidence"))
+
+    def _cmd_tool_setup(self, arg: str) -> None:
+        """用户显式触发工具管理 Skill:先展示缺失项,再交给 Agent 执行。"""
+        from fwcore.toolset import check_toolset, render_report
+        rep = check_toolset(self.sess.services.cfg.root)
+        missing = [x for x in rep["items"]
+                   if x["required"] and x["status"] != "ready"]
+        if not missing:
+            self._notice("默认工具集已完整。使用 /tools 查看详情。")
+            return
+        if not self.sess.target:
+            self._notice("工具管理需要先选择 target；当前缺失:\n" + render_report(rep))
+            return
+        task = ("使用 tool-management Skill 处理默认工具集缺失项。"
+                "先读取 toolset/capabilities 与 state/toolenv.json，给出安装计划；"
+                "按授权范围安装/配置，跳过依赖冲突，最后做真实能力验证并恢复研究。"
+                "当前缺失: " + "; ".join(x["label"] for x in missing))
+        self._append(MessageWidget("user", task))
+        self.sess.submit(task)
+
+
 
     def _cmd_tools(self, arg: str) -> None:
         self.push_screen(ToolsetScreen(self.sess.services.cfg.root))

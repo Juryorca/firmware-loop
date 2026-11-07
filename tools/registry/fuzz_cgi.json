@@ -1,29 +1,25 @@
 {
   "name": "fuzz_cgi",
-  "description": "对厂商 CGI 做有界变异 fuzz(需提供字节/字符串种子与目标可执行);高风险,需确认",
+  "description": "对厂商 CGI 做有界变异 fuzz(显式 cgi/rootfs/shim/rounds;高风险,需确认)",
   "input_schema": {
     "type": "object",
     "properties": {
-      "args": {
-        "type": "string",
-        "description": "透传给 cgi_fuzz.sh 的参数串"
-      },
-      "timeout": {
-        "type": "number"
-      }
+      "cgi": {"type": "string", "description": "目标 CGI 二进制"},
+      "rootfs": {"type": "string", "description": "rootfs 路径"},
+      "shim": {"type": "string", "description": "可选 shim 库目录"},
+      "rounds": {"type": "number", "description": "变异轮数"},
+      "timeout": {"type": "number"}
     },
-    "required": [
-      "args"
-    ]
+    "required": ["cgi", "rootfs"]
   },
   "kind": "script",
   "argv": [
     "bash",
     "tools/cgi_fuzz.sh",
-    "{args}"
-  ],
-  "split_args": [
-    "args"
+    "{cgi}",
+    "{rootfs}",
+    "{shim}",
+    "{rounds}"
   ],
   "timeout": 300,
   "timeout_arg": "timeout",

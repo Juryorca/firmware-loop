@@ -297,3 +297,19 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 - **结果**：项目自带资产缺陷与用户环境缺陷分开报告；支持 CLI JSON/TUI 状态页。
 
 验收：干净 checkout 能直接获得仓库脚本；普通 QEMU 缺失算默认问题，特殊 patched QEMU 缺失不算；状态检查不改变环境。
+
+## 15. Python 环境与工具安装辅助
+
+- `fwcore/pyenvs.py` 管理**有序** Python 环境；配置只放本地：
+  - `<root>/state/toolenv.json`: `{"python_envs": ["/path/python", ...]}`
+  - 或 `FW_PYTHON_ENVS`（路径分隔符分隔）
+  - 顺序即优先级；import/依赖不满足就跳过，不破坏已有环境。
+- CLI：`python3 -m fwcore.pyenvs --list` / `--select angr`。
+- Toolset 的 `angr` 是必需项（唯一明确的 optional 是特殊 `qemu-aarch64-patched`）。
+- 截图链：`termshot.sh` 使用 `FW_PYTHON`（默认 python3），`ansi2png.py` 使用 `#!/usr/bin/env python3`；
+  间接依赖 `tmux`/`zsh` 已进入 toolset 检查。
+- `/tool-setup` 是**用户主动触发的工具管理入口**，加载 `tool-management` Skill；
+  `/tools` 只查看状态，不执行安装。
+- 安装/接入规范：先查 capability/provider，优先原生 CLI/MCP/API；Manifest 显式 Schema/argv；
+  Provider 管路径/版本/依赖/架构；必要时 Adapter；统一 `run_process`；真实调用验证；缺依赖如实报。
+- 不为每个工具造复杂 wrapper；IDA 保留生命周期特例，`fw_extract`/截图保留必要资源与证据约束。

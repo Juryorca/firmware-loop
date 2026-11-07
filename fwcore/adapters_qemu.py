@@ -21,9 +21,13 @@ def run(ctx: ToolContext, args: dict) -> dict:
     qemu_name = ARCHES.get(arch)
     if not qemu_name:
         return {"status": "error", "error": f"不支持的 arch: {arch!r};可选 {sorted(ARCHES)}"}
-    qemu = shutil.which(qemu_name)
-    if not qemu:
-        return {"status": "error", "error": f"未找到 {qemu_name}"}
+    requested = args.get("qemu")
+    qemu = str(requested) if requested else shutil.which(qemu_name)
+    if qemu and os.path.sep not in qemu and not os.path.isfile(qemu):
+        qemu = shutil.which(qemu) or qemu
+    if not qemu or not os.path.isfile(qemu):
+        return {"status": "error", "error": f"未找到 {qemu_name}" + (
+            f"(指定 qemu={requested})" if requested else "")}
     binary = str(args.get("binary") or "")
     if not binary:
         return {"status": "error", "error": "缺 binary"}
@@ -43,5 +47,6 @@ def run(ctx: ToolContext, args: dict) -> dict:
     out = run_process(ctx, cmd, timeout=timeout, cwd=ctx.root)
     out.setdefault("meta", {})
     out["meta"].update({"capability": "emu.user", "provider": qemu, "arch": arch,
-                        "binary": binary, "rootfs": rootfs})
+                        "binary": binary, "rootfs": rootfs,
+                        "special": bool(requested)})
     return out

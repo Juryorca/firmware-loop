@@ -11,8 +11,15 @@ import os
 import shutil
 from dataclasses import dataclass
 
-from .providers import (ARCH_MISMATCH, DEPS_MISSING, MISSING, NOT_STARTED,
-                        PARTIAL, READY, inventory)
+from .providers import (
+    ARCH_MISMATCH,
+    DEPS_MISSING,
+    MISSING,
+    NOT_STARTED,
+    PARTIAL,
+    READY,
+    inventory,
+)
 
 ORDER = {READY: 0, PARTIAL: 1, NOT_STARTED: 2, DEPS_MISSING: 3, ARCH_MISMATCH: 4, MISSING: 5}
 STATUSES = ("ready", "partial", "missing", "deps_missing", "not_started",
@@ -58,12 +65,14 @@ DEFAULT_TOOLSET: tuple[ToolsetItem, ...] = (
     ToolsetItem("research-helpers", "研究辅助脚本", "P1", True,
                 repo=("tools/check.sh", "tools/derived_check.sh",
                       "tools/queue_state.sh", "tools/parse_signal.py",
-                      "tools/termshot.sh", "tools/win_stage.sh")),
+                      "tools/win_stage.sh")),
+    ToolsetItem("screenshot", "终端截图证据", "P1", True,
+                repo=("tools/termshot.sh", "tools/ansi2png.py"),
+                external=("tmux", "zsh")),
     ToolsetItem("strace", "系统调用追踪", "P1", True, ("trace.strace",)),
     ToolsetItem("patched-qemu", "qemu-aarch64-patched(特殊构建)", "P2",
                 False, external=("qemu-aarch64-patched",), optional=True),
-    ToolsetItem("angr", "符号执行(angr)", "P2", False,
-                ("symbolic.angr",), optional=True),
+    ToolsetItem("angr", "符号执行(angr)", "P2", True, ("symbolic.angr",)),
 )
 
 

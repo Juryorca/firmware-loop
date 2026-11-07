@@ -26,6 +26,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("skills", "列出可用 Skills"),
     Command("knowledge", "检索研究知识库", "<query>"),
     Command("tools", "默认工具集完整性"),
+    Command("tool-setup", "检查/补齐工具与接入新工具", "[missing|new]"),
     Command("new", "开始新的 run(同一目标)"),
     Command("continue", "继续当前 run(一轮)"),
     Command("clear", "清空当前对话视图(不删数据库)"),

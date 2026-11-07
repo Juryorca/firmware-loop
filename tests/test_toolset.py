@@ -21,10 +21,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def test_default_toolset_report_and_repo_assets():
     rep = check_toolset(ROOT)
     assert rep["required_total"] >= 10
-    assert rep["optional_total"] >= 2
+    assert rep["optional_total"] >= 1
     assert rep["repo_ok"] is True, [r for r in rep["items"] if r["repo"] and r["status"] != READY]
     ids = {x["id"] for x in rep["items"]}
-    for key in ("ida", "ghidra", "extraction", "qemu-user", "research-helpers"):
+    for key in ("ida", "ghidra", "extraction", "qemu-user", "research-helpers",
+                "screenshot"):
         assert key in ids
     qemu = next(x for x in rep["items"] if x["id"] == "qemu-user")
     assert qemu["status"] == READY               # 普通 QEMU 是默认必需项
@@ -73,4 +74,6 @@ def test_tools_command_is_registered():
     from fwapp.commands import COMMANDS
     from fwapp.modes.interactive import FwApp
     assert "tools" in {c.name for c in COMMANDS}
+    assert "tool-setup" in {c.name for c in COMMANDS}
     assert hasattr(FwApp, "_cmd_tools")
+    assert hasattr(FwApp, "_cmd_tool_setup")

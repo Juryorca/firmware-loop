@@ -51,8 +51,8 @@ def _real_manifest(name: str) -> Manifest:
 
 @pytest.mark.parametrize("name,args,expected", [
     # 透传参数串:按 shell 规则拆,**不能**再多塞一个原样 {args}
-    ("fuzz_cgi", {"args": "-s 'a b' -n 10"},
-     ["bash", "tools/cgi_fuzz.sh", "-s", "a b", "-n", "10"]),
+    ("fuzz_cgi", {"cgi": "cgi", "rootfs": "rootfs", "shim": "shim", "rounds": 5},
+     ["bash", "tools/cgi_fuzz.sh", "cgi", "rootfs", "shim", "5"]),
     ("emu_run", {"args": '--root "r 1 dir" --cmd ls'},
      ["bash", "tools/emu_run.sh", "--root", "r 1 dir", "--cmd", "ls"]),
     # 路径参数:不拆(含空格也要整体传)

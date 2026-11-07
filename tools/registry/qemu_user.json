@@ -7,6 +7,7 @@
       "arch": {"type": "string", "enum": ["x86_64", "aarch64", "arm", "mipsel", "mips"]},
       "binary": {"type": "string"},
       "rootfs": {"type": "string"},
+      "qemu": {"type": "string", "description": "可选 qemu 可执行文件/名称(如 qemu-aarch64-patched)"},
       "argv": {"type": "array", "items": {"type": "string"}},
       "timeout": {"type": "number"}
     },
