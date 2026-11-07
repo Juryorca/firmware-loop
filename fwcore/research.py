@@ -1,10 +1,10 @@
-"""研究载体:把 main 里的研究循环(规则/池/三镜/双输出/既有工具)接进运行时。
+"""研究载体:把研究循环(池/三镜/双输出/既有工具)接进运行时。
 
 设计边界
-- **规则不复制**:`AGENTS.md` / `LOOP.md` / `knowledge/*.md` 是唯一来源,这里只**读取并裁剪**,
-  不把规则改写成代码里的第二份(否则必然漂)。
+- **System Prompt 单一入口**:`fwcore.prompting.build_system_prompt()` 组装 core + AGENTS.md;
+  LOOP/知识正文不常驻,按需走 Skill/知识工具。
 - **程序只做可核的事**:池排序、三镜计数、双输出是否登记、收尾阻塞;不替模型决定研究策略。
-- **方法保持开放**:方法卡来自 `knowledge/` 的条目标题 + 工具描述,不是封闭技术表。
+- **知识分层**:静态案例在 SQLite 案例库,动态事实在 research tables。
 """
 
 from __future__ import annotations
@@ -15,83 +15,10 @@ from dataclasses import dataclass
 
 from .db import Tx
 from .domain import Domain, _event, _now, new_id
-
-RULES_LIMIT = 12000  # 每个规则文件的字符预算
-# 按段落选而不是盲截:优先保留"决定行为"的段落(用户批评过"截断可能把关键规则切掉")
-RULE_PRIORITY = ("不变量", "停 / 不停", "停/不停", "闸门", "轮", "假设池", "证据", "三镜",
-                 "收尾", "Exit Criteria", "判据", "交付原则", "例外")
+from .prompting import build_system_prompt
 
 
-def select_rules(text: str, budget: int = RULES_LIMIT) -> str:
-    """在预算内选段落:优先"决定行为"的章节,其余按原顺序填充;超预算时标注省略数量。
-
-    为什么不用"前 N 字符截断":AGENTS/LOOP 的关键约束(停/不停、闸门、轮格式)散落在末尾,
-    盲截会把它们切掉 ⇒ 模型看到的是"没有硬约束的规则书"。
-    """
-    if len(text) <= budget:
-        return text
-    import re as _re
-
-    parts = _re.split(r"(?m)^(?=## )", text)
-    head = parts[0] if parts and not parts[0].startswith("## ") else ""
-    sections = [s for s in parts if s.startswith("## ")]
-    if not sections:
-        return text[:budget] + "\n…(截断)"
-
-    def score(s: str) -> int:
-        title = s.split("\n", 1)[0]
-        return 0 if any(k in title for k in RULE_PRIORITY) else 1
-
-    order = sorted(range(len(sections)), key=lambda i: (score(sections[i]), i))
-    kept: dict[int, str] = {}
-    used = len(head)
-    for i in order:
-        if used + len(sections[i]) <= budget:
-            kept[i] = sections[i]
-            used += len(sections[i])
-    omitted = len(sections) - len(kept)
-    out = head + "".join(kept[i] for i in sorted(kept))
-    if omitted:
-        out += f"\n…(已省略 {omitted} 段:超出预算且优先级较低)\n"
-    return out[: budget + 200]
-
-
-def _read(path: str, limit: int = RULES_LIMIT) -> str:
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            txt = f.read()
-    except OSError:
-        return ""
-    if len(txt) <= limit:
-        return txt
-    cut = txt[:limit]
-    nl = cut.rfind("\n")
-    return cut[: nl if nl > 0 else limit] + "\n…(截断)"
-
-
-def kb_titles(root: str) -> list[str]:
-    """知识库条目标题 = 方法/判据的**开放**清单(不是封闭技术表)。"""
-    out: list[str] = []
-    kdir = os.path.join(root, "knowledge")
-    if not os.path.isdir(kdir):
-        return out
-    try:
-        names = sorted(os.listdir(kdir))
-    except OSError as e:
-        return [f"(knowledge/ 不可读: {e})"]
-    for name in names:
-        if not name.endswith(".md") or name == "INDEX.md":
-            continue
-        try:
-            body = _read(os.path.join(kdir, name), 10 ** 6)
-        except OSError:
-            continue
-        for m in re.finditer(r"(?m)^## (.+)$", body):
-            out.append(f"{name}: {m.group(1).strip()[:110]}")
-    return out
-
-
-def _clip(s, n: int) -> str:
+def _clip(s, n):
     return (s or "").strip().replace("\n", " ")[:n]
 
 
@@ -156,8 +83,6 @@ class Research:
 
     root: str
     domain: Domain
-    rules_files: tuple[str, ...] = ("AGENTS.md", "LOOP.md",
-                                    "knowledge/misreports.md", "knowledge/vuln-patterns.md")
     mirror_every: int = 3  # 下限每 3 轮一次三镜
 
     # ---------- 池:唯一队列,程序排序 ----------
@@ -358,30 +283,11 @@ class Research:
     # ---------- 系统提示 ----------
     # ---------- 系统提示 ----------
     def rules_prompt(self, target: str) -> str:
-        """**静态**系统提示:逐字节稳定(它是请求的第一条消息,一变就让前缀缓存整体失效)。
+        """**静态** System Prompt:core + root AGENTS.md + Skills/Commands 目录。
 
-        实测:同一 run 内 system 一变,下一次调用的缓存命中从 ~98% 掉到 ~1%
-        (数据见 docs/evidence/token-audit.md)。动态状态一律走 `state_prompt()`。
+        这是唯一加载入口；完整案例库/LOOP 不在这里，按需走 `knowledge_*`/`skill_read`。
         """
-        cards = kb_titles(self.root)
-        parts = [
-            "你是固件漏洞研究 agent。程序负责机器事实的可靠性与不变量,你负责研究判断与行动。",
-            "",
-            # 提示词**不重复定义研究规则**:规则原文在下方(AGENTS/LOOP),
-            # 程序强制的不变量在 fwcore/domain.py;这里只留角色与协议。
-            "研究规则以本消息末尾加载的 AGENTS.md / LOOP.md 原文为准;程序强制的不变量",
-            "由 domain 校验(实现即文档),本处不复述。",
-            "",
-            "结束本轮时输出 `FINAL: <小结>` —— 只结束本轮,是否可收尾由程序判定。",
-        ]
-        if cards:
-            parts += ["", "## 可选方法/判据(开放清单,来自 knowledge/,不是封闭技术表)", ""]
-            parts += [f"- {c}" for c in cards[:40]]
-        for rel in self.rules_files:
-            body = select_rules(_read(os.path.join(self.root, rel), 10 ** 6), RULES_LIMIT)
-            if body:
-                parts += ["", f"## 规则原文({rel})", body]
-        return "\n".join(parts)
+        return build_system_prompt(self.root)
 
     def state_prompt(self, target: str, goal: str | None = None,
                      run_id: str | None = None, context_note: str | None = None,

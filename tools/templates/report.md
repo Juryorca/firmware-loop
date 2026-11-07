@@ -64,7 +64,7 @@ VR 编号仅存在于内部 INDEX/notes;跨 finding 引用写 "documented in a s
 与本节其他表述冲突时以细则为准。
 
 ### 报告格式与 CVE 编号线(细则)
-> 自 `prompts/firmware-re.txt`「Report Writing」原样迁入(2026-09-18);原文件已标 DEPRECATED。
+> 报告规则已归入 `AGENTS.md` 与 `report-submission` Skill;旧 OpenCode 提示词已删除。
 
 两条线分开: **报告格式跟厂商走,CVE 编号跟 CNA 资格走**。agent 只备料,提交动作永远归用户。
 

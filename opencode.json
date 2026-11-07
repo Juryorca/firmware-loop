@@ -1,3 +1,0 @@
-{
-  "_deprecated": "2026-09-18: OpenCode 配置栈已废弃 —— 本工作区改用 pi(.pi/prompts/fw.md 任务模板 + AGENTS.md 项目硬规则)。此文件仅为历史参考,不参与任何 harness。原定义的子代理(hypothesis-scanner/triage/extractor)在 pi 下不存在,其职责已折叠为 AGENTS.md「专项任务分派」的内联步骤 A/B/C;规则本体一律在 AGENTS.md 维护。"
-}

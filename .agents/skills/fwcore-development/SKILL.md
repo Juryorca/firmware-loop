@@ -1,6 +1,7 @@
 ---
 name: fwcore-development
 description: fwcore(自主固件漏洞研究 Agent)的项目级开发方法:如何读现状、选工作项、查根因、维护 ROADMAP、按阶段提交。
+audience: development
 ---
 
 # fwcore 开发方法

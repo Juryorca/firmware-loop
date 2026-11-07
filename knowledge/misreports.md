@@ -1,4 +1,7 @@
 # 反例库 / 勿报判据(提假设前先扫)
+
+> **LEGACY SOURCE**:本文件是旧案例原始来源,不常驻 System Prompt;可查询研究知识在 SQLite(`knowledge_search`/`knowledge_get`)。
+
 > 条目格式: `## <形态> | 勿报判据 | 跨固件适用性 | 证据 | (日期)`
 > 收口/准入见 `AGENTS.md`「文件准入与归属」;本文件只放条目。
 

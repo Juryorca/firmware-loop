@@ -14,24 +14,24 @@
 | 运行时 | 工具执行、超时/取消、上下文、持久化、恢复 | 判断"这个漏洞是否成立" |
 | 领域层 | 事实与不变量(假设/尝试/观察/证据/结论) | 产生研究判断 |
 
-判据(方法论)在 `knowledge/`、`AGENTS.md`、`LOOP.md`;机器可核部分才进代码。
+判据(方法论)在 `.agents/skills/`、`knowledge/`、`AGENTS.md`;内容架构见 `docs/AGENT_ARCHITECTURE.md`;机器可核部分才进代码。
 代码**不得自带新判据**:闸门红 ≠ 结论变,而是"补事实"或"先改判据"。
 
 ## 2. ① 模块(全部有测试)
 
 ```
-fwcore/  db.py(SCHEMA v16/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
+fwcore/  db.py(SCHEMA v17/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变量)
          tools.py(内置 ToolSpec)                toolreg.py(manifest→Registry,4 种注册路径)
          runtime.py(循环/检查点/恢复/预算/流式消费/对话持久化失败显式暂停)
          streaming.py(事件/取消令牌;真实 HTTP 取消用 socket shutdown)
-         research.py(提示/池/三镜/进度)
+         research.py(池/三镜/进度); prompting.py + prompts/system.md(System Prompt); skills.py(Skills Loader); knowledge.py(Research Knowledge)
          compact.py(压缩)                        contextinfo.py(上下文状态)
          mcp_runtime.py(MCP 桥)                  adapters_ida.py + winenv(IDA/Windows)
          gates_db.py(权威 Gate)                  models/model_client(适配器/协议)
          policy.py(Authz)  limits.py(边界)  watchdog.py  migrate_all.py  cli.py
 fwapp/  应用层(TUI/print,薄组合;见 docs/APP.md)
 fwloop/  兼容入口        scripts/ 演练与 e2e        eval/ 答案隔离评测
-tools/registry/*.json  仓库工具 manifest(8 个)
+tools/registry/*.json  仓库工具 manifest(8 个); .agents/skills/*/SKILL.md
 ```
 
 ## 3. 存储:DB 是权威,文件是叙述/材料(不是双写)
@@ -56,8 +56,9 @@ tools/registry/*.json  仓库工具 manifest(8 个)
 运行路径**不读 Markdown**:缺库/缺目标 ⇒ `derived_check`/`gates` 直接 FAIL(没有 legacy 回退);
 旧目标由 `fw-core migrate --all` 一次性导入(`documents` 保原文,结构化内容进各表,模糊内容标 `needs_review`)。
 
-表:`targets surfaces hypotheses attempts observations evidence evidence_checks
+研究表:`targets surfaces hypotheses attempts observations evidence evidence_checks
 conclusions runs checkpoints tool_calls events mirror_checks research_logs documents meta`。
+知识表:`knowledge_entries knowledge_entry_versions knowledge_entry_tags knowledge_entry_fts`(FTS5)。
 
 保留机制:`checkpoints_keep=120`/run(写时裁剪)→ `_shrink_history`(老工具输出 200 字符 +
 保留路径/`tool_call_id`)→ 库超 `max_db_bytes=256MB` 删最老 checkpoint 仍超则暂停。
@@ -173,4 +174,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 67 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 69 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

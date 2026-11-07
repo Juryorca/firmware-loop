@@ -271,12 +271,14 @@ def test_system_prompt_is_built_from_repo_rules(tmp_path):
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     hid = dom.add_hypothesis("t1", "签名前的解析路径仍要独立判断")
     prompt = Research(repo, dom).system_prompt("t1", goal="验证解析器")
-    # 静态头不再复述规则(避免与 AGENTS/LOOP 双源);规则只从文件加载一次
-    head = prompt.split("## 规则原文(AGENTS.md)")[0]
+    # System Prompt 只装 core + AGENTS；案例/LOOP 正文应走按需工具
+    head = prompt.split("## 项目级指令")[0]
     assert "尝试结果六种" not in head
     assert "AGENTS.md" in prompt and "FINAL:" in prompt
-    assert hid in prompt                                  # 池进了提示
-    assert "## 规则原文(AGENTS.md)" in prompt              # 规则从文件读取,不复制进代码
-    assert "假设池" in prompt                              # 原文内容真的在里面
-    assert "可选方法/判据" in prompt                        # 方法清单来自 knowledge/(开放)
+    assert hid in prompt                                  # 池进了动态状态
+    assert "## 项目级指令（AGENTS.md）" in prompt
+    assert "循环守则" in prompt                           # AGENTS 后段没有被裁剪
+    assert "假设池" in prompt
+    assert "Available Skills" in prompt
+    assert "反例 1" not in prompt                         # 案例正文不常驻
     assert "本轮目标" in prompt and "验证解析器" in prompt

@@ -1,4 +1,4 @@
-# 本仓库只管「agent 框架本体」:AGENTS.md / LOOP.md / tools/ / knowledge/ / prompts
+# 本仓库只管「agent 框架本体」:AGENTS.md / tools/ / knowledge/ / .agents/ / fwcore/prompts
 # Pi/DS 是外部开发工具(配置/会话/护栏),不属于产品交付物/
 # 目标现场与固件一律不进库(可重下 / 可重建 / 非框架)
 /state/

@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import sqlite3
 
-SCHEMA_VERSION = 16   # 开发期**基线**:不再逐版本迁移(见 _migrate)
+SCHEMA_VERSION = 17   # 开发期**基线**:不再逐版本迁移(见 _migrate)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -241,6 +241,48 @@ CREATE TABLE IF NOT EXISTS mirror_checks (
   created_at TEXT NOT NULL
 );
 
+-- 长期研究知识(跨目标;与研究状态逻辑隔离)。
+-- 知识优先:body_md 是完整、自然的正文;结构化字段只保留最小的分类/检索信息。
+-- 不是“每个案例一行”的档案库;目标专属地址/复现细节留在 research state 或原始材料。
+CREATE TABLE IF NOT EXISTS knowledge_entries (
+  id          TEXT PRIMARY KEY,
+  title       TEXT NOT NULL,
+  body_md     TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'guideline'
+     CHECK (kind IN ('pattern','misreport','guideline')),
+  status      TEXT NOT NULL DEFAULT 'draft'
+     CHECK (status IN ('draft','needs_review','approved','deprecated','superseded')),
+  source      TEXT,
+  source_hash TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_entry_versions (
+  id          TEXT PRIMARY KEY,
+  entry_id    TEXT NOT NULL REFERENCES knowledge_entries(id) ON DELETE CASCADE,
+  version     INTEGER NOT NULL,
+  title       TEXT NOT NULL,
+  body_md     TEXT NOT NULL,
+  change_note TEXT,
+  created_at  TEXT NOT NULL,
+  UNIQUE (entry_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_entry_tags (
+  entry_id TEXT NOT NULL REFERENCES knowledge_entries(id) ON DELETE CASCADE,
+  tag      TEXT NOT NULL,
+  PRIMARY KEY (entry_id, tag)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_entry_fts USING fts5(
+  entry_id UNINDEXED,
+  title,
+  body_md,
+  tags,
+  tokenize='unicode61'
+);
+
 -- 研究日志:无法结构化但必须保留的叙述(逐轮记录/停止声明/下一步/决策)
 CREATE TABLE IF NOT EXISTS research_logs (
   id           TEXT PRIMARY KEY,
@@ -269,6 +311,11 @@ CREATE INDEX IF NOT EXISTS idx_events_kind_ts ON events(kind, ts);
 CREATE INDEX IF NOT EXISTS idx_conversation_run ON conversation_entries(run_id, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tool_call_key ON tool_calls(run_id, call_key)
   WHERE call_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_knowledge_kind_status ON knowledge_entries(kind,status);
+CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge_entries(source);
+CREATE INDEX IF NOT EXISTS idx_knowledge_versions ON knowledge_entry_versions(entry_id, version);
+CREATE INDEX IF NOT EXISTS idx_knowledge_tags ON knowledge_entry_tags(tag);
+
 """
 
 

@@ -748,4 +748,56 @@ def default_registry() -> Registry:
             "scope_note": {"type": "string"}},
          "required": ["hypothesis_id", "verdict", "scope_note"]},
         state_conclude))
+
+    def _kb_search(ctx, a):
+        from .knowledge import search
+        try:
+            rows = search(ctx.domain.con, str(a.get("query") or ""),
+                          kind=a.get("kind"), status=a.get("status"),
+                          limit=int(a.get("limit") or 20))
+            return {"status": "ok", "results": rows, "count": len(rows),
+                    "note": "历史知识只作参考，不是当前 target 的证据；需要全文用 knowledge_get。"}
+        except (ValueError, TypeError) as e:
+            return {"status": "error", "error": str(e)}
+
+    def _kb_get(ctx, a):
+        from .knowledge import get
+        out = get(ctx.domain.con, str(a.get("entry_id") or ""))
+        return ({"status": "ok", "entry": out} if out
+                else {"status": "error", "error": f"未找到知识条目: {a.get('entry_id')}"})
+
+    def _kb_propose(ctx, a):
+        from .knowledge import propose
+        try:
+            out = propose(ctx.domain.con, kind=str(a.get("kind") or ""),
+                          title=str(a.get("title") or ""), body_md=str(a.get("body_md") or ""),
+                          tags=a.get("tags") or [], source=a.get("source"))
+            return {"status": "ok", "entry": out,
+                    "note": "已作为 draft 候选写入；不能自行批准，需人工/管理接口审核。"}
+        except (ValueError, TypeError, KeyError) as e:
+            return {"status": "error", "error": str(e)}
+
+    r.register(ToolSpec(
+        "knowledge_search",
+        "检索长期研究知识（pattern/misreport/guideline）；返回摘要与 ID；历史知识不是当前目标证据",
+        {"type": "object", "properties": {
+            "query": {"type": "string"},
+            "kind": {"type": "string", "enum": ["pattern", "misreport", "guideline"]},
+            "status": {"type": "string", "enum": ["draft", "needs_review", "approved", "deprecated", "superseded"]},
+            "limit": {"type": "number"}}, "required": ["query"]},
+        _kb_search))
+    r.register(ToolSpec(
+        "knowledge_get", "读取一条知识的完整正文、标签和版本历史",
+        {"type": "object", "properties": {"entry_id": {"type": "string"}},
+         "required": ["entry_id"]}, _kb_get))
+    r.register(ToolSpec(
+        "knowledge_propose", "把跨目标可复用的经验提议为知识候选（只能 draft，不能自批）",
+        {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": ["pattern", "misreport", "guideline"]},
+            "title": {"type": "string"}, "body_md": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "source": {"type": "string"}},
+         "required": ["kind", "title", "body_md"]}, _kb_propose))
+    from .skills import register_tools as _register_skill_tools
+    _register_skill_tools(r, "")
     return r

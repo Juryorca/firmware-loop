@@ -457,6 +457,36 @@ class FwApp(App):
     def _cmd_evidence(self, arg: str) -> None:
         self.push_screen(ResearchScreen(self.sess, tab="evidence"))
 
+    def _cmd_skills(self, arg: str) -> None:
+        from fwcore.skills import catalog
+        rows = catalog(self.sess.services.cfg.root)
+        if not rows:
+            self._notice("没有发现 Skills(.agents/skills/*/SKILL.md)", "warning")
+            return
+        lines = ["可用 Skills(正文用 skill_read 按需加载)", ""]
+        for r in rows:
+            lines.append(f"- {r['name']}: {r['description']}")
+        self._notice("\n".join(lines))
+
+    def _cmd_knowledge(self, arg: str) -> None:
+        from fwcore.knowledge import search, stats
+        con = self.sess.services.con
+        if not arg.strip():
+            self._notice("知识库统计: " + str(stats(con)))
+            return
+        try:
+            rows = search(con, arg, limit=10)
+        except ValueError as e:
+            self._notice(f"检索失败: {e}", "error")
+            return
+        if not rows:
+            self._notice(f"未找到知识: {arg}", "warning")
+            return
+        lines = [f"知识检索: {arg}", ""]
+        for r in rows:
+            lines.append(f"- {r['id']} [{r['kind']}/{r['status']}] {r['title']}")
+        self._notice("\n".join(lines))
+
     def _cmd_budget(self, arg: str) -> None:
         s = self.sess.snapshot()
         lim = s.limits or {}

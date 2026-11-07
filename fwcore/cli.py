@@ -38,7 +38,7 @@ def _con(args):
 _SUBCOMMANDS = frozenset({
     "init", "hyp", "surface", "attempt", "evidence", "observe", "conclude",
     "authz", "ida-env", "watchdog", "recover", "progress", "context", "mcp",
-    "gates", "capabilities", "status", "derive", "migrate", "view",
+    "gates", "capabilities", "knowledge", "status", "derive", "migrate", "view",
     "run", "resume", "advance",
 })
 
@@ -151,6 +151,27 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("gates", help="权威状态版 Gate(覆盖度/收尾/KB/引用;只读 SQLite)")
     p.add_argument("target")
     p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
+    p = sub.add_parser("knowledge", help="Research Knowledge(检索/迁移/版本/审核)")
+    sp = p.add_subparsers(dest="knowledge_cmd", required=True)
+    q = sp.add_parser("migrate")
+    q.add_argument("--dry-run", action="store_true")
+    q = sp.add_parser("search")
+    q.add_argument("query")
+    q.add_argument("--kind", choices=["pattern", "misreport", "guideline"])
+    q.add_argument("--status", choices=["draft", "needs_review", "approved", "deprecated", "superseded"])
+    q.add_argument("--limit", type=int, default=20)
+    q = sp.add_parser("get")
+    q.add_argument("entry_id")
+    q = sp.add_parser("revise")
+    q.add_argument("entry_id")
+    q.add_argument("--title", default=None)
+    q.add_argument("--body-file", default=None)
+    q.add_argument("--note", default="")
+    q = sp.add_parser("stats")
+    q = sp.add_parser("approve")
+    q.add_argument("entry_id")
+    q = sp.add_parser("deprecate")
+    q.add_argument("entry_id")
     p = sub.add_parser("status"); p.add_argument("target")
     p = sub.add_parser("derive"); p.add_argument("target")
     p = sub.add_parser("migrate", help="历史 Markdown → DB(一次性导入;--all 批量/--dry-run 预览)")
@@ -373,6 +394,35 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(rep, ensure_ascii=False, indent=2))
             ok = rep["ok"] and all(x["status"] == "ok" for x in rep["kb"]) and not rep["dangling_refs"]
             return 0 if ok else 1
+        elif args.cmd == "knowledge":
+            from .knowledge import (get as _kb_get, migrate_seed, revise as _kb_revise,
+                                    search as _kb_search, set_status as _kb_set_status,
+                                    stats as _kb_stats)
+            if args.knowledge_cmd == "migrate":
+                print(json.dumps(migrate_seed(args.root, con, dry_run=args.dry_run),
+                                 ensure_ascii=False, indent=2))
+            elif args.knowledge_cmd == "search":
+                print(json.dumps(_kb_search(con, args.query, kind=args.kind,
+                                            status=args.status, limit=args.limit),
+                                 ensure_ascii=False, indent=2))
+            elif args.knowledge_cmd == "get":
+                print(json.dumps(_kb_get(con, args.entry_id), ensure_ascii=False, indent=2))
+            elif args.knowledge_cmd == "stats":
+                print(json.dumps(_kb_stats(con), ensure_ascii=False, indent=2))
+            elif args.knowledge_cmd == "approve":
+                print(json.dumps(_kb_set_status(con, args.entry_id, "approved"),
+                                 ensure_ascii=False, indent=2))
+            elif args.knowledge_cmd == "deprecate":
+                print(json.dumps(_kb_set_status(con, args.entry_id, "deprecated"),
+                                 ensure_ascii=False, indent=2))
+            elif args.knowledge_cmd == "revise":
+                body = None
+                if args.body_file:
+                    with open(args.body_file, encoding="utf-8") as f:
+                        body = f.read()
+                print(json.dumps(_kb_revise(con, args.entry_id, title=args.title,
+                                            body_md=body, change_note=args.note),
+                                 ensure_ascii=False, indent=2))
         elif args.cmd == "capabilities":
             from .providers import inventory
             print(json.dumps(inventory(args.root), ensure_ascii=False, indent=2))
