@@ -27,8 +27,9 @@ description: 研究知识的使用与沉淀：何时检索 pattern/misreport/gui
 
 ## 生命周期
 
-- 记录后若不再适用：`deprecated` / `superseded`；
-- 修改正文用管理接口/CLI，保留版本历史；
+- 记录后若不再适用：`knowledge_deprecate`；
+- 修改正文用 `knowledge_revise`，保留版本历史；
+- `knowledge_stats` 用来看规模与 kind/status 分布；
 - 不设 `draft`/`needs_review`/人工批准门。
 
 ## 验收

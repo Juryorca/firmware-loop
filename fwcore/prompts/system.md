@@ -35,6 +35,7 @@
 - `kind` 区分 `pattern`（正向形态）、`misreport`（反向误报）和 `guideline`（操作判据），同时看判据、排除边界和来源。
 - 研究知识只作参考，**不能直接作为当前目标的证据**；当前目标必须有本目标的 observation/evidence。
 - 新经验用 `knowledge_propose(kind=..., title=..., body_md=...)` **直接记录为 approved**；由你判断是否值得沉淀，不设人工/中间审核态。只有真正能缩短未来分析路径、避免重复踩坑的经验才记录；宁缺毋滥。
+- 维护用 `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`；修订保留版本历史。
 
 ## 状态、对话和命令
 

@@ -9,7 +9,7 @@
 | 位置 | 内容 | 运行时 |
 |---|---|---|
 | SQLite `knowledge_entries` | 跨目标可复用知识：形态、判据、排除条件、操作经验 | `knowledge_search` / `knowledge_get` |
-| `knowledge/research-knowledge.md` | 8 条 curated 知识种子（从旧案例提炼） | 仅迁移源，不常驻 |
+| `knowledge/research-knowledge.md` | 14 条 curated 知识种子（从旧案例 + tool-quirks 提炼） | 仅迁移源，不常驻 |
 | `knowledge/vuln-patterns.md` | 旧正向案例原始来源（24 条） | 不常驻；可作历史核对 |
 | `knowledge/misreports.md` | 旧误报案例原始来源（27 条） | 不常驻；可作历史核对 |
 | `knowledge/methodology.md` | 方法论/强方法/建场等静态参考 | 按需 `fs_read` |

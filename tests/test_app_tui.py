@@ -132,6 +132,18 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
             await pilot.press("escape")
             await pilot.pause(0.1)
 
+            # 新增命令也必须走真实服务(空库时只产生提示,不崩溃)
+            n_before = len(app.query(NoticeWidget))
+            ed.text = "/skills"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert len(app.query(NoticeWidget)) > n_before
+            n_before = len(app.query(NoticeWidget))
+            ed.text = "/knowledge"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            assert len(app.query(NoticeWidget)) > n_before
+
             # 有 run 之后,/resume 打开选择器
             await pilot.press("ctrl+r")
             await pilot.pause(0.2)

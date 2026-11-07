@@ -786,10 +786,47 @@ def default_registry() -> Registry:
             "status": {"type": "string", "enum": ["approved", "deprecated", "superseded"]},
             "limit": {"type": "number"}}, "required": ["query"]},
         _kb_search))
+    def _kb_stats(ctx, a):
+        from .knowledge import stats
+        return {"status": "ok", "stats": stats(ctx.domain.con)}
+
+    def _kb_revise(ctx, a):
+        from .knowledge import revise
+        try:
+            out = revise(ctx.domain.con, str(a.get("entry_id") or ""),
+                         title=a.get("title"), body_md=a.get("body_md"),
+                         change_note=str(a.get("change_note") or ""))
+            return {"status": "ok", "entry": out,
+                    "note": "已修订并追加版本；默认直接 approved。"}
+        except (KeyError, ValueError, TypeError) as e:
+            return {"status": "error", "error": str(e)}
+
+    def _kb_deprecate(ctx, a):
+        from .knowledge import set_status
+        try:
+            return {"status": "ok",
+                    "entry": set_status(ctx.domain.con, str(a.get("entry_id") or ""),
+                                       "deprecated")}
+        except (KeyError, ValueError, TypeError) as e:
+            return {"status": "error", "error": str(e)}
+
     r.register(ToolSpec(
         "knowledge_get", "读取一条知识的完整正文、标签和版本历史",
         {"type": "object", "properties": {"entry_id": {"type": "string"}},
          "required": ["entry_id"]}, _kb_get))
+    r.register(ToolSpec(
+        "knowledge_stats", "Research Knowledge 统计（总数/kind/status）",
+        {"type": "object", "properties": {}}, _kb_stats))
+    r.register(ToolSpec(
+        "knowledge_revise", "修订知识正文/标题并追加版本（直接 approved，保留历史）",
+        {"type": "object", "properties": {
+            "entry_id": {"type": "string"}, "title": {"type": "string"},
+            "body_md": {"type": "string"}, "change_note": {"type": "string"}},
+         "required": ["entry_id"]}, _kb_revise))
+    r.register(ToolSpec(
+        "knowledge_deprecate", "把不再适用的知识标为 deprecated（不删除历史）",
+        {"type": "object", "properties": {"entry_id": {"type": "string"}},
+         "required": ["entry_id"]}, _kb_deprecate))
     r.register(ToolSpec(
         "knowledge_propose", "直接记录一条 Agent 判断为跨目标可复用的知识（approved；无中间审核态）",
         {"type": "object", "properties": {

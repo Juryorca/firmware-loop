@@ -10,7 +10,7 @@
 | **System Prompt** | `fwcore/prompts/system.md` + 根 `AGENTS.md` + 目录 | 身份、全局原则、项目硬约束、Skill/知识使用协议 | 每次模型请求的 system |
 | **Skills** | `.agents/skills/<name>/SKILL.md` | 专项操作知识（提取/逆向/验证/报告/循环） | 仅目录常驻；正文按需 `skill_read` |
 | **Commands** | `fwcore/commands.py`（元数据）+ `fwapp`（执行） | 用户主动输入的 `/xxx` 确定性操作 | 用户输入触发；不是模型工具 |
-| **Knowledge Base** | SQLite `knowledge_entries` | 跨 Target 可复用的研究知识 | `knowledge_search` / `knowledge_get`；新候选 `knowledge_propose` |
+| **Knowledge Base** | SQLite `knowledge_entries` | 跨 Target 可复用的研究知识 | `knowledge_search` / `knowledge_get` / `knowledge_propose` / `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate` |
 | **Tools** | `fwcore/tools.py`、`tools/registry/*.json` | 真实执行能力 | 模型 tools 参数；独立于四类内容 |
 
 **禁止**再新增与这五类并列的 Instructions/Policies/Rules 文件体系。`AGENTS.md` 是项目级指令的唯一根文件，不属于普通知识文章。
@@ -129,7 +129,7 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 ### 当前迁移策略
 
 旧 `vuln-patterns.md`（24 条）+ `misreports.md`（27 条）是**原始来源**，不是 DB 行数目标。
-本轮从中提炼 **8 条 curated 研究知识**（见 `knowledge/research-knowledge.md`），按主题合并
+本轮从中提炼 **14 条 curated 研究知识**（见 `knowledge/research-knowledge.md`），按主题合并
 （认证授权、代理信任、命令注入、解析/内存、URL/Host、DoS、误报判据），去掉地址级复现细节。
 旧两份 Markdown 保留，供回溯与再提炼；不常驻 System Prompt。
 迁移报告必须区分“源条目 51”与“知识条目 8”，不能把源案例数冒充知识数。
@@ -148,7 +148,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 - `status`: Agent 判断值得记录即 `approved`；后续可 `deprecated` / `superseded`；不设中间审核态。
 - 版本只追加，不覆盖历史。
 - 检索：FTS5 优先，失败/无结果以 LIKE 兜底；支持中文、英文标识符、函数/API 名。
-- `knowledge_propose` 直接写 `approved`；由 Agent 自己判断是否值得沉淀。
+- `knowledge_propose` 直接写 `approved`；`knowledge_revise` 追加版本；`knowledge_deprecate` 退休；由 Agent 自己判断。
 - 检索结果返回 ID/标题/类型/状态/摘要；需要全文再 `knowledge_get`。
 
 ## 7. 动态研究状态 vs 长期知识
@@ -221,7 +221,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | `.pi/prompts/提交.md` | 提交操作清单 | `report-submission` Skill | Skill 按需 |
 | `prompts/*.txt` | 旧 OpenCode 子代理提示词 | 已删除（只保留职责映射） | 不再加载 |
 | `opencode.json` | 旧 OpenCode 配置 | 已删除 | 不再加载 |
-| `knowledge/vuln-patterns.md` | 正向案例来源 | 8 条 curated 知识 + 原始来源 | DB 检索 / 按需 fs_read |
+| `knowledge/vuln-patterns.md` | 正向案例来源 | 14 条 curated 知识 + 原始来源 | DB 检索 / 按需 fs_read |
 | `knowledge/misreports.md` | 反向案例来源 | 同上 | DB 检索 / 按需 fs_read |
 | `knowledge/methodology.md` 等 | 静态方法/工具参考 | 静态参考 | 按需 fs_read |
 | `.pi/guards/*` | Pi 工具调用护栏 | 尚未迁入 fwcore runtime | 明确遗留 |
@@ -229,7 +229,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 ## 12. 当前边界
 
-- 旧案例的 51 条源条目未被逐条搬进 DB；按“Research Knowledge”原则提炼为 8 条知识，旧文件保留；
+- 旧案例的 51 条源条目未被逐条搬进 DB；按“Research Knowledge”原则提炼为 14 条知识（含 6 条工具判据），旧文件保留；
 - 旧 Pi 的 scan/screenshot/continue guard 尚未产品化（工具台账附录 A 记录）；
 - Chrome MCP、`write/edit`、Ghidra wrapper 等仍未接线，按台账处理，不在本轮伪装完成；
 - 真实付费模型验证不在本轮范围。
@@ -267,7 +267,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | 误报判据/设计内行为 | `misreports` 的反例库整体 | 误报判据：能力、证据与设计内行为 |
 
 **不是“51 条案例逐条入库”**：旧 51 条（24 + 27）保留为原始来源；DB 只存能跨目标复用的知识。
-本轮提炼 8 条主题知识；其余 43 条未提升为 DB 条目的主要原因：目标专属地址/一次性复现细节、
+本轮提炼 8 条主题知识（另从 tool-quirks 提炼 6 条工具判据，共 14 条）；旧 51 条中其余 43 条未提升为 DB 条目的主要原因：目标专属地址/一次性复现细节、
 已被主题条目覆盖、或属于可低成本公开检索的通用知识。`knowledge/research-knowledge.md`
 是这 8 条的可审查种子，`knowledge_entries` 才是运行时查询源。
 
@@ -281,5 +281,5 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | `.pi/guards/*` | 未迁入 fwcore runtime；工具台账遗留项 |
 | `prompts/*.txt` | 删除（旧 OpenCode 子代理空壳） |
 | `opencode.json` | 删除 |
-| 旧 `AI辅助复现工作循环.md` / `循环定制.md` | 选靶/获取/环境/验证原则并入 `firmware-target-selection`、`firmware-validation`；原文件仍在工作区外 |
+| 旧 `AI辅助复现工作循环.md` / `循环定制.md` | 选靶/获取/环境/验证原则并入 `firmware-target-selection`、`firmware-validation`；按用户要求旧文件已删除 |
 | 旧 CVE 目录 / 报告参考 | 外部历史资料，不纳入产品 |

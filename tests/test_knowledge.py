@@ -22,13 +22,13 @@ def _root(tmp_path):
 def test_migrate_seed_is_idempotent_and_minimal(tmp_path):
     root, con = _root(tmp_path)
     first = migrate_seed(root, con)
-    assert first["parsed"] == 8 and first["inserted"] == 8
+    assert first["parsed"] == 14 and first["inserted"] == 14
     st = stats(con)
-    assert st["total"] == 8
-    assert st["by_status"] == {"approved": 8}
+    assert st["total"] == 14
+    assert st["by_status"] == {"approved": 14}
     second = migrate_seed(root, con)
-    assert second["inserted"] == 0 and second["skipped"] == 8
-    assert stats(con)["total"] == 8
+    assert second["inserted"] == 0 and second["skipped"] == 14
+    assert stats(con)["total"] == 14
 
 
 def test_search_chinese_english_identifier(tmp_path):
@@ -39,6 +39,8 @@ def test_search_chinese_english_identifier(tmp_path):
     assert search(con, "X-Forwarded-For")
     assert search(con, "memcpy")
     assert search(con, "误报")
+    assert search(con, "qemu")
+    assert search(con, "unblob")
     hit = search(con, "owner")[0]
     assert hit["kind"] == "pattern" and hit["title"]
     body = get(con, hit["id"])
@@ -77,6 +79,13 @@ def test_tools_search_get_propose(tmp_path):
         "kind": "guideline", "title": "工具提案测试", "body_md": "可复用经验。",
         "tags": ["test"]})
     assert p["status"] == "ok" and p["entry"]["status"] == "approved"
+    stats_out = reg.call(ctx, "knowledge_stats", {})
+    assert stats_out["status"] == "ok" and stats_out["stats"]["total"] == 15
+    rev = reg.call(ctx, "knowledge_revise", {
+        "entry_id": p["entry"]["id"], "body_md": "可复用经验 v2", "change_note": "test"})
+    assert rev["status"] == "ok" and rev["entry"]["status"] == "approved"
+    dep = reg.call(ctx, "knowledge_deprecate", {"entry_id": p["entry"]["id"]})
+    assert dep["status"] == "ok" and dep["entry"]["status"] == "deprecated"
 
 
 def test_revision_keeps_history_and_requires_review(tmp_path):

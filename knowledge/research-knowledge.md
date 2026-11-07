@@ -99,3 +99,63 @@
 **排除/降权**：只证明 sink/崩溃/配置存在；管理员等价；输入来自管理员配置；协议内回调；默认值没有实际安全后果；历史案例只能作参考。
 
 **判断要点**：先问“所以攻击者能做什么”，再决定是否上报。来源：旧 `misreports` 的反例库整体。
+
+## 工具判据：qemu-user 直调 CGI 必须补齐 httpd 注入的环境
+
+**适用**：绕过真实 httpd，用 `qemu-<arch> -L rootfs <cgi>` 直接跑 CGI 做动态验证。
+
+**判据**：qemu-user 只负责 ELF/库搜索，不会自动补齐 httpd 的 CGI 环境变量（`SCRIPT_FILENAME`、`SCRIPT_NAME`、`PATH_INFO`、`PATH_TRANSLATED`、`GATEWAY_INTERFACE` 等）。缺失时，目标里未检查的 `getenv()` 可能返回 NULL，导致 `strstr/strlen` 等崩溃。
+
+**排除/降权**：做 A/B——补上/去掉该 env，若崩溃随 env 变化而非 payload 变化，就是仿真产物，不是载荷触发的内存破坏。
+
+**操作要点**：先按真实 httpd 的 CGI 契约补齐环境，再逐项只改 payload；不要用一次崩溃直接写 finding。来源：旧 `tool-quirks` 的 qemu CGI 条目。
+
+## 工具判据：binwalk 的“提取成功”不等于有效
+
+**适用**：固件解包后准备分析 rootfs。
+
+**判据**：binwalk 返回成功但产出很少（例如少于 3 个有效文件）通常意味着格式未被正确处理；应换 `unblob` 重试，并同时检查两个输出目录。两个工具的产出都要看，不能只信其中一个的“完成”。
+
+**排除/降权**：提取器缺失会导致 unblob 静默失败；缺哪个外部提取器按对应格式补齐/记录，不要把它当成“固件没有内容”。
+
+**操作要点**：保留两个输出目录、文件数与失败原因；对加密/非标格式再走静态魔数/解密例程。来源：旧 `tool-quirks` 的 binwalk/unblob 条目。
+
+## 工具判据：qemu-user 的 `-L` 不改变绝对路径命名空间
+
+**适用**：固件 CGI/守护进程访问 `/var/run`、`/tmp` 等绝对路径，或 `system()`/`popen()` 触发子进程。
+
+**判据**：`qemu-<arch> -L rootfs` 只改解释器/库搜索路径，不改绝对路径命名空间；目标写 `/var/run/x` 仍可能落到宿主，导致权限失败/静默走 else 分支。qemu-user 也不会翻译 `execve`，不能据此断言“设备执行了命令/读到了设备文件”。
+
+**操作要点**：需要设备侧行为时用 chroot、容器、`binfmt_misc` 或 bwrap 把根目录与 `/var/run` 等挂载点隔离；补 `--tmpfs /var/run` 之类可写目录，注意固件 `/tmp` 可能是软链。
+
+**排除/降权**：仅验证“确实发起了 system/exec”可用 qemu-user；要证明执行落在目标 rootfs 必须用 chroot/容器等。来源：旧 `tool-quirks` 的 qemu/bwrap 与 `AGENTS` 的 execve 边界。
+
+## 工具判据：AFL qemu-trace 必须与 guest 架构匹配
+
+**适用**：无源码二进制 fuzz，使用 `afl-fuzz -Q`。
+
+**判据**：`afl-qemu-trace` 是分架构产物；用 x86-64 tracer 跑 aarch64 guest 可能不报错但 coverage 为 0。先确认 tracer 与目标架构一致；用 `AFL_PATH` 指向正确产物，跑 `afl-showmap` 看是否有 tuples。
+
+**排除/降权**：`-Q` 静默 0 tuples、只打印 Executing、或 tracer 与 guest 架构不符，都是环境/工具问题，不是“目标没有输入面”。
+
+**操作要点**：构建/选择对应架构 tracer，先用小输入冒烟验证 tuple；不要把 0 coverage 当研究结论。来源：旧 `tool-quirks` 的 AFL qemu 模式与 `AGENTS` 环境清单。
+
+## 工具判据：IDA MCP 无头端点需要 GUI 事件循环
+
+**适用**：用 IDA MCP 做批量反编译/查询，希望无头运行。
+
+**判据**：IDB 工具依赖 `@idasync` / `execute_sync()` 与 IDA 的 Qt 事件循环；`idat.exe` + 阻塞式 `-S` 脚本会让 IDB 调用挂死，`-S` 直接返回又会让端点退出。应使用 `ida.exe` 启动，脚本里后台 `serve()` 后及时 return，保活/清理放 daemon 线程。
+
+**排除/降权**：`server_health` 能返回才说明端点活着；`tools/list`、`int_convert` 不依赖 IDB，不能作为 IDB 可用性的判据。
+
+**操作要点**：先探活，再开库；批量 Hex-Rays 反编译可能卡 HTTP 线程，导出优先用纯反汇编。来源：旧 `tool-quirks` 的 IDA MCP 条目。
+
+## 工具判据：localhost 代理劫持与 `--noproxy` 的边界
+
+**适用**：从宿主访问本地 MCP/IDA/HTTP 端点，或访问外网下载站。
+
+**判据**：本机代理可能劫持 localhost；对本地端点应显式 `curl --noproxy '*'`（或等价配置）。反过来，外网/archive 站点可能必须走代理；`--noproxy '*'` 不是万能，curl 000 时要在代理/直连之间做 A/B，再判断站点是否存在。
+
+**排除/降权**：单次 000/超时不能推出“站点不存在/端点坏了”；先记录是否走代理、重试间隔和响应码。
+
+**操作要点**：本地端点永久带 `--noproxy`；外网下载/查询记录代理路径与状态码。来源：旧 `tool-quirks` 的本机代理条目。

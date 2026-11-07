@@ -90,7 +90,7 @@
 | 研究判据与经验(建场 / 强方法两轴 / 形态判读 / 技术经验) | `knowledge_search` / `knowledge_get`;静态参考 `knowledge/methodology.md` |
 | 可复用缺陷形态 / 勿报判据 | `knowledge_search`(SQLite `knowledge_entries`;旧两份 Markdown 仅原始来源) |
 | 工具怪癖 / SDK 特征 / 已验证利用链 / 情报与实证 | `knowledge/{tool-quirks,sdk-bloodlines,exploits-validated,intel-log}.md` |
-| 知识库入口 | `knowledge_search` / `knowledge_get` / `knowledge_propose`;静态参考 `knowledge/INDEX.md`;准入见本文件「Knowledge Base」 |
+| 知识库入口 | `knowledge_search` / `knowledge_get` / `knowledge_propose` / `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`;静态参考 `knowledge/INDEX.md`;准入见本文件「Knowledge Base」 |
 | 权威研究事实(假设/尝试/观察/证据/结论/面) | `state/<目标>/state/fwcore.sqlite3`(用 `state_*` 工具写) |
 | 叙述/理由/下一步指针 | `state/<目标>/notes.md` |
 | 环境 / 工具入口 | 本文件「资源解析…」「环境清单」「工具速查」 |
@@ -394,7 +394,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 
 ## 工具速查
 - 环境预检: bash tools/check.sh(开工必跑,有 FAIL 先报告)
-- **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|migrate|revise|deprecate`;模型用 `knowledge_search/get/propose`。旧 `tools/kb.py` 只维护静态来源文件,不是知识权威。
+- **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|migrate|revise|deprecate`;模型用 `knowledge_search/get/propose/stats/revise/deprecate`。旧 `tools/kb.py` 只维护静态来源文件,不是知识权威。
 - **批量静态/动态工具**: `tools/ghidra_scripts/{ProfileFuncs,DumpFuncsWithStr,DumpDecomp}.java`(函数画像/反编译批处理;Ghidra base = IDA base + 0x100000) + `tools/cgi_fuzz.sh`(对厂商 CGI 有界变异 fuzz,判据 = qemu `uncaught signal`/SIGSEGV;用法见文件头)→ 用法与坑见 `knowledge/methodology.md`「函数画像 × 动作表 join」
 - **JS 页面取件**: `mcp__chrome-devtools__navigate_page` → `take_snapshot` / `list_network_requests` ⇒ 真实下载 URL(curl 拿不到时);见「环境清单 → 取件 / JS 页面」
 - **提交(用户要求时)**: 先 `python3 tools/chrome-live-probe.py`(OFF ⇒ 提醒用户开 `chrome://inspect/#remote-debugging`)→ `mcp__chrome-live__*` 填表 → **不点提交** → 贴待确认清单;见「环境清单 → 提交」

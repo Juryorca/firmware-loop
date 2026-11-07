@@ -64,6 +64,8 @@ def parse_seed(path: str) -> list[dict]:
         kind = "misreport" if ("误报" in title or "反例" in title) else "pattern"
         if "研究" in title and "知识" in title:
             kind = "guideline"
+        if title.startswith(("工具判据", "环境判据")):
+            kind = "guideline"
         tags = {"curated", kind}
         for tag, words in TAG_WORDS.items():
             if any(w.lower() in (title + "\n" + body).lower() for w in words):
