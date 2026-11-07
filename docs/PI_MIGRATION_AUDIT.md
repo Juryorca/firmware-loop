@@ -290,3 +290,41 @@ sdk-bloodlines/exploits-validated` 正文不进入 system prompt;`misreports/vul
 2. 是否把 Pi 的两个 Chrome MCP 配置迁入 `state/mcp.json`(需要维护浏览器/代理/Windows profile 配置)?
 3. 是否把 Pi 三类护栏改为 fwcore 的产品级拦截(会改 tool-call 执行路径)?
 4. 是否补 `write/edit` 低风险工具,还是明确 `shell_exec` 为唯一写路径?
+
+## 附录 A: 尚未接入工具台账(暂不接线)
+
+> 记录时间 2026-11-07,基线 `c0fc820`。本节只登记“还没接/怎么接”的事实,**不实施接线**。
+> 判定标准:模型能在工具列表中看到、有 schema、能实际调用并留下 observer/证据,才算“已接”。
+
+### A.1 应接但当前未接
+
+| 工具/能力 | 现有资产 | 当前实际状态 | 缺口 | 优先级 |
+|---|---|---|---|---|
+| `ghidra_query` | `tools/ghidra_scripts/*.java`、`tools/registry/ghidra_query.json` | 注册为 **unavailable** | 缺 `tools/ghidra_run.sh`;无 schema 对应包装;旧 Pi 只能 bash 跑 Ghidra | P1 |
+| `qnapcipher` | `tools/qnapcipher`、`tools/qnapcipher.c`、KB 配方 | 只能 `shell_exec` 手工调用 | 无 registry/schema;模型不知道参数与 selftest | P2 |
+| `qelf_decrypt` | `tools/qelf_decrypt.py`、KB 配方 | 只能 `shell_exec` 手工调用 | 无 registry/schema;架构/密钥参数需靠人记 | P2 |
+| `go_gin_routes` | `tools/go_gin_routes.py` | 只能 `shell_exec` 手工调用 | 无 registry/schema;输出未结构化 | P2 |
+| Chrome DevTools MCP | Pi 用户级 `mcp.json` 的 headless 配置 | fw-core **无配置**;`state/mcp.json` 不存在 | 配置迁移、代理/Chromium 路径、工具白名单 | P1 |
+| Chrome Live MCP | Pi 用户级 `mcp.json` 的 `--autoConnect` 配置 | fw-core **无配置**;仅提交场景需要 | Windows profile、`chrome://inspect` 探活、只填不提交边界 | P1 |
+| `write` / `edit` | 无;旧 Pi 内置 `write 172` / `edit 249` 次 | 只能 `shell_exec` 或外部编辑器 | fwcore 无低风险文件写/编辑 ToolSpec;路径 containment 与授权需设计 | P2(需产品裁决) |
+| KB 检索/读取 | `knowledge/*.md`、`kb_titles` | 只注入标题;正文靠模型 `fs_read` | 无 `kb_search`/`kb_read` 工具;大文件按需读路径未标准化 | P2 |
+| 扫描/截图/continue 护栏 | `.pi/guards/*.ts` | 只在 Pi;fwcore 无运行时拦截 | 需在产品 tool-call 层实现等价判定(不是复制 Extension) | P1 |
+
+### A.2 脚本可调用但未注册(是否接线待定)
+
+| 资产 | 当前状态 | 说明 |
+|---|---|---|
+| `tools/termshot.sh` + `ansi2png.py` | 报告模板/手工 shell 可用;无 registry | 截图规范存在,但 fwcore 无 screenshot guard;是否注册为工具待定 |
+| `tools/ida_start.sh` / `ida_call.sh` / `ida_stop.sh` | IDA 能力经 `ida_query` adapter 可用;生命周期脚本未注册 | 不建议把生命周期做成研究工具;保持环境脚本 |
+| `tools/chrome-live-probe.py` | 提交探活脚本;未注册 | 只在用户要求提交时用,不是研究工具 |
+| `tools/win_stage.sh` | 提交附件中转;未注册 | Windows 路径专用,按需手动 |
+
+### A.3 有意不接(避免以后重复讨论)
+
+| 资产 | 处置 |
+|---|---|
+| `tmux-capture.sh` | 有意废弃;`termshot.sh` 是声明式替代 |
+| `fw.sh` / `start_mcp.template.py` | 旧会话壳/模板;fwcore 有 `fwapp`/`mcp_runtime`,不作为产品工具 |
+| Pi `codemode` / `pi-lens` / `ralph` | Pi harness/开发生态;fwcore 不复制 Extension API |
+| `db_rebaseline.py` / `tui_smoke.py` | 开发/维护工具,不是研究工具 |
+| 旧 CVE 目录脚本 | 外部历史现场,不纳入框架 |
