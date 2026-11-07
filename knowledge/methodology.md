@@ -22,7 +22,7 @@
 > **核对清单**:只有当你已经**独立**从攻击面得到"这个组件/路径可疑"时,才用它去确认"是否已被官方修掉"。
 - 现象: 任务/情报把目标版本 N 与技术描述绑定,但情报原文同时写着"fixed in N"(或 "before N")——
   即 N 很可能是**修复版**,直接按描述找 PoC 会一无所获。
-- 流程: ①先读全 NVD/公告/changelog 的 affected/fixed 边界;②落地补丁差分(见下条与 tool-quirks
+- 流程: ①先读全 NVD/公告/changelog 的 affected/fixed 边界;②落地补丁差分(见下条与 `knowledge_search(kind="guideline")` 的工具经验
   「构建布局噪声」:字节/md5 diff 只能当线索);③对差分命中的组件读**修复前后同一函数指令序列**判完整性;
   ④结论若为"已修",产出仍应包含根因、受影响版本、**在 N-1 上的可复现 PoC**、以及"N 上同输入被拒"的差分。
 - 产物: `RouterOS-7.24.2-arm64/report/`(advisory + INDEX 的 Premise verification 节) | (2026-09-15/RouterOS 实证)
@@ -41,8 +41,8 @@
 ## 动态验证环境选型:整机 vs 函数级 | (2026-09-18)
 | 需要验证的东西 | 环境 | 判据 |
 |---|---|---|
-| 内存破坏类解析器(buffer 进 → 崩/不崩) | arm64 npk + `qemu-arm` + **LD_PRELOAD 构造器 harness** | 见 `tool-quirks.md`「RouterOS 7.x 守护进程无法离线整机仿真」 |
-| 逻辑/认证/协议/时序类(如限流、会话、可达性) | **官方 CHR(x86_64)整机 @ qemu** | 见 `tool-quirks.md`「RouterOS 动态验证: …CHR…」 |
+| 内存破坏类解析器(buffer 进 → 崩/不崩) | arm64 npk + `qemu-arm` + **LD_PRELOAD 构造器 harness** | 见 `knowledge_search("RouterOS 7.x 守护进程 整机仿真")` |
+| 逻辑/认证/协议/时序类(如限流、会话、可达性) | **官方 CHR(x86_64)整机 @ qemu** | 见 `knowledge_search("RouterOS CHR 整机")` |
 **别再说"没有运行环境"**:整机仿真走不通的是 **arm64 npk 用户态**;CHR 是另一条整机路径。
 
 ## 构建噪声下用**函数级差分**定位“improve stability”式修复点 | (2026-09-19)
@@ -54,7 +54,7 @@
 1. `readelf -SW <bin> | grep .text` 比两版 `.text` 尺寸 —— 稳定 ⇒ 基本无真实代码改动,可放弃;
    变了才继续。
 2. **不要逐字节 diff**: 一次插入会让后续所有函数地址位移,`cmp`/md5 差异率可达 20%+,
-   全是噪声(本工作区 RouterOS 实测 ratio 0.23)。机制与实测数据见 `tool-quirks.md`「构建布局噪声」。
+   全是噪声(本工作区 RouterOS 实测 ratio 0.23)。机制与实测数据见 `knowledge_search("RouterOS 构建布局噪声")`。
 3. 用 IDA `list_funcs` 导出 `(地址, 尺寸)`(注意需要 `queries:[{offset,count}]` 且**每页 100**,
    `next_offset` 翻页);取 `size >= 0x20` 的函数。
 4. **按下标对齐会连锁误报**。两种可行对齐:
@@ -331,7 +331,7 @@ PoC `report/attachments/btest-related-connection-unauthenticated-access/btest-re
 - **"默认凭据 + 配置漂移"的写法**: 若默认口令本可在网络侧使用、但被**另一层**(mTLS/白名单)挡住,不要把
   "漂移"直接写成漏洞;正确写法 = 记成 **"若版本变更优先复核点"**(写明:若客户端证书要求被去掉、或新增非 loopback
   listener,则该默认口令即刻可用),并附本轮实测证据。
-- 关联坑: `tool-quirks.md`「TLS 1.3 下判是否要求客户端证书」。
+- 关联坑: `knowledge_search("TLS 1.3 客户端证书")`。
 
 ## 强方法两轴:各格的落地工具与本机现状(含缺口) | (2026-09-21/工作区级)
 > 规则(两轴封闭枚举、每面至少"一个 oracle × 一个导航"、弱方法不得单独把面判"干净")在 `AGENTS.md` 守则 11;
@@ -372,7 +372,7 @@ PoC `report/attachments/btest-related-connection-unauthenticated-access/btest-re
 | ⑥重放+变异 | 自写(抓包/日志作种子) | — |
 | ⑦并发·时序 | 已有 micro-race 时间预算法 | — |
 | ⑧差分导向 | 已有函数级差分法 | — |
-| ⑨静态导引 | **反编译主路径 = IDA**(`tools/ida_start.sh`,项目钦定);`objdump`/`readelf`/`ndisasm`/`lief` 可用;`radare2` **仅反汇编可用**(`r2ghidra` 在本机装不上,见 `tool-quirks.md`);`ghidra` 12.1.2 在位(headless 未验证) | — |
+| ⑨静态导引 | **反编译主路径 = IDA**(`tools/ida_start.sh`,项目钦定);`objdump`/`readelf`/`ndisasm`/`lief` 可用;`radare2` **仅反汇编可用**(`r2ghidra` 构建经验见 `knowledge_search("r2ghidra")`);`ghidra` 12.1.2 在位(headless 未验证) | — |
 | ⑩规格·滥用 | curl/自写 + 认证矩阵判读法 | — |
 | ⑪环境·桩注入 | LD_PRELOAD(已有做法)、`frida` | — |
 
@@ -432,7 +432,7 @@ SAML ACS 是少见的"预认证 + 复杂解析器 + 认证语义"三合一面,�
 |---|---|---|
 | 静态(读二进制/配置) | — | 先定位入口与判定点 |
 | `qemu-user` + `chroot`/`unshare` | **用户态指令**(快;无内核语义、无 init、无真实挂载) | 单进程 / 单 CGI / 单解析器面 |
-| ↳ **我们那份 `qemu-aarch64-patched`**(`~/.local/bin/`,见 AGENTS 环境清单) | 同上,但**不做 netlink 协议白名单**(上游只放行 ROUTE/KOBJECT_UEVENT/AUDIT,其余 -> `-93`) | 面里有 **netlink** 的 daemon:`NETLINK_NETFILTER`(NFQUEUE)/`SOCK_DIAG`/`XFRM`/`GENERIC` —— 上游 qemu-user 下它们**起不来**(`nfq_open` 失败)。判读探针 `tools/qemu-nl-probe/`;32 位/大端边界见 `tool-quirks.md` |
+| ↳ **`qemu-aarch64-patched`**(由 `state/tools.json` 定位) | 同上,但**不做 netlink 协议白名单**(上游只放行 ROUTE/KOBJECT_UEVENT/AUDIT,其余 -> `-93`) | 面里有 **netlink** 的 daemon:`NETLINK_NETFILTER`(NFQUEUE)/`SOCK_DIAG`/`XFRM`/`GENERIC` —— 上游 qemu-user 下它们**起不来**(`nfq_open` 失败)。判读探针 `tools/qemu-nl-probe/`;32 位/大端边界用 `knowledge_search("qemu-user 32 位 大端")` |
 | **容器(docker/podman)** | **补的是 qemu-user 缺的那层**: 真 `/dev`、真挂载与 `/proc`、多进程;跑发行版镜像时才有真 init/systemd | **缺这层时**才用(多守护要真 `/dev`、真挂载、按包/按用户态工作)。**固件 rootfs 一般不是可启动发行版** ⇒ 此时形态是「**容器当宿主 + qemu-user 跑 guest**」,不是"容器替换 qemu-user" |
 | `qemu-system`(整机) | 含**内核** | 需要内核行为(内核特性/驱动/`xattr`)。**限定**: 只在目标**能整机启动**时可用 —— 本工作区实测过的是 **CHR x86_64**;厂商固件多为非标 boot/无 MBR ⇒ 通常启动不了,**别拿它硬启固件**(那时退回 qemu-user 或容器) |
 **要点(缺哪一层补哪一层,不是"越真越好")**:

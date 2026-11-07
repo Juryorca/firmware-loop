@@ -79,11 +79,13 @@ size_mb() { du -sm "$OUT" 2>/dev/null | awk '{print $1+0}'; }
 count_files() { find "$OUT" -type f 2>/dev/null | wc -l; }
 
 # 在独立进程组里跑,轮询真实产物;超限就整组杀掉(不能只杀父进程)
-run_guarded() {   # $1=tag $2...=命令
+run_guarded() {   # $1=tag $2=运行目录(空=当前目录) $3...=命令
   local tag="$1"; shift
+  local run_cwd="$1"; shift
   local log="$OUT/.${tag}.log"
   (
     ulimit -f $((MAX_MB * 2048)) 2>/dev/null || true   # 单文件上限(512B 块)
+    if [ -n "$run_cwd" ]; then cd "$run_cwd" || exit 3; fi
     exec "$@"
   ) >"$log" 2>&1 &
   local pid=$!
@@ -126,7 +128,7 @@ if command -v binwalk >/dev/null 2>&1; then
   # 于是 INT/TERM 的 trap 要等它结束才执行(实测会挂住)。
   cd "$OUT" || { say "ERROR=无法进入输出目录 $OUT"; exit 3; }
   ran_binwalk=1
-  run_guarded binwalk setsid binwalk -Me -d "$MAX_DEPTH" "$FW" || rc_binwalk=$?
+  run_guarded binwalk "" setsid binwalk -Me -d "$MAX_DEPTH" "$FW" || rc_binwalk=$?
   [ "$rc_binwalk" = "9" ] && exit 9
 else
   miss_binwalk=1
@@ -134,18 +136,32 @@ else
 fi
 
 if [ "$NO_UNBLOB" = "0" ]; then
-  # 已有工具通过元数据定位;不再假设 ~/venvs/unblob 一定存在。
+  # 已有工具通过元数据定位;执行端也应用元数据里的 env/cwd,不能只用于检查。
   UNBLOB="${FW_UNBLOB:-}"
+  UNBLOB_CWD=""
+  UNBLOB_CONFIG_ERROR=0
   if [ -z "$UNBLOB" ]; then
-    UNBLOB="$(cd "$ROOT" && python3 -m fwcore.toolmeta --path unblob 2>/dev/null || true)"
+    _meta="$(cd "$ROOT" && python3 -m fwcore.toolmeta --shell unblob 2>&1)"
+    _mrc=$?
+    if [ "$_mrc" = "0" ]; then
+      eval "$_meta"
+      UNBLOB="${FW_TOOL_PATH:-}"
+      UNBLOB_CWD="${FW_TOOL_CWD:-}"
+    elif [ "$_mrc" = "2" ] || [ "$_mrc" = "3" ]; then
+      say "UNBLOB=config_error"
+      say "$_meta"
+      UNBLOB_CONFIG_ERROR=1
+    fi
   fi
   if [ -n "$UNBLOB" ] && [ -x "$UNBLOB" ]; then
     ran_unblob=1
-    run_guarded unblob setsid "$UNBLOB" -e "$OUT/unblob" -d "$MAX_DEPTH" "$FW" || rc_unblob=$?
+    run_guarded unblob "$UNBLOB_CWD" setsid "$UNBLOB" -e "$OUT/unblob" -d "$MAX_DEPTH" "$FW" || rc_unblob=$?
     [ "$rc_unblob" = "9" ] && exit 9
   else
     miss_unblob=1
-    say "UNBLOB=missing"
+    if [ "$UNBLOB_CONFIG_ERROR" = "0" ] && [ -z "$UNBLOB" ]; then
+      say "UNBLOB=missing"
+    fi
   fi
 fi
 

@@ -13,7 +13,8 @@
 #   ③ 每个 finding 的包:advisory 骨架 + **至少 1 处图链且路径可解析** + shots.json/.provenance
 # 退出码: 有 FAIL → 1;全 PASS → 0
 set -u
-PY=/home/juryorca/ENTER/envs/pwn/bin/python
+# 框架检查脚本用当前 Python;不要绑定 Agent 的 Python 环境队列
+PY="${PYTHON:-python3}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${1:-}"
 CLOSURE=0

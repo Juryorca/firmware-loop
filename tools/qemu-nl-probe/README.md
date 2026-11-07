@@ -3,7 +3,7 @@
 工作区级工具,**跨目标复用**。本目录只有**判读用的探针**(小体积),不含构建配方。
 
 ## 工具在哪(已装好,直接用)
-`qemu-aarch64-patched` —— 静态 49 MB,位于 `~/.local/bin/`;登记在 `AGENTS.md`「环境清单」,状态见 `tools/check.sh` 的 INFO 行。
+`qemu-aarch64-patched` 的路径由 `state/tools.json` 的 `qemu-aarch64-patched.path` 提供；状态用 `fw-core capabilities` / `tools/check.sh` 查看。
 ```bash
 qemu-aarch64-patched -L <rootfs> <guest_bin>                    # 跑 guest 二进制 / 目标 daemon
 qemu-aarch64-patched tools/qemu-nl-probe/bin/nltest2.aarch64    # 看本机 netlink 各协议放行情况

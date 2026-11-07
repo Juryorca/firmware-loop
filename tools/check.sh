@@ -7,6 +7,12 @@ cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."   # 自定位到项目�
 ok(){ echo "OK   $1"; pass=$((pass+1)); }
 bad(){ echo "FAIL $1"; fail=$((fail+1)); }
 info(){ echo "---- $1"; }   # 非必需能力:只报状态,不计入 FAIL/停手判定
+# 工具元数据:JSON 损坏必须显式失败,不能悄悄回退 PATH
+if _meta_err=$($PY -m fwcore.toolmeta 2>&1 >/dev/null); then
+  ok "工具元数据(state/tools.json)"
+else
+  bad "工具元数据: $_meta_err"
+fi
 # IDA 路径/暂存/挂载从 winenv 单一来源读取;不在检查脚本里写死盘符和用户名
 if $PY - <<'EOF' >/dev/null 2>&1
 from fwcore.winenv import load

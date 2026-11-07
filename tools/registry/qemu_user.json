@@ -1,6 +1,6 @@
 {
   "name": "qemu_user",
-  "description": "用普通 QEMU user 运行目标二进制(显式 arch/binary/rootfs/argv;不走 shell)",
+  "description": "QEMU user 运行目标二进制(显式 arch/binary/rootfs/argv;aarch64 自动优先 state/tools.json 的 qemu-aarch64-patched,也可显式 qemu=)",
   "input_schema": {
     "type": "object",
     "properties": {

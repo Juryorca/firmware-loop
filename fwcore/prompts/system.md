@@ -35,6 +35,8 @@
 - 需要相似漏洞形态、误报判据或跨目标经验时，调用 `knowledge_search(query=..., kind=...)`；需要完整正文时调用 `knowledge_get(entry_id=...)`。
 - `kind` 区分 `pattern`（正向形态）、`misreport`（反向误报）和 `guideline`（操作判据），同时看判据、排除边界和来源。
 - 研究知识只作参考，**不能直接作为当前目标的证据**；当前目标必须有本目标的 observation/evidence。
+- 工具行为、版本限制、安装/仿真环境要求等**工具经验**也在同一知识库（`kind=guideline`，tags 含 `tool-quirk` 和工具名）；遇到工具异常时用 `knowledge_search(query="<工具名> <现象>")` 先查，不要靠扫描虚拟环境或固定目录猜。
+- 工具经验不要求跨目标通用；只要它能避免未来重复试错/错误使用就值得记录。它与 `state/tools.json` 的路径配置是两回事：前者是经验，后者是当前机器的运行元数据。
 - 新经验用 `knowledge_propose(kind=..., title=..., body_md=...)` **直接记录为 approved**；由你判断是否值得沉淀，不设人工/中间审核态。只有真正能缩短未来分析路径、避免重复踩坑的经验才记录；宁缺毋滥。
 - 维护用 `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`；修订保留版本历史。
 

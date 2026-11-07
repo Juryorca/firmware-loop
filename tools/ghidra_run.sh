@@ -6,9 +6,20 @@
 set -u
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 FIND=""
-# 优先读本地工具元数据;环境变量/已知安装位置只作简单兜底,不做目录大扫描。
+# 优先读本地工具元数据;未配置才允许环境变量/PATH 兜底。
+# 配置损坏或配置了不存在的路径时明确失败,不静默换一个 Ghidra。
 if [ -f "$ROOT/state/tools.json" ] || [ -n "${FW_TOOL_CONFIG:-}" ]; then
-  FIND="$(cd "$ROOT" && python3 -m fwcore.toolmeta --path ghidra 2>/dev/null || true)"
+  _meta="$(cd "$ROOT" && python3 -m fwcore.toolmeta --path ghidra 2>&1)"
+  _mrc=$?
+  if [ "$_mrc" = "0" ]; then
+    FIND="$_meta"
+  elif [ "$_mrc" = "2" ]; then
+    echo "GHIDRA_CONFIG_ERROR: $_meta" >&2
+    exit 127
+  elif [ "$_mrc" = "3" ]; then
+    echo "GHIDRA_PATH_INVALID: $_meta" >&2
+    exit 127
+  fi
 fi
 for cand in "$FIND" "${GHIDRA_HOME:-}" "${GHIDRA_INSTALL_DIR:-}" \
             "$(command -v analyzeHeadless 2>/dev/null || true)"; do

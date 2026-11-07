@@ -130,7 +130,7 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 ### 当前迁移策略
 
 旧 `vuln-patterns.md`（24 条）+ `misreports.md`（27 条）是**原始来源**，不是 DB 行数目标。
-本轮从中提炼 **14 条 curated 研究知识**（见 `knowledge/research-knowledge.md`），按主题合并
+本轮提炼 8 条研究知识种子 + 6 条工具判据（后者已合并入 tool-quirks 迁移）
 （认证授权、代理信任、命令注入、解析/内存、URL/Host、DoS、误报判据），去掉地址级复现细节。
 旧两份 Markdown 保留，供回溯与再提炼；不常驻 System Prompt。
 迁移报告必须区分“源条目 51”与“知识条目 8”，不能把源案例数冒充知识数。
@@ -224,13 +224,14 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | `opencode.json` | 旧 OpenCode 配置 | 已删除 | 不再加载 |
 | `knowledge/vuln-patterns.md` | 正向案例来源 | 14 条 curated 知识 + 原始来源 | DB 检索 / 按需 fs_read |
 | `knowledge/misreports.md` | 反向案例来源 | 同上 | DB 检索 / 按需 fs_read |
-| `knowledge/methodology.md` 等 | 静态方法/工具参考 | 静态参考 | 按需 fs_read |
+| `knowledge/methodology.md` 等 | 静态方法参考 | 静态参考 | 按需 fs_read |
+| `knowledge/tool-quirks.md` | 旧工具经验 Markdown | SQLite `knowledge_entries`（94 条，已合并/退休） | `knowledge_search` / `knowledge_get`，Git 历史保留 |
 | `.pi/guards/*` | Pi 工具调用护栏 | 尚未迁入 fwcore runtime | 明确遗留 |
 | `.pi/dev-notes.md` | 开发笔记 | 不进入产品 | 本地保留 |
 
 ## 12. 当前边界
 
-- 旧案例的 51 条源条目未被逐条搬进 DB；按“Research Knowledge”原则提炼为 14 条知识（含 6 条工具判据），旧文件保留；
+- 旧案例 51 条保留为原始来源；DB 现有 8 条研究知识 + 94 条工具经验；旧 tool-quirks Markdown 已移出工作树，Git 历史保留；
 - 旧 Pi 的 scan/screenshot/continue guard 尚未产品化（工具台账附录 A 记录）；
 - Chrome MCP 只有配置/探针，不在只读检查里自动启动；`write/edit` 未接入 fwcore 工具层；
 - Ghidra/QEMU/IDA 已按 provider/adapter 接入，缺依赖状态如实显示；真实付费模型验证不在本轮范围。
@@ -267,10 +268,23 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | 速率限制/DoS | `vuln-patterns` 的认证限流条目；`misreports` 的限流/DoS 条目 | 速率限制、锁定与拒绝服务 |
 | 误报判据/设计内行为 | `misreports` 的反例库整体 | 误报判据：能力、证据与设计内行为 |
 
-**不是“51 条案例逐条入库”**：旧 51 条（24 + 27）保留为原始来源；DB 只存能跨目标复用的知识。
-本轮提炼 8 条主题知识（另从 tool-quirks 提炼 6 条工具判据，共 14 条）；旧 51 条中其余 43 条未提升为 DB 条目的主要原因：目标专属地址/一次性复现细节、
-已被主题条目覆盖、或属于可低成本公开检索的通用知识。`knowledge/research-knowledge.md`
-是这 8 条的可审查种子，`knowledge_entries` 才是运行时查询源。
+**不是“51 条案例逐条入库”**：旧 51 条（24 + 27）保留为原始来源；DB 只存能跨目标复用的研究知识。
+`knowledge/research-knowledge.md` 是 8 条研究知识 + 6 条工具判据的种子；6 条工具判据在 tool-quirks
+迁移时已合并到完整源条目。旧 51 条中未提升为 DB 条目的原因仍是：目标专属地址/一次性复现细节、
+已被主题条目覆盖、或属于低成本公开检索的通用知识。
+
+### 13.2b tool-quirks → 94 条工具经验
+
+`knowledge/tool-quirks.md` 的 94 个 `##` section 已按完整正文迁入 `knowledge_entries`
+（`kind=guideline`, `source=knowledge/tool-quirks.md`, tags 含 `tool-quirk` + 工具名）：
+
+- 88 条新增；
+- 6 条与既有工具判据合并（保留旧 ID，正文补全 + 版本追加）；
+- 3 条旧 Pi/OpenCode 环境规则保留正文但 `deprecated`：pwn 绝对路径、subagent 端点禁令、旧截图自由命令签名；
+- 第二次迁移 source_hash 命中，inserted/merged 为 0，skipped=94。
+
+工具经验准入不要求跨目标通用；只要求能避免未来重复试错/错误使用/浪费时间。旧 Markdown
+从工作树移除，Git 历史保留；迁移逐条去向见 `docs/tool-quirks-migration.md`；运行时查询只走 `knowledge_search` / `knowledge_get`。
 
 ### 13.3 Pi / OpenCode 资产
 

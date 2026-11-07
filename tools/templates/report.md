@@ -24,7 +24,7 @@
 | advisory 内引用的图片 | markdown 链接写 `attachments/<描述性名称>/xxx.png` |
 | CVE 备料(仅厂商非 CNA 时) | `report/CVE-request-mitre.md` |
 | **内部原样证据**(strace/差分中间产物/日志/运行记录) | `state/<目标>/artifacts/`,**不随包提交** |
-| **非发现**(看过、判定不是漏洞的东西) | A2 disposition 占一行(写明检测方法/范围) + 可复用判据进 `knowledge/misreports.md` + 原始证据进 `artifacts/poc/` |
+| **非发现**(看过、判定不是漏洞的东西) | A2 disposition 占一行(写明检测方法/范围) + 可复用判据用 `knowledge_propose(kind="misreport")` 记录 + 原始证据进 `artifacts/poc/` |
 
 **材料完成判据(缺一即未完成;产出 finding 后必过一遍)**
 1. 顶层 advisory 存在且骨架齐全(Summary/Tested Version/Vulnerability Type/Root Cause/Steps/Evidence/Impact/Remediation);
@@ -37,7 +37,7 @@
 6. **「设备侧执行」类结论的证据要求(硬)**: 凡声称"设备**执行了**命令 / 改了设备文件 / 读到设备文件" ⇒ 证据必须来自
    **容器/chroot**(镜像根 = 该目标 rootfs),且是**设备文件系统内的可观测变化**(绝对路径落盘 / 配置改动 / 命令副作用);
    **不得**拿 `qemu-user -L` 跑出来的 marker(宿主 `/tmp`、相对路径、宿主 shell 的输出格式)当设备侧证据 ✗ ——
-   `qemu-user` 的 `-L` 只翻译文件类系统调用、**`execve` 不翻译**,判据/配方见 `knowledge/tool-quirks.md`。
+   `qemu-user` 的 `-L` 只翻译文件类系统调用、**`execve` 不翻译**,判据/配方用 `knowledge_search("qemu-user execve")` 查 `tool-quirk` 知识。
 > Evidence 节的两个形态是**并列必填**:机制证据(文本原文)**且** 结果时刻(截图链接),
 > **不是二选一**。(历史教训:2026-09-19 SCEP 轮把截图做了、带全 provenance,却**没在 advisory 里引用**:
 > `report/**/*.md` 里 `![` 命中 0 —— 因为旧描述把两形态写成了“分类学”,读起来像可选。)

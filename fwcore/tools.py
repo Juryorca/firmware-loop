@@ -574,7 +574,11 @@ def state_conclude(ctx: ToolContext, args: dict) -> dict:
 
 def _caps(ctx: ToolContext, args: dict) -> dict:
     from .providers import inventory
-    inv = inventory(ctx.root)
+    from .toolmeta import ToolConfigError
+    try:
+        inv = inventory(ctx.root)
+    except ToolConfigError as e:
+        return {"status": "error", "error": f"工具元数据配置错误: {e}"}
     only = args.get("only")
     if only:
         inv = [e for e in inv if only in e["capability"]]

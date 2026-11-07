@@ -128,8 +128,24 @@ def _external_check(root: str, names: tuple[str, ...]) -> tuple[str, list[dict]]
     return PARTIAL, rows
 
 
+def _config_error_report(root: str, error: str) -> dict:
+    required = [item for item in DEFAULT_TOOLSET if item.required]
+    optional = [item for item in DEFAULT_TOOLSET if item.optional]
+    return {
+        "required_total": len(required), "required_ready": 0,
+        "required_incomplete": len(required), "optional_total": len(optional),
+        "integrity": "config_error", "config_error": error, "items": [],
+        "by_status": {}, "repo_ok": False, "external_ok": False,
+        "capabilities_ok": False, "tool_metadata": toolmeta.describe(root)
+        if toolmeta.status(root)["valid"] else [],
+    }
+
+
 def check_toolset(root: str, *, inventory_data: list[dict] | None = None) -> dict:
     """只读检查默认工具集；不启动服务、不启动浏览器、不修改环境。"""
+    st = toolmeta.status(root)
+    if not st["valid"]:
+        return _config_error_report(root, st.get("error") or "工具元数据不可用")
     inv = {x["capability"]: x for x in
            (inventory_data if inventory_data is not None else inventory(root))}
     results = []
@@ -197,6 +213,10 @@ def render_report(report: dict) -> str:
     lines.append(f"required: {report['required_ready']}/{report['required_total']} ready; "
                  f"incomplete={report['required_incomplete']}; "
                  f"optional={report['optional_total']}; integrity={report['integrity']}")
+    if report.get("config_error"):
+        lines.append(f"[FAIL] 工具元数据配置错误: {report['config_error']}")
+        lines.append("       修复 state/tools.json 后重试；不会回退 PATH。")
+        return "\n".join(lines)
     for item in report["items"]:
         mark = "OK" if item["status"] == "ready" else (
             "OPT" if item["status"] == "optional" else "FAIL")

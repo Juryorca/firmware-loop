@@ -15,22 +15,50 @@ ARCHES = {
     "mipsel": "qemu-mipsel",
     "mips": "qemu-mips",
 }
+# 只有 aarch64 有明确的特殊构建;其它架构仍用系统 QEMU。
+SPECIAL = {"aarch64": "qemu-aarch64-patched"}
+
+
+def _select_qemu(root: str, arch: str, requested: str | None) -> tuple[str | None, dict, str, str | None]:
+    """返回 (path, entry, 选中的名称, error)。配置失效不静默回退。"""
+    qemu_name = ARCHES[arch]
+    if requested:
+        path = requested
+        if os.path.sep not in path and not os.path.isfile(path):
+            path = shutil.which(path) or path
+        if not os.path.isfile(path):
+            return None, {}, path, f"指定的 qemu 不存在: {requested}"
+        return path, {}, path, None
+    special = SPECIAL.get(arch)
+    if special:
+        p, state = toolmeta.path_status(root, special)
+        if state == "ok":
+            return p, toolmeta.runtime(root, special), special, None
+        if state == "missing":
+            return None, toolmeta.runtime(root, special), special, f"配置的 {special} 路径不存在: {p}"
+        if state.startswith("invalid-config:"):
+            return None, {}, special, state.split(":", 1)[1]
+    p, state = toolmeta.path_status(root, qemu_name)
+    if state == "ok":
+        return p, toolmeta.runtime(root, qemu_name), qemu_name, None
+    if state == "missing":
+        return None, toolmeta.runtime(root, qemu_name), qemu_name, f"配置的 {qemu_name} 路径不存在: {p}"
+    if state.startswith("invalid-config:"):
+        return None, {}, qemu_name, state.split(":", 1)[1]
+    path = shutil.which(qemu_name)
+    if not path:
+        return None, {}, qemu_name, f"未找到 {qemu_name}(在 state/tools.json 配置 {qemu_name}.path 或 PATH 中提供)"
+    return path, {}, qemu_name, None
 
 
 def run(ctx: ToolContext, args: dict) -> dict:
     arch = str(args.get("arch") or "")
-    qemu_name = ARCHES.get(arch)
-    if not qemu_name:
+    if arch not in ARCHES:
         return {"status": "error", "error": f"不支持的 arch: {arch!r};可选 {sorted(ARCHES)}"}
-    requested = args.get("qemu")
-    entry = toolmeta.runtime(ctx.root, qemu_name)
-    qemu = str(requested) if requested else entry.get("path") or shutil.which(qemu_name)
-    if qemu and os.path.sep not in qemu and not os.path.isfile(qemu):
-        qemu = shutil.which(qemu) or qemu
-    if not qemu or not os.path.isfile(qemu):
-        return {"status": "error", "error": f"未找到 {qemu_name}" + (
-            f"(指定 qemu={requested})" if requested else
-            f";在 state/tools.json 配置 {qemu_name}.path 或 PATH 中提供")}
+    requested = str(args["qemu"]) if args.get("qemu") else None
+    qemu, entry, selected, err = _select_qemu(ctx.root, arch, requested)
+    if err or not qemu:
+        return {"status": "error", "error": err or "未找到 QEMU"}
     binary = str(args.get("binary") or "")
     if not binary:
         return {"status": "error", "error": "缺 binary"}
@@ -47,10 +75,11 @@ def run(ctx: ToolContext, args: dict) -> dict:
         cmd += ["-L", str(rootfs)]
     cmd += [binary] + extra
     timeout = num(args.get("timeout"), 30.0)
-    out = run_process(ctx, cmd, timeout=timeout, cwd=ctx.root,
-                      env=entry.get("env"))
+    out = run_process(ctx, cmd, timeout=timeout,
+                      cwd=entry.get("cwd") or ctx.root, env=entry.get("env"))
     out.setdefault("meta", {})
     out["meta"].update({"capability": "emu.user", "provider": qemu, "arch": arch,
                         "binary": binary, "rootfs": rootfs,
-                        "special": bool(requested) or qemu_name == "qemu-aarch64-patched"})
+                        "special": selected == "qemu-aarch64-patched",
+                        "qemu_name": selected})
     return out

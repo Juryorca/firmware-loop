@@ -24,7 +24,7 @@ description: 固件目标选择、版本获取与投入排序：厂商自研比�
 1. 记录来源 URL、文件大小、MD5/SHA256 到 `intel/firmware/<target>/SOURCE_URL.txt`。
 2. 官网 JS 壳页面用无头浏览器 MCP 找真实下载 API；拿到直链后回到 `curl` 下载并校验。
 3. OTA/云存储/更新器：先静态找 URL/签名/加密例程，再决定是否解包。
-4. 提取：binwalk/unblob 两者产出都查；加密/非标格式按 `knowledge/tool-quirks` 的经验处理。
+4. 提取：binwalk/unblob 两者产出都查；加密/非标格式先用 `knowledge_search(kind="guideline")` 查工具经验。
 5. 建立 rootfs 工作副本，记录版本、架构、提取工具与失败原因。
 
 ## 判据与边界

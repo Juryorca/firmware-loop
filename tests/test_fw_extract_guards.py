@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -209,3 +210,27 @@ def test_fast_burst_is_caught_by_final_check(tmp_path):
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 9, (r.returncode, r.stdout[-500:])
     assert ("ABORT=disk" in r.stdout) or ("ABORT=disk_after" in r.stdout), r.stdout[-500:]
+
+
+def test_unblob_metadata_env_cwd_are_used(tmp_path):
+    work = tmp_path / "w"
+    work.mkdir()
+    (work / "fw.bin").write_bytes(b"FW")
+    bindir = tmp_path / "bin"
+    marker = tmp_path / "unblob-meta.txt"
+    _stub(bindir, "binwalk", "echo ok\n")
+    fake = tmp_path / "unblob"
+    fake.write_text("#!/bin/sh\npwd > \"$MARKER\"\necho \"FOO=$FOO\" >> \"$MARKER\"\n", encoding="utf-8")
+    fake.chmod(0o700)
+    cfg = tmp_path / "tools.json"
+    cfg.write_text(json.dumps({"unblob": {"path": str(fake), "cwd": str(work),
+                                          "env": {"FOO": "bar", "MARKER": str(marker)}}}),
+                   encoding="utf-8")
+    r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")],
+                       cwd=str(work), env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
+                                           "FW_TOOL_CONFIG": str(cfg)},
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, (r.returncode, r.stdout[-500:], r.stderr[-300:])
+    text = marker.read_text(encoding="utf-8")
+    assert str(work) in text
+    assert "FOO=bar" in text

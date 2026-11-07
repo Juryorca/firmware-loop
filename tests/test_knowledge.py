@@ -98,3 +98,77 @@ def test_revision_keeps_history_and_requires_review(tmp_path):
     assert len(versions) == 2
     assert versions[-1]["body_md"] == "新的知识正文"
     assert versions[0]["body_md"] != versions[-1]["body_md"]
+
+
+def test_migrate_tool_quirks_merges_and_is_idempotent(tmp_path):
+    from fwcore.knowledge import migrate_tool_quirks
+    root, con = _root(tmp_path)
+    migrate_seed(root, con)
+    src = os.path.join(root, "knowledge", "tool-quirks.md")
+    with open(src, "w", encoding="utf-8") as f:
+        f.write("""# 工具怪癖与解法
+
+## 本机环境 | 禁止 conda 命令;Python 一律 pwn env 绝对路径 | (2026-09/用户规则)
+旧规则。
+
+## 工具 A | A 的坑 | (2026-09)
+正文 A。
+
+## ida-pro-mcp 无头 | B 的坑 | (2026-09)
+正文 B。
+
+## 工具 C | C 的坑 | (2026-09)
+正文 C。
+
+## 工具 D | D 的坑 | (2026-09)
+正文 D。
+
+## qemu-user 直调 CGI | 补齐 httpd 注入 env | (2026-09/DIR850L 实测)
+完整正文。
+""")
+    first = migrate_tool_quirks(root, con)
+    assert first["parsed"] == 6
+    assert first["merged"] == 2
+    assert first["inserted"] == 4
+    assert first["retired"] == 1
+    by_idx = {e["index"]: e for e in first["entries"]}
+    assert by_idx[3]["action"] == "merge"
+    assert by_idx[6]["action"] == "merge"
+    assert by_idx[2]["status"] == "deprecated"
+    merged = get(con, by_idx[6]["id"])
+    assert merged and "补齐 httpd 注入 env" in merged["body_md"]
+    assert "tool-quirk" in merged["tags"]
+    second = migrate_tool_quirks(root, con)
+    assert second["inserted"] == 0 and second["merged"] == 0
+    assert second["skipped"] == 6
+    assert stats(con)["total"] == 18
+
+
+def test_tool_quirks_source_is_gone_and_report_has_94_rows():
+    import re
+    assert not os.path.exists("knowledge/tool-quirks.md")
+    with open("docs/tool-quirks-migration.md", encoding="utf-8") as f:
+        text = f.read()
+    destinations = text.split("## 94 条逐条去向", 1)[1]
+    rows = re.findall(r"(?m)^\|\s*\d+\s*\|\s*`KN-[0-9a-f]+`\s*\|", destinations)
+    assert len(rows) == 94
+
+
+def test_current_tool_quirks_are_searchable_after_migration(tmp_path):
+    """本机权威 DB 的迁移验收；没有 DB 的干净环境跳过。"""
+    import sqlite3
+    db = "state/fwcore.sqlite3"
+    if not os.path.isfile(db):
+        return
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    try:
+        n = con.execute("SELECT count(*) FROM knowledge_entries WHERE source=?",
+                        ("knowledge/tool-quirks.md",)).fetchone()[0]
+        assert n == 94
+        assert con.execute("SELECT count(*) FROM knowledge_entries WHERE status='deprecated'"
+                           ).fetchone()[0] >= 3
+        for q in ("qemu-user", "ida", "afl", "unblob", "截图", "代理"):
+            assert search(con, q), q
+    finally:
+        con.close()

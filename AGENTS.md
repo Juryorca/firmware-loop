@@ -89,7 +89,7 @@
 | 流程细则(循环 / 清理 / 分诊 / 扫面提取 / 复核他人轮次) | `research-loop` Skill(完整参考 `references/LOOP.md`) |
 | 研究判据与经验(建场 / 强方法两轴 / 形态判读 / 技术经验) | `knowledge_search` / `knowledge_get`;静态参考 `knowledge/methodology.md` |
 | 可复用缺陷形态 / 勿报判据 | `knowledge_search`(SQLite `knowledge_entries`;旧两份 Markdown 仅原始来源) |
-| 工具怪癖 / SDK 特征 / 已验证利用链 / 情报与实证 | `knowledge/{tool-quirks,sdk-bloodlines,exploits-validated,intel-log}.md` |
+| 工具经验/怪癖 / SDK 特征 / 已验证利用链 / 情报与实证 | 工具经验用 `knowledge_search(kind="guideline")`；SDK/利用链/情报为 `knowledge/{sdk-bloodlines,exploits-validated,intel-log}.md` 静态参考 |
 | 知识库入口 | `knowledge_search` / `knowledge_get` / `knowledge_propose` / `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`;静态参考 `knowledge/INDEX.md`;准入见本文件「Knowledge Base」 |
 | 权威研究事实(假设/尝试/观察/证据/结论/面) | `state/<目标>/state/fwcore.sqlite3`(用 `state_*` 工具写) |
 | 叙述/理由/下一步指针 | `state/<目标>/notes.md` |
@@ -102,13 +102,13 @@
 - 已装(2026-09-21): **`afl++` 5.02c**(含 `afl-fuzz`/`showmap`/`tmin`/`cmin`/`clang-fast`;**不含** qemu/frida 模式)、
   `libglib2.0-dev` `libpixman-1-dev` `ninja-build`(构建 afl++ qemu_mode 的依赖); **`lld`**(交叉编译垫片用:`clang --target=aarch64-linux-gnu -shared -nostdlib -fuse-ld=lld` ✓)系统自带 `qemu-system-x86_64`/`qemu-x86_64`
 - 自建 fuzz 组件(产物按架构分目录,`AFL_PATH` 选):x86_64 `afl-qemu-trace`(2.7MB)+`libqasan.so` 在 `/usr/local/bin`;
-  **aarch64 无可用 tracer**(`~/.local/bin/afl-aarch64/…` 实测是 x86-64 ⇒ `arch_mismatch`)⇒ **ARM 目标 fuzz 默认不可用**;
-  重建/换架构配方与判读见 `knowledge/tool-quirks.md`「`afl-qemu-trace` 可能只编译了单一架构」。
-- **补丁版 qemu-user(解 netlink 白名单)**: `qemu-aarch64-patched`(49 MB 静态,装于 `~/.local/bin/`)—— 上游 qemu-user 对 netlink 协议是**硬编码白名单**
+  **aarch64 tracer 是否存在/可用由 `state/tools.json` 的 `afl-aarch64` + capability 探针决定**；`arch_mismatch` 时 ARM 目标 fuzz 不可用，不要靠猜目录；
+  重建/换架构配方与判读用 `knowledge_search("afl-qemu-trace 架构")`（`tool-quirk` 知识）。
+- **补丁版 qemu-user(解 netlink 白名单)**: `qemu-aarch64-patched` 由 `state/tools.json` 的 `path` 定位 —— 上游 qemu-user 对 netlink 协议是**硬编码白名单**
   (只放行 ROUTE/KOBJECT_UEVENT/AUDIT)⇒ `NETLINK_NETFILTER`(NFQUEUE 类 daemon)/`SOCK_DIAG`/`XFRM`/`GENERIC` 全被拒。
   **已装好,各轮直接用**:`qemu-aarch64-patched -L <rootfs> <guest_bin>`;判读探针在 `tools/qemu-nl-probe/`,
-  `tools/check.sh` 有 INFO 行;**32 位/大端边界见 `knowledge/tool-quirks.md`**
-- Windows 工具: 完整路径 /mnt/d/ida9.3/idat.exe、/mnt/c/Windows/System32/...(/mnt/c、/mnt/d 即 Windows 的 C:/D: 盘)
+  `tools/check.sh` 有 INFO 行;**32 位/大端边界用 `knowledge_search("qemu-user 32 位 大端")`**
+- Windows 工具路径由 `tools/ida_env.sh` / `state/ida.json` 解析；不要在指令里写死盘符或用户名
 - 本机代理会劫持 localhost: 任何 curl 加 --noproxy '*';
   webfetch/fetch 工具同理且**无超时** —— 对 127.0.0.1 本地端点(如 IDA MCP)永远用
   curl --noproxy 或 ida_call.sh,用 webfetch 会无限挂死
@@ -121,9 +121,9 @@
     配置缺项时工具会报"缺哪个 exe/目录/挂载点",那不是 IDA 分析失败。
 
 ### 登记维护义务(每次装包/建环境/卸载后执行)
-- 新建环境 → 登记表加一行
-- 新装/卸载重要工具 → 「环境清单」提取器表同步 ✓/✗ 状态
-- 版本变更 → 修正对应行
+- 新工具/新路径 → 写入 `state/tools.json`（path/python/cwd/env），再跑 `fw-core toolset`/`capabilities` 真实验证；
+- 不要求为每次安装改本文件的「环境清单」；本文件只留长期稳定的使用原则；
+- 工具行为/限制/安装坑 → `knowledge_propose(kind="guideline", tags=["tool-quirk", "<tool>"])`；不要写回静态 Markdown。
 
 ## 循环守则
 
@@ -132,7 +132,7 @@
 3. 失败先分诊(**假设 / 环境 / 信号**三层),修正后重跑,禁止盲目重试(判据见 `research-loop` Skill(`references/LOOP.md`)「失败分诊」)。
 4. Windows IDA: `tools/ida_start.sh`(幂等)→ `tools/ida_call.sh` 查询 → `tools/ida_stop.sh` 停止。
 5. 范围门控: 仅 PoC 级验证、仅授权目标;不做武器化、不做沙箱逃逸(探测/交付边界见下方「交付原则」)。
-6. 前提验证: 任务/用户给的前提(如"已加密")同为待验证假设 —— 先指纹实证;证伪即改道,并把"前提修正"记入 `knowledge/tool-quirks.md`。
+6. 前提验证: 任务/用户给的前提(如"已加密")同为待验证假设 —— 先指纹实证;证伪即改道,并把"前提修正"用 `knowledge_propose` 记为 `guideline`（tags 含对应工具/前提）。
 7. 工作区清理(收尾必做,**不等用户问**): **规则见 `research-loop` Skill(`references/LOOP.md`)「清理与生命周期」(唯一所在)**;只有两档 —— **使用中 / 收尾未归档(含"提交中、等厂商回复")处理相同**:只清垃圾(`/tmp`、会话日志、运行残留、队列用不到的 `artifacts/`),**不释放运行载体与原件**;只有**用户宣布「归档/不要了」**后一次性释放 运行载体·派生物·原件(原件须满足"可重下"三条件);**只说"收尾"时运行载体照留**(复核/PoC 要用)⇒ 知识 / 对外材料(`report/`)/ 重下凭据永久保留(**`artifacts/` 是内部证据,不属永久保留** ⇒ 见 `research-loop` Skill 两档表 ✓)。
 
 
@@ -186,6 +186,9 @@
 ## Knowledge Base: Research Knowledge(准入 / 归属 / 检索)
 
 **定位**: 跨 Target、证据驱动、可审核修订的**研究知识**,不是案例档案库,也不是静态 Prompt。
+工具经验与漏洞研究知识共用 SQLite,但**准入标准不同**,不能互相套用。
+
+### 研究知识(漏洞形态/误报/方法)
 
 **只收**:
 - 能缩短未来分析路径的判据/形态/排除条件;
@@ -199,26 +202,44 @@
 - 当前 Target 的假设/证据/结论(它们在 research state);
 - 没有跨目标复用价值的“案例全文”。
 
-**存储**:
+### 工具经验(工具行为/限制/安装/环境)
+
+工具数量有限、日常反复使用;**不要求跨目标通用**。一个不明显的工具行为、版本限制、
+环境要求或特殊用法,即使只适用于一个工具/版本/架构/环境,只要能避免未来重复试错、
+错误使用或浪费时间,就值得保留。
+
+- **收**: 工具的特殊限制、安装/构建经验、兼容问题、容易踩的坑、已验证的解决方法、
+  失败条件与反例边界;
+- **不收**: 每条普通命令、网上低成本可查的通用用法、没有判据的“我试过”;
+- 记录时用 `kind=guideline`,tags 至少含 `tool-quirk` 和对应工具名(如 `qemu`、`ida`、`afl`);
+- 正文保留工具名、版本/环境、日期、原始来源标签、判据/反例;
+- 工具经验只是参考,**不能冒充当前目标的 observation/evidence**;当前机器路径写 `state/tools.json`,
+  不要把某台机器的绝对路径当成跨目标知识。
+
+### 存储与使用
+
 - 正式知识:SQLite `knowledge_entries`(正文 `body_md` + kind/tags/status/source);
 - 版本:`knowledge_entry_versions`,修改不覆盖历史;
-- 检索:FTS5 + 结构化过滤;同时搜 `pattern`(正向)与 `misreport`(反向);
+- 检索:FTS5 + 结构化过滤;同时搜 `pattern`(正向)、`misreport`(反向)与 `guideline`(判据/工具经验);
 - 旧 `knowledge/vuln-patterns.md` / `misreports.md` 仅作**原始来源**,不常驻、不是运行时权威;
+- `knowledge/tool-quirks.md` 已迁移到 SQLite 并移出工作树;**不再作为运行时知识权威**;
 - 结构化只保留最小分类/检索信息,不要求每条填十几个字段。
 
 **生命周期**: Agent 自己判断是否记录;记录即为 `approved`。后续可 `deprecated` / `superseded`;不设 `draft`/`needs_review`/人工批准中间态。
-记录前只问: 这条经验能否跨目标复用? 是否真能节省后续分析成本? 不能则不记。
+研究知识记录前问:这条经验能否跨目标复用? 是否真能节省后续分析成本?
+工具经验记录前问:它能否避免未来重复试错、错误使用或浪费时间? **不要求**跨目标复用。
 
 **使用**:
 - 先 `knowledge_search`,需要全文再 `knowledge_get`;
 - 历史知识只作参考,**不能直接作为当前 Target 的证据**;
 - 不把知识库正文塞进 System Prompt;
-- 检索义务:组件名/形态先查知识库;公开 CVE/公告只进排除清单。
+- 检索义务:组件名/形态/工具现象先查知识库;公开 CVE/公告只进排除清单。
 
 **旧 Markdown 归属**:
-- `knowledge/methodology.md`、`tool-quirks.md`、`sdk-bloodlines.md`、`exploits-validated.md`、`intel-log.md` = 静态参考,按需 fs_read;
+- `knowledge/methodology.md`、`sdk-bloodlines.md`、`exploits-validated.md`、`intel-log.md` = 静态参考,按需 fs_read;
 - `knowledge/research-knowledge.md` = 研究知识迁移种子(DB 导入源,不常驻);
-- `knowledge/INDEX.md` = 索引/来源说明,不是运行时 Prompt。
+- `knowledge/INDEX.md` = 索引/来源说明,不是运行时 Prompt;
+- `knowledge/tool-quirks.md` = 已迁移的旧源文件(Git 历史保留,不作为当前入口)。
 
 ## 报告产出(硬性要求)
 
@@ -333,16 +354,15 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **docker 29.1.3 可用**;容器补的是 **qemu-user 缺的那层**(真 `/dev`、真挂载、多进程;跑发行版镜像时才有真 init/systemd)⇒ **按面缺哪层补哪层**,不是"越真越好"(见 `knowledge/methodology.md`「模拟方式按"缺哪层补哪层"选」)。
 - **用完必清**:容器 `docker rm -f <自己名字>` + 镜像 `docker rmi <自己构建的>`;**禁** `docker system prune -a`(本机有别的项目的镜像)。
 - **挂载隔离**:只挂本目标目录;禁挂 `/`、`/home`、`/etc`、`/mnt/c`、`/mnt/d`;容器内脚本禁止对宿主路径 `rm -rf`。
-- **user-mode 侧先用补丁版**: 解 netlink 白名单的 **`qemu-aarch64-patched`**(`~/.local/bin/`,环境清单已登记)⇒ NFQUEUE/`SOCK_DIAG`/`XFRM`/`GENERIC` 类 daemon 在 qemu-user 下也能跑,**别为这些面去起容器**;容器留给它真正独有的东西(真 `/dev`、真挂载、多进程 —— `--privileged` 只为 `CAP_SYS_ADMIN`)。判读探针 `tools/qemu-nl-probe/`。
+- **user-mode 侧先用补丁版**: 解 netlink 白名单的 **`qemu-aarch64-patched`** 通过 `state/tools.json` 的 `path` 定位；`qemu_user` 在 aarch64 且该元数据存在时会自动优先它。⇒ NFQUEUE/`SOCK_DIAG`/`XFRM`/`GENERIC` 类 daemon 在 qemu-user 下也能跑,**别为这些面去起容器**;容器留给它真正独有的东西(真 `/dev`、真挂载、多进程 —— `--privileged` 只为 `CAP_SYS_ADMIN`)。判读探针 `tools/qemu-nl-probe/`。
 - ⚠️ **`qemu-user` 的 `-L`/LD_PREFIX 只翻译"文件类系统调用";`execve` 不翻译** ⇒ guest 里 `system()`/`popen()`/`execve("/bin/sh")`
   跑的是**宿主**的程序与文件系统 ⇒ **"设备执行了某条命令 / 读到了设备上的文件"这类结论不能由 `qemu-user -L` 得出** ✗(只有"确实发起了一次 system/exec"可用 ✓)。
-  要判**设备侧**行为 ⇒ 用能保证"**子进程 `exec` 也落在该 rootfs 内**"的方式即可 —— **chroot**(最省事:`unshare -r` 免 root,rootfs 内放宿主架构的**静态** qemu)、**容器**(docker/podman)、**`binfmt_misc`+`qemu-user-static`**(内核自动跑 aarch64,rootfs 里不必放 qemu)、**`proot`**(纯用户态、免 root 但慢)都是**等价路线**,按环境取用 ✓;判据/配方/检测口诀见 `knowledge/tool-quirks.md` ✓。
-- **整机仿真(`qemu-system`)的适用范围**:只对**能整机启动**的目标(本工作区实测 = CHR x86_64);厂商固件多为非标 boot ⇒ 通常**启动不了**,别硬试,退回 qemu-user 或容器。具体配方见 `knowledge/tool-quirks.md`(docker/privileged 跑 daemon 那条)。
+  要判**设备侧**行为 ⇒ 用能保证"**子进程 `exec` 也落在该 rootfs 内**"的方式即可 —— **chroot**(最省事:`unshare -r` 免 root,rootfs 内放宿主架构的**静态** qemu)、**容器**(docker/podman)、**`binfmt_misc`+`qemu-user-static`**(内核自动跑 aarch64,rootfs 里不必放 qemu)、**`proot`**(纯用户态、免 root 但慢)都是**等价路线**,按环境取用 ✓;判据/配方/检测口诀用 `knowledge_search("qemu-user execve system popen")` ✓。
+- **整机仿真(`qemu-system`)的适用范围**:只对**能整机启动**的目标(本工作区实测 = CHR x86_64);厂商固件多为非标 boot ⇒ 通常**启动不了**,别硬试,退回 qemu-user 或容器。具体配方用 `knowledge_search("docker privileged qemu daemon")`。
 
 ### 取件 / JS 页面(2026-10-27)
-- **无头浏览器 MCP**:`chrome-devtools`(用户级 `~/.pi/agent/mcp.json`;`pi mcp list` ⇒ `connected, 32 tools`)。
-  参数:`--headless --isolated --executablePath /usr/bin/chromium --proxyServer <本机代理:7892> --viewport 1280x720`。
-- 边界:真 Chromium ⇒ 只碰公开页,不代填密码;流量走宿主代理(代理变了改 `mcp.json`);改配置后 `/reload`。
+- **无头浏览器 MCP**:`chrome-devtools` 配置由 `FW_MCP_CONFIG` 或 `state/mcp.json` 提供（当前运行时若不支持该 transport，会如实报 `not_started/partial`）。
+- 边界:真 Chromium ⇒ 只碰公开页,不代填密码;流量走宿主代理;改配置后按当前 harness 的 MCP 重新连接方式处理。
 
 - **能力探针(取代记忆)**:`python3 -m fwcore capabilities`(或 `fw-core capabilities`)列出
   能力 → provider → 状态(`ready/partial/deps_missing/not_started/arch_mismatch/missing`);
@@ -379,7 +399,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 
 ### 提取工具
 - binwalk: 系统 PATH(或 `state/tools.json` 的 `binwalk.path`)
-- unblob: 用 `state/tools.json` 的 `unblob.path` / `unblob.python` 定位(独立 venv 26.6.4)
+- unblob: 用 `state/tools.json` 的 `unblob.path` / `unblob.python` 定位；含外部提取器的环境 PATH 也由元数据 `env` 提供
   ★ 特殊说明:unblob 是 binwalk 的互补而非替代 —— 厂商魔改/非标打包固件 binwalk
     提不出时用它;用法 `unblob -e <输出目录> <固件>`;它依赖一批外部提取器,
     缺哪个对应格式就静默失败(见下表);两个工具的产出目录都要检查
@@ -390,9 +410,9 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 | 7z/7za | ✓ | 多种压缩/归档 | - |
 | debugfs | ✓(ext2/3/4) | ext 系列 | - |
 | zstd | ✓ | zstd | - |
-| sasquatch/sasquatch-v4be | ✓(2026-09-13 自建) | **厂商魔改 SquashFS(路由器最常见)** | ⚠️ `pip install sasquatch` 是 PyPI 同名无关包,**不可行**;改从 devttys0/sasquatch 源码构建(见 tool-quirks.md) |
-| jefferson | ✗ | JFFS2(嵌入式常见) | unblob venv: pip install jefferson |
-| ubireader_extract_files/images | ✗ | UBI/UBIFS(NAND 常见) | unblob venv: pip install ubi_reader |
+| sasquatch/sasquatch-v4be | 按当前 toolset 状态 | **厂商魔改 SquashFS(路由器最常见)** | 安装/构建经验用 `knowledge_search("sasquatch 构建")`；不要 `pip install sasquatch` |
+| jefferson | 按当前 toolset 状态 | JFFS2(嵌入式常见) | 装到 `state/tools.json` 中 unblob.python 对应的环境 |
+| ubireader_extract_files/images | 按当前 toolset 状态 | UBI/UBIFS(NAND 常见) | 装到 unblob 对应环境；具体坑用 `knowledge_search("ubireader")` |
 | simg2img | ✗ | Android sparse | apt install simg2img |
 | lz4 / lzop / lziprecover / unar | ✗ | 各压缩格式 | apt install lz4 lzop lziprecover unar |
 | fsck.erofs | ✗ | EROFS | apt install erofs-utils |

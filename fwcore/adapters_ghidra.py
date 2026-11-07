@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+from . import toolmeta
 from .toolreg import num, run_process
 from .tools import ToolContext
 
@@ -32,7 +33,12 @@ def run(ctx: ToolContext, args: dict) -> dict:
     cmd += script_args
     if args.get("cleanup"):
         cmd.append("-deleteProject")
-    out = run_process(ctx, cmd, timeout=num(args.get("timeout"), 300.0), cwd=ctx.root)
+    try:
+        entry = toolmeta.runtime(ctx.root, "ghidra")
+    except toolmeta.ToolConfigError as e:
+        return {"status": "error", "error": f"工具元数据不可用: {e}"}
+    out = run_process(ctx, cmd, timeout=num(args.get("timeout"), 300.0),
+                      cwd=entry.get("cwd") or ctx.root, env=entry.get("env"))
     # Ghidra/Java 的 stdout 很噪；把脚本产物做成给模型看的结构化摘要，
     # 原始 stdout/stderr 仍保留在 out 的路径里。
     if out.get("status") == "ok" and script_args:

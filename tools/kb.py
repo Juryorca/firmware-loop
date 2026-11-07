@@ -36,7 +36,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.join(os.path.dirname(HERE), "knowledge")
-FILES_ORDER = ["vuln-patterns.md", "misreports.md", "methodology.md", "tool-quirks.md",
+FILES_ORDER = ["vuln-patterns.md", "misreports.md", "methodology.md",
                "exploits-validated.md", "sdk-bloodlines.md", "intel-log.md"]
 
 def today():
@@ -92,13 +92,22 @@ def index_sync(root, verbose=True):
             if verbose: print(f"  {n}: 无 `## ` 小节 ⇒ 跳过计数(不用 0 覆盖 INDEX)")
             continue
         cnt = len(re.findall(r"(?m)^## ", body))
-        def _sub(m, cnt=cnt):
-            return f"{m.group(1)}{cnt}{m.group(3)}{today()}"
-        t2, k = re.subn(r"(\| `" + re.escape(n) + r"` \|[^|]*\| )(\d+)( \|[^|]*\| )\d{4}-\d{2}-\d{2}",
-                        _sub, t)
-        if k and verbose: print(f"  {n}: 条数→{cnt} 更新→{today()}")
-        if not k: print(f"  ⚠ INDEX.md 里没有 {n} 的登记行(不静默)")
-        t = t2
+        lines = t.split("\n")
+        changed = False
+        for i, line in enumerate(lines):
+            if not line.startswith(f"| `{n}`"):
+                continue
+            fields = line.split("|")
+            # ['', ' `name` ', ' description ', ' count ', '']
+            if len(fields) >= 5 and fields[3].strip().isdigit():
+                fields[3] = f" {cnt} "
+                lines[i] = "|".join(fields)
+                changed = True
+        if changed:
+            t = "\n".join(lines)
+            if verbose: print(f"  {n}: 条数→{cnt}")
+        elif verbose:
+            print(f"  ⚠ INDEX.md 里没有 {n} 的登记行(不静默)")
     write_atomic(idx, t)
 
 def write_atomic(path, text):
@@ -359,38 +368,38 @@ def cmd_selftest():
     ok = True; steps = []
     r = run("check");            ok &= r.returncode == 0;                     steps.append(("check 通过", r.returncode == 0, r.stdout.strip()[:60]))
     good = os.path.join(tmp, "good.md"); open(good, "w").write("- **判据**: 自检用\n- **实证**: 自检\n")
-    before = rowcount("tool-quirks.md")
-    r = run("add", "tool-quirks.md", "--title", "SELFTEST 临时条目", "--body", good)
-    after = rowcount("tool-quirks.md")
-    wrote = "SELFTEST 临时条目" in open(os.path.join(root, "tool-quirks.md"), encoding="utf-8").read()
+    before = rowcount("misreports.md")
+    r = run("add", "misreports.md", "--title", "SELFTEST 临时条目", "--body", good)
+    after = rowcount("misreports.md")
+    wrote = "SELFTEST 临时条目" in open(os.path.join(root, "misreports.md"), encoding="utf-8").read()
     ok &= (r.returncode == 0 and wrote and after == before + 1)
     steps.append(("add 成功 + INDEX 条数 +1", r.returncode == 0 and wrote and after == before + 1, f"{before}→{after}"))
     bad = os.path.join(tmp, "bad.md"); open(bad, "w").write("- 体\n```\n")   # 未闭合围栏 ⇒ 结构必坏
-    r = run("add", "tool-quirks.md", "--title", "SELFTEST 坏条目", "--body", bad)
-    _now = open(os.path.join(root, "tool-quirks.md"), encoding="utf-8").read()
+    r = run("add", "misreports.md", "--title", "SELFTEST 坏条目", "--body", bad)
+    _now = open(os.path.join(root, "misreports.md"), encoding="utf-8").read()
     rolled = ("未落盘" in r.stdout or "回滚" in r.stdout) and ("SELFTEST 坏条目" not in _now)
     ok &= (r.returncode == 2 and rolled)
     steps.append(("写坏 ⇒ 落盘前拦下(或回滚)", r.returncode == 2 and rolled, r.stdout.strip()[:56]))
-    r = run("append-line", "tool-quirks.md", "--entry", "SELFTEST 临时条目", "--line", "实例: 自检追加")
-    app = "实例: 自检追加" in open(os.path.join(root, "tool-quirks.md"), encoding="utf-8").read()
+    r = run("append-line", "misreports.md", "--entry", "SELFTEST 临时条目", "--line", "实例: 自检追加")
+    app = "实例: 自检追加" in open(os.path.join(root, "misreports.md"), encoding="utf-8").read()
     ok &= (r.returncode == 0 and app); steps.append(("append-line 可用", r.returncode == 0 and app, ""))
-    r = run("downgrade", "tool-quirks.md", "--entry", "SELFTEST 临时条目", "--note", "自检")
-    dg = "降级说明(" in open(os.path.join(root, "tool-quirks.md"), encoding="utf-8").read()
+    r = run("downgrade", "misreports.md", "--entry", "SELFTEST 临时条目", "--note", "自检")
+    dg = "降级说明(" in open(os.path.join(root, "misreports.md"), encoding="utf-8").read()
     ok &= (r.returncode == 0 and dg); steps.append(("downgrade 可用", r.returncode == 0 and dg, ""))
     r = run("check");            ok &= r.returncode == 0;                     steps.append(("改后 check 仍通过", r.returncode == 0, ""))
     # ③ 不变量:内容变短 / 丢条目 必须被拒
-    whole = open(os.path.join(root, "tool-quirks.md"), encoding="utf-8").read()
+    whole = open(os.path.join(root, "misreports.md"), encoding="utf-8").read()
     iv = content_invariant("append-line", whole, whole[: int(len(whole) * 0.5)])
     ok &= bool(iv); steps.append(("内容变短/丢条目 ⇒ 被拒", bool(iv), (iv[0] if iv else "")))
     # ④ 并发:4 路 add 并行 ⇒ 全部落盘 + INDEX 恰好 +4(锁生效才可能)
     import concurrent.futures
     cb = os.path.join(tmp, "c.md"); open(cb, "w").write("- 并发测试条目\n")
-    before = rowcount("tool-quirks.md")
+    before = rowcount("misreports.md")
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        rs = list(ex.map(lambda i: run("add", "tool-quirks.md", "--title", f"SELFTEST 并发 {i}", "--body", cb), range(4)))
-    after = rowcount("tool-quirks.md")
-    txt = open(os.path.join(root, "tool-quirks.md"), encoding="utf-8").read()
-    cok = all(r.returncode == 0 for r in rs) and after == before + 4 and all(f"SELFTEST 并发 {i}" in txt for i in range(4)) and not file_issues(os.path.join(root, "tool-quirks.md"))
+        rs = list(ex.map(lambda i: run("add", "misreports.md", "--title", f"SELFTEST 并发 {i}", "--body", cb), range(4)))
+    after = rowcount("misreports.md")
+    txt = open(os.path.join(root, "misreports.md"), encoding="utf-8").read()
+    cok = all(r.returncode == 0 for r in rs) and after == before + 4 and all(f"SELFTEST 并发 {i}" in txt for i in range(4)) and not file_issues(os.path.join(root, "misreports.md"))
     ok &= cok; steps.append(("4 路并发 add 全部落盘 + INDEX 恰 +4", cok, f"{before}→{after}"))
     print("  === kb.py 自检(临时副本,不碰真库)===")
     for name, good_, extra in steps:

@@ -246,7 +246,7 @@ firmware update callback)。**通用判据**: 先问"回调地址由谁选定、
 - 证据: `Ubiquiti-UniFiOSServer-5.1.42/artifacts/recon/round5-public-mount-enumeration.txt`、notes §12.2(O17)。
 - **同族变体(WS)**: 「WebSocket 升级返回 **101 Switching Protocols** ⇒ 认证通过」同样不成立。实测未知路径
   `/api/ws/nonexistent-xyz` 也返回 **101**,应用是先接收升级、再在处理器里 `close()`/回 ERROR 文本。
-  判据: 看**升级之后的帧**(ERROR 文本 / 关闭码 / 是否回 PONG),而不是握手状态码。详见 `tool-quirks.md`
+  判据: 看**升级之后的帧**(ERROR 文本 / 关闭码 / 是否回 PONG),而不是握手状态码。详见 `knowledge_search("WebSocket 升级探测")`
   的「WebSocket 升级探测」条(探测方法权威副本在该条)。
 
 ## 反例 11:「Go 请求处理器 panic(`CODE_DIRECTORY_PANIC` 之类)⇒ 漏洞」不成立,除非能证明外泄/崩进程/坏状态 | (2026-09-21/Ubiquiti UniFi OS Server)

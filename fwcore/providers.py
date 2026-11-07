@@ -157,7 +157,8 @@ def afl_tracer_provider(dirpath: str, arch: str, kind: str = "built",
                     probe=probe)
 
 
-def qemu_provider(binary: str, *, netlink: bool, root: str | None = None) -> Provider:
+def qemu_provider(binary: str, *, netlink: bool, root: str | None = None,
+                  sample_roots: list[str] | None = None) -> Provider:
     entry = toolmeta.runtime(root, binary) if root else {}
 
     def _path() -> str | None:
@@ -165,16 +166,41 @@ def qemu_provider(binary: str, *, netlink: bool, root: str | None = None) -> Pro
             return entry["path"] if os.path.isfile(entry["path"]) else None
         return shutil.which(binary) or (binary if os.path.isfile(binary) else None)
 
+    def _sample() -> tuple[str, str] | None:
+        if not netlink:
+            return None
+        for rootfs in sample_roots or []:
+            for rel in ("bin/busybox", "usr/bin/busybox"):
+                p = os.path.join(rootfs, rel)
+                if os.path.isfile(p):
+                    return p, rootfs
+        return None
+
     def probe() -> Probe:
         path = _path()
         if not path:
-            return Probe(MISSING, f"未安装 {binary}")
-        _rc, out = _run([path, "--version"], 5)
-        ver = out.splitlines()[0] if out else ""
-        return Probe(READY if netlink else PARTIAL,
-                     "支持 NETLINK_NETFILTER(SOCK_DIAG/XFRM/GENERIC 类 daemon)" if netlink
-                     else "上游白名单:NETLINK_NETFILTER 被拒(NFQUEUE 类 daemon 跑不了)",
-                     version=ver, path=path, evidence="reachable")
+            return Probe(MISSING, f"未安装或未配置 {binary}")
+        rc, out = _run([path, "--version"], 5, cwd=entry.get("cwd"), env=entry.get("env"))
+        if rc != 0 or not out:
+            return Probe(MISSING, f"{binary} 存在但 `--version` 失败(exit {rc})", path=path)
+        ver = out.splitlines()[0][:120]
+        if not netlink:
+            return Probe(PARTIAL,
+                         "上游白名单:NETLINK_NETFILTER 被拒(NFQUEUE 类 daemon 跑不了)",
+                         version=ver, path=path, evidence="reachable")
+        sample = _sample()
+        if not sample:
+            return Probe(PARTIAL,
+                         "二进制可执行;无 aarch64 guest 样本,netlink 行为未实测",
+                         version=ver, path=path, evidence="reachable")
+        binpath, rootfs = sample
+        rc2, out2 = _run([path, "-L", rootfs, binpath, "--help"], 15,
+                         cwd=entry.get("cwd"), env=entry.get("env"))
+        if rc2 != 0:
+            return Probe(PARTIAL, f"可执行,但 guest 样本运行失败(exit {rc2}): {out2[-160:]}",
+                         version=ver, path=path, evidence="configured")
+        return Probe(READY, f"version + guest 样本实测({os.path.basename(binpath)})",
+                     version=ver, path=path, evidence="verified")
     return Provider(id=f"{os.path.basename(binary)}", kind="built" if netlink else "system",
                     resolve=lambda: {"argv_prefix": [_path() or binary], "netlink": netlink,
                                      "cwd": entry.get("cwd"), "env": entry.get("env")},
@@ -291,12 +317,13 @@ def system_tool_provider(root: str, name: str, extra: list[str] | None = None,
 
 
 def ghidra_provider(root: str) -> Provider:
-    """Ghidra 入口优先读 state/tools.json;其次 GHIDRA_HOME/PATH,不做目录大扫描。"""
+    """Ghidra 入口优先读 state/tools.json;未配置才允许 GHIDRA_HOME/PATH 兜底。"""
     entry = toolmeta.runtime(root, "ghidra")
+    configured = entry.get("path")
 
     def _find() -> str | None:
-        if entry.get("path") and os.path.isfile(entry["path"]):
-            return entry["path"]
+        if configured:
+            return configured if os.path.isfile(configured) else None
         for key in ("GHIDRA_HOME", "GHIDRA_INSTALL_DIR"):
             v = os.environ.get(key)
             if v:
@@ -308,8 +335,10 @@ def ghidra_provider(root: str) -> Provider:
     def probe() -> Probe:
         p = _find()
         if not p:
+            if configured:
+                return Probe(MISSING, f"配置的 Ghidra 路径不存在: {configured}", path=configured)
             return Probe(MISSING, "未找到 analyzeHeadless(Ghidra 未安装/未配置 GHIDRA_HOME)")
-        _rc, out = _run([p, "-help"], 30)
+        _rc, out = _run([p, "-help"], 30, cwd=entry.get("cwd"), env=entry.get("env"))
         # analyzeHeadless 的 -help 用非 0 退出码表示用法;有 Usage 就说明入口可用
         if "Headless Analyzer Usage" in out or "analyzeHeadless" in out.lower():
             return Probe(READY, "analyzeHeadless 可执行(静态探针)", path=p, evidence="reachable")
@@ -413,7 +442,8 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
         "fuzz.aarch64": Capability("fuzz.aarch64", "对 aarch64 guest 做覆盖率/变异 fuzz",
                                    afl_providers, target_arch="aarch64"),
         "emu.aarch64": Capability("emu.aarch64", "用户态仿真 aarch64(含 netlink 白名单解除)", [
-            qemu_provider("qemu-aarch64-patched", netlink=True, root=root),
+            qemu_provider("qemu-aarch64-patched", netlink=True, root=root,
+                          sample_roots=_guest_roots(root)),
             qemu_provider("qemu-aarch64", netlink=False, root=root),
         ], target_arch="aarch64"),
         "symbolic.angr": Capability("symbolic.angr", "符号执行(angr)", [

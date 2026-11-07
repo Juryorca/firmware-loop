@@ -47,7 +47,8 @@ def test_qemu_netlink_semantics_are_not_interchangeable():
     pr_p, pr_u = patched.probe(), upstream.probe()
     if pr_p.status == "missing" or pr_u.status == "missing":
         return  # 本机没装就不硬断言
-    assert pr_p.status == READY
+    # 没有 guest 样本时，patched 也只能是 partial；netlink=True 不能单独证明可用。
+    assert pr_p.status == "partial" and "样本" in pr_p.detail
     assert pr_u.status == "partial" and "NETLINK" in pr_u.detail
 
 
@@ -89,3 +90,40 @@ def test_toolmeta_missing_config_is_empty(tmp_path):
     assert toolmeta.load(str(tmp_path)) == {}
     assert toolmeta.runtime(str(tmp_path), "unblob") == {}
     assert toolmeta.path(str(tmp_path), "unblob") is None
+
+
+def test_toolmeta_corrupt_json_is_not_silent(tmp_path):
+    from fwcore import toolmeta
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, "state"))
+    with open(os.path.join(root, "state", "tools.json"), "w", encoding="utf-8") as f:
+        f.write("{broken")
+    assert toolmeta.status(root)["valid"] is False
+    try:
+        toolmeta.load(root)
+    except toolmeta.ToolConfigError as e:
+        assert "JSON" in str(e)
+    else:
+        raise AssertionError("corrupt tools.json must raise ToolConfigError")
+    st = toolmeta.path_status(root, "ghidra")
+    assert st[1].startswith("invalid-config:")
+
+
+def test_ghidra_configured_missing_does_not_fallback(tmp_path, monkeypatch):
+    from fwcore.providers import ghidra_provider
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, "state"))
+    with open(os.path.join(root, "state", "tools.json"), "w", encoding="utf-8") as f:
+        f.write('{"ghidra": {"path": "/no/such/analyzeHeadless"}}')
+    monkeypatch.setenv("GHIDRA_HOME", "/also/no/such")
+    pr = ghidra_provider(root).probe()
+    assert pr.status == "missing"
+    assert "配置的 Ghidra 路径不存在" in pr.detail
+
+
+def test_inventory_does_not_read_python_env_queue(monkeypatch, tmp_path):
+    import fwcore.pyenvs as pyenvs
+    monkeypatch.setattr(pyenvs, "select", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not use pyenvs")))
+    monkeypatch.setattr(pyenvs, "load", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not use pyenvs")))
+    inv = inventory(str(tmp_path))
+    assert inv

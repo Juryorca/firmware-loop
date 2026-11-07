@@ -102,8 +102,8 @@ python3 -m fwcore.pyenvs --select json
 
 ## 禁止
 
-- 不迁移/不改 94 条 tool-quirks；
 - 不把仅配置存在当成服务 ready；
+- 工具经验记录到 SQLite（`kind=guideline`, tags 含 `tool-quirk`），不再写回 `knowledge/tool-quirks.md`；
 - 不把工具执行状态当漏洞结论；
 - 不在未授权时安装外部服务/账号依赖；
 - 不为“完整度”制造占位工具或伪造调用记录；

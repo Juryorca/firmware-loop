@@ -22,7 +22,9 @@ from .db import Tx
 KINDS = ("pattern", "misreport", "guideline")
 STATUSES = ("approved", "deprecated", "superseded")  # Agent 直接记录；不设中间审核态
 SEED_FILE = "knowledge/research-knowledge.md"
+TOOL_QUIRKS_FILE = "knowledge/tool-quirks.md"
 HEADING = re.compile(r"(?m)^## (.+)$")
+TOOL_QUIRK_HEADING = re.compile(r"(?m)^## (.+)$")
 TAG_WORDS = {
     "authz": ("认证", "授权", "owner", "权限", "IDOR", "对象"),
     "proxy": ("代理", "转发", "Host", "XFF", "拓扑", "中继"),
@@ -114,6 +116,10 @@ def migrate_seed(root: str, con: sqlite3.Connection, *, dry_run: bool = False) -
         return stats
     for e in entries:
         old = con.execute("SELECT * FROM knowledge_entries WHERE id=?", (e["id"],)).fetchone()
+        # 已由 tool-quirks 正式迁移的条目不能被旧 curated seed 覆盖。
+        if old and old["source"] == TOOL_QUIRKS_FILE:
+            stats["skipped"] += 1
+            continue
         if old and old["source_hash"] == e["source_hash"]:
             # 旧库若还是 needs_review/draft,迁移时按 Agent 直接记录语义收敛到 approved
             if old["status"] != "approved":
@@ -288,12 +294,190 @@ def stats(con: sqlite3.Connection) -> dict:
     return out
 
 
+# ---------------- tool-quirks -> Research Knowledge ----------------
+
+# 旧 curated seed 的 6 条工具判据与 tool-quirks 源条目是同一事实；
+# 迁移时合并到旧条目 ID，避免重复建条目。键是 tool-quirks 的 1-based 序号。
+TOOL_QUIRK_MERGES: dict[int, str] = {
+    3: "工具判据：IDA MCP 无头端点需要 GUI 事件循环",
+    6: "工具判据：qemu-user 直调 CGI 必须补齐 httpd 注入的环境",
+    7: "工具判据：binwalk 的“提取成功”不等于有效",
+    8: "工具判据：qemu-user 的 `-L` 不改变绝对路径命名空间",
+    10: "工具判据：localhost 代理劫持与 `--noproxy` 的边界",
+    67: "工具判据：AFL qemu-trace 必须与 guest 架构匹配",
+}
+
+# 这些条目的旧 harness/环境前提已不再适用于 fwcore；保留原文但标 deprecated。
+TOOL_QUIRK_RETIRE: dict[int, str] = {
+    2: "旧 Pi/OpenCode 的 pwn 绝对路径规则已被 state/pyenvs.json + state/tools.json 取代",
+    22: "旧 Pi subagent 不继承提示词的规则；fwcore 不再创建子代理",
+    30: "旧 Pi 截图护栏的自由命令签名已被 tools/termshot.sh + shots.json 取代",
+}
+
+TOOL_TAG_RULES = (
+    ("qemu", ("qemu", "chr")),
+    ("ida", ("ida", "idat", "ida-pro-mcp")),
+    ("binwalk", ("binwalk",)),
+    ("unblob", ("unblob",)),
+    ("afl", ("afl",)),
+    ("sasquatch", ("sasquatch",)),
+    ("ghidra", ("ghidra",)),
+    ("radare2", ("radare2", "r2ghidra")),
+    ("screenshot", ("截图", "tmux")),
+    ("proxy", ("代理", "proxy")),
+    ("docker", ("docker", "bwrap", "容器")),
+    ("websocket", ("websocket",)),
+    ("tls", ("tls",)),
+    ("busybox", ("busybox",)),
+    ("synology", ("synology", "dsm")),
+    ("routeros", ("routeros",)),
+    ("qnap", ("qnap", "qts")),
+    ("unifi", ("unifi",)),
+    ("spring-boot", ("spring-boot", "fat jar")),
+    ("goresym", ("goresym",)),
+)
+
+
+def _tool_tags(title: str, body: str) -> list[str]:
+    text = (title + "\n" + body).lower()
+    tags = {"tool-quirk", "tool"}
+    for tag, needles in TOOL_TAG_RULES:
+        if any(n in text for n in needles):
+            tags.add(tag)
+    return sorted(tags)
+
+
+def parse_tool_quirks(path: str) -> list[dict]:
+    """按 `##` 解析 tool-quirks；保留完整 section（含标题）作为正文。"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+    marks = list(TOOL_QUIRK_HEADING.finditer(text))
+    out = []
+    for i, m in enumerate(marks, 1):
+        end = marks[i].start() if i < len(marks) else len(text)
+        section = text[m.start():end].strip()
+        title = m.group(1).strip()
+        if not title or not section:
+            continue
+        out.append({
+            "index": i, "title": title, "body_md": section,
+            "source_hash": _sha(section),
+            "kind": "guideline", "tags": _tool_tags(title, section),
+        })
+    return out
+
+
+def _entry_by_title(con: sqlite3.Connection, title: str):
+    return con.execute("SELECT * FROM knowledge_entries WHERE title=?", (title,)).fetchone()
+
+
+def migrate_tool_quirks(root: str, con: sqlite3.Connection, *, dry_run: bool = False,
+                        source: str = TOOL_QUIRKS_FILE) -> dict:
+    """把 tool-quirks 逐条迁入知识库；幂等，按完整 section hash 去重。
+
+    合并 6 条旧工具判据；3 条旧 harness 条目保留原文但标 deprecated。
+    返回逐条 destination，便于核对 94/94。
+    """
+    path = os.path.join(root, source)
+    entries = parse_tool_quirks(path)
+    stats = {"source": source, "parsed": len(entries), "inserted": 0, "merged": 0,
+             "skipped": 0, "retired": 0, "retired_entries": [], "entries": [],
+             "dry_run": bool(dry_run)}
+    if not entries:
+        stats["error"] = "source missing or has no ## entries"
+        return stats
+    for e in entries:
+        idx = e["index"]
+        merge_title = TOOL_QUIRK_MERGES.get(idx)
+        old = _entry_by_title(con, merge_title) if merge_title else None
+        eid = old["id"] if old else _stable_id("guideline", e["title"])
+        e["id"] = eid
+        action = "insert"
+        existing = con.execute("SELECT * FROM knowledge_entries WHERE id=?", (eid,)).fetchone()
+        if old:
+            action = "merge"
+        elif existing:
+            action = "update"
+        retired_reason = TOOL_QUIRK_RETIRE.get(idx)
+        status = "deprecated" if retired_reason else "approved"
+        if existing and existing["source"] == source and existing["source_hash"] == e["source_hash"]:
+            action = "skip"
+        stats["entries"].append({"index": idx, "title": e["title"], "id": eid,
+                                 "action": action, "status": status})
+        if retired_reason:
+            stats["retired"] += 1
+            stats["retired_entries"].append({"index": idx, "id": eid,
+                                             "reason": retired_reason})
+        if action == "skip":
+            stats["skipped"] += 1
+            continue
+        if dry_run:
+            if action == "merge":
+                stats["merged"] += 1
+            else:
+                stats["inserted"] += 1
+            continue
+        now = _now()
+        tags = sorted(set(e["tags"]))
+        if old:
+            # 合并到旧 curated 工具判据 ID；保留旧标题以不破坏既有引用。
+            tags = sorted(set(tags) | {"curated"})
+            with Tx(con) as tx:
+                ver = (tx.execute("SELECT COALESCE(MAX(version),0) v FROM knowledge_entry_versions"
+                                  " WHERE entry_id=?", (eid,)).fetchone()["v"] + 1)
+                tx.execute("UPDATE knowledge_entries SET body_md=?,kind=?,status=?,source=?,"
+                           "source_hash=?,updated_at=? WHERE id=?",
+                           (e["body_md"], "guideline", status, source,
+                            e["source_hash"], now, eid))
+                _insert_version(tx, eid, ver, old["title"], e["body_md"],
+                                f"tool-quirks merge #{idx}; status={status}" +
+                                (f"; {retired_reason}" if retired_reason else ""))
+                tx.execute("DELETE FROM knowledge_entry_tags WHERE entry_id=?", (eid,))
+                for tag in tags:
+                    tx.execute("INSERT OR IGNORE INTO knowledge_entry_tags(entry_id,tag) VALUES(?,?)",
+                               (eid, tag[:80]))
+                _fts_upsert(tx, eid, old["title"], e["body_md"], tags)
+            stats["merged"] += 1
+        else:
+            with Tx(con) as tx:
+                existing = tx.execute("SELECT * FROM knowledge_entries WHERE id=?", (eid,)).fetchone()
+                ver = 1
+                if existing:
+                    ver = (tx.execute("SELECT COALESCE(MAX(version),0) v FROM knowledge_entry_versions"
+                                      " WHERE entry_id=?", (eid,)).fetchone()["v"] + 1)
+                    tx.execute("UPDATE knowledge_entries SET title=?,body_md=?,kind=?,status=?,source=?,"
+                               "source_hash=?,updated_at=? WHERE id=?",
+                               (e["title"], e["body_md"], "guideline", status, source,
+                                e["source_hash"], now, eid))
+                else:
+                    tx.execute("INSERT INTO knowledge_entries(id,title,body_md,kind,status,source,"
+                               "source_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                               (eid, e["title"], e["body_md"], "guideline", status, source,
+                                e["source_hash"], now, now))
+                _insert_version(tx, eid, ver, e["title"], e["body_md"],
+                                f"tool-quirks import #{idx}; status={status}" +
+                                (f"; {retired_reason}" if retired_reason else ""))
+                tx.execute("DELETE FROM knowledge_entry_tags WHERE entry_id=?", (eid,))
+                for tag in tags:
+                    tx.execute("INSERT OR IGNORE INTO knowledge_entry_tags(entry_id,tag) VALUES(?,?)",
+                               (eid, tag[:80]))
+                _fts_upsert(tx, eid, e["title"], e["body_md"], tags)
+            stats["inserted"] += 1
+    return stats
+
+
 def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m fwcore.knowledge")
     ap.add_argument("--root", default=os.environ.get("FW_ROOT", os.getcwd()))
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("migrate")
     p.add_argument("--dry-run", action="store_true")
+    p = sub.add_parser("migrate-tool-quirks")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--source", default=TOOL_QUIRKS_FILE)
     p = sub.add_parser("search")
     p.add_argument("query")
     p.add_argument("--kind", choices=KINDS)
@@ -314,6 +498,10 @@ def _main(argv: list[str] | None = None) -> int:
     try:
         if a.cmd == "migrate":
             print(json.dumps(migrate_seed(a.root, con, dry_run=a.dry_run),
+                             ensure_ascii=False, indent=2))
+        elif a.cmd == "migrate-tool-quirks":
+            print(json.dumps(migrate_tool_quirks(a.root, con, dry_run=a.dry_run,
+                                                 source=a.source),
                              ensure_ascii=False, indent=2))
         elif a.cmd == "search":
             print(json.dumps(search(con, a.query, kind=a.kind, status=a.status,

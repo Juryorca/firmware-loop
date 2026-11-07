@@ -428,7 +428,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if rep["integrity"] == "ready" else 1
         elif args.cmd == "capabilities":
             from .providers import inventory
-            print(json.dumps(inventory(args.root), ensure_ascii=False, indent=2))
+            from .toolmeta import ToolConfigError
+            try:
+                data = inventory(args.root)
+            except ToolConfigError as e:
+                print(f"TOOL_CONFIG_ERROR: {e}", file=sys.stderr)
+                return 2
+            print(json.dumps(data, ensure_ascii=False, indent=2))
         elif args.cmd == "status":
             print(json.dumps(dom.status(args.target), ensure_ascii=False, indent=2))
         elif args.cmd == "derive":
