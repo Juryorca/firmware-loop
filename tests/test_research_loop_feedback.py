@@ -33,9 +33,7 @@ def test_shell_exec_auto_uses_shell_for_metacharacters(tmp_path):
     out = reg.call(ctx, "shell_exec", {"command": "echo A; echo b"})
     assert out["status"] == "ok", out
     assert out.get("shell") is True
-    with open(out["stdout_path"], encoding="utf-8") as f:
-        body = f.read()
-    assert "A" in body and "b" in body
+    assert "A" in out["stdout_tail"] and "b" in out["stdout_tail"]
 
 
 def test_shell_exec_plain_command_stays_argv(tmp_path):
@@ -59,16 +57,16 @@ def test_evidence_auto_links_to_producing_tool_call(tmp_path):
     assert weak["status"] == "ok"
     assert weak["linked_tool_call_id"] is None
     assert (weak.get("link") or "").startswith("weak-args")
-    # ② 直接产出:证据路径就是该调用的 stdout ⇒ 建立关联 + 关系标注
+    # ② 没有自动 stdout 文件:显式给 tool_call_id + 路径,关系只能按 command-write 证明
     strong = reg.call(ctx, "state_add_evidence", {
         "target": "t1", "kind": "command-output", "attempt_id": aid,
-        "hypothesis_id": hid, "path": tc["stdout_path"]})
+        "hypothesis_id": hid, "path": os.path.join(root, "proof.txt"),
+        "tool_call_id": tc["tool_call_id"]})
     assert strong["linked_tool_call_id"] == tc["tool_call_id"], strong
-    # 关系按路径判定:stdout ⇒ direct-stdout;result ⇒ direct-result(不再猜)
     row = con.execute("SELECT tool_call_id, verified, link_relation FROM evidence WHERE id=?",
                       (strong["evidence_id"],)).fetchone()
     assert row["tool_call_id"] == tc["tool_call_id"] and row["verified"] == 0
-    assert row["link_relation"] in ("direct-stdout", "direct-result"), row["link_relation"]
+    assert row["link_relation"] == "command-write", row["link_relation"]
 
 
 def test_evidence_without_matching_tool_call_does_not_fake_link(tmp_path):
@@ -178,8 +176,7 @@ def test_shell_mode_contract(tmp_path):
     # 引号内的通配符:argv 模式 ⇒ 原样传给命令(不展开)
     out = reg.call(ctx, "shell_exec", {"command": "printf '%s\\n' '*.c'", "mode": "argv"})
     assert out["status"] == "ok" and out["mode"] == "argv" and out["shell"] is False
-    with open(out["stdout_path"], encoding="utf-8") as f:
-        assert "*.c" in f.read()
+    assert "*.c" in out["stdout_tail"]
     # 真正的 shell 语法 ⇒ auto 走 shell
     out2 = reg.call(ctx, "shell_exec", {"command": "echo hi | tr a-z A-Z"})
     assert out2["shell"] is True and out2["mode"] == "auto"

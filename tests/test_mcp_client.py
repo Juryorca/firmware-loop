@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from fwcore.mcp_client import MCPClient, ServerSpec, load_servers, probe
+import pytest
+
+from fwcore.mcp_client import MCPClient, MCPConfigError, ServerSpec, load_servers, probe
 
 FAKE = r'''
 import json, sys
@@ -65,9 +69,70 @@ def test_probe_reports_unreachable_when_server_dies(tmp_path):
     assert r["status"] == "unreachable" and r["evidence"] == "configured"
 
 
-def test_probe_reports_disabled_and_unsupported_transport():
+def test_probe_reports_disabled_and_http_unreachable():
     assert probe(ServerSpec(name="x", command="true", enabled=False))["status"] == "disabled"
-    assert probe(ServerSpec(name="y", command="", url="https://example/mcp"))["status"] == "unsupported_transport"
+    r = probe(ServerSpec(name="y", command="", url="http://127.0.0.1:1/mcp"), timeout=1)
+    assert r["status"] == "unreachable"
+
+
+def test_http_transport_initialize_list_and_call():
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            req = json.loads(self.rfile.read(n) or b"{}")
+            m, rid = req.get("method"), req.get("id")
+            if m == "initialize":
+                out = {"jsonrpc": "2.0", "id": rid, "result": {
+                    "protocolVersion": "2024-11-05", "serverInfo": {"name": "h", "version": "1"},
+                    "capabilities": {}}}
+            elif m == "tools/list":
+                out = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
+                    {"name": "echo", "description": "e", "inputSchema": {"type": "object"}}]}}
+            elif m == "tools/call":
+                out = {"jsonrpc": "2.0", "id": rid, "result": {"content": [
+                    {"type": "text", "text": "echo:http"}]}}
+            else:
+                out = {"jsonrpc": "2.0", "id": rid, "result": {}}
+            data = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        spec = ServerSpec(name="http", command="", url=f"http://127.0.0.1:{srv.server_port}/mcp")
+        with MCPClient(spec, timeout=5) as c:
+            c.initialize()
+            assert c.list_tools()[0]["name"] == "echo"
+            assert c.call_tool("echo", {"text": "hi"})["text"] == "echo:http"
+    finally:
+        srv.shutdown()
+        th.join(timeout=2)
+
+
+def test_load_servers_corrupt_config_is_explicit(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text("{bad", encoding="utf-8")
+    with pytest.raises(MCPConfigError):
+        load_servers([str(p)])
+
+
+def test_bridge_from_config_reports_config_error(tmp_path):
+    from fwcore.mcp_runtime import bridge_from_config
+    from fwcore.tools import Registry
+    p = tmp_path / "bad.json"
+    p.write_text("{bad", encoding="utf-8")
+    b = bridge_from_config(Registry(), str(tmp_path), [str(p)])
+    st = b.start()
+    assert st["_config"]["status"] == "config_error"
+    assert "JSON" in st["_config"]["detail"]
 
 
 def test_load_servers_priority_and_skip(tmp_path):

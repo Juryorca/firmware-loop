@@ -23,6 +23,10 @@ import sys
 from dataclasses import dataclass
 
 
+class PyEnvConfigError(RuntimeError):
+    """Python 环境配置存在但不可用;与“未配置”严格区分。"""
+
+
 def _config_paths(root: str) -> list[str]:
     return [
         os.path.join(root, "state", "pyenvs.json"),
@@ -41,12 +45,26 @@ def load(root: str) -> list[str]:
     if env:
         raw += [p for p in env.split(os.pathsep) if p.strip()]
     for cfg in _config_paths(root):
+        if not os.path.exists(cfg):
+            continue
         try:
             with open(cfg, encoding="utf-8") as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError, TypeError):
-            continue
-        raw += [str(p) for p in (data.get("python_envs") or []) if str(p).strip()]
+        except OSError as e:
+            raise PyEnvConfigError(f"{cfg}: 无法读取: {type(e).__name__}: {e}") from e
+        except json.JSONDecodeError as e:
+            raise PyEnvConfigError(
+                f"{cfg}: JSON 解析失败(第 {e.lineno} 行第 {e.colno} 列): {e.msg}") from e
+        if not isinstance(data, dict):
+            raise PyEnvConfigError(f"{cfg}: 顶层必须是 JSON object")
+        envs = data.get("python_envs")
+        if envs is None:
+            envs = []
+        if not isinstance(envs, list):
+            raise PyEnvConfigError(f"{cfg}: python_envs 必须是数组")
+        if not all(isinstance(p, str) for p in envs):
+            raise PyEnvConfigError(f"{cfg}: python_envs 只能包含字符串路径")
+        raw += [p for p in envs if p.strip()]
         break
     raw += default_envs()
     out: list[str] = []
@@ -110,16 +128,20 @@ def _main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--select", default=None, metavar="MODULE")
     a = ap.parse_args(argv)
-    if a.select:
-        out = select(a.root, tuple(x for x in a.select.split(",") if x))
-        if out["selected"]:
-            print(out["selected"])
-            return 0
-        print(json.dumps(out, ensure_ascii=False, indent=2), file=sys.stderr)
-        return 1
-    print(json.dumps([{"path": p, "probe": probe(p).__dict__} for p in load(a.root)],
-                     ensure_ascii=False, indent=2))
-    return 0
+    try:
+        if a.select:
+            out = select(a.root, tuple(x for x in a.select.split(",") if x))
+            if out["selected"]:
+                print(out["selected"])
+                return 0
+            print(json.dumps(out, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
+        print(json.dumps([{"path": p, "probe": probe(p).__dict__} for p in load(a.root)],
+                         ensure_ascii=False, indent=2))
+        return 0
+    except PyEnvConfigError as e:
+        print(f"PYENV_CONFIG_ERROR: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

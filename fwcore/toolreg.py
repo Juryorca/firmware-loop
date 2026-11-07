@@ -12,7 +12,7 @@
   invocation    python:函数 / script:argv / feature:深度适配(如 Windows IDA)
   lifecycle     ensure(ctx) 懒启动;close() 收尾;健康状态可查
   semantics     status ∈ ok|error|timeout|cancelled;失败不外溢成"研究结论"
-  outputs       原始产物落盘 + sha256 + 结构化 observation + provider/capability 元数据
+  outputs       有界 stdout/stderr + sha256 + 结构化 observation;只有工具显式产物才落盘
 
 刻意不做的事:不统一工具**内部实现**,不做插件市场,不做自动安装(那是后续"工具适配 Agent")。
 """
@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .tools import Registry, ToolContext, ToolSpec
+from .tools import Registry, ToolContext, ToolSpec, _capture_process
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -212,85 +212,31 @@ def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str |
                 env: dict[str, str] | None = None, cancel_check: Callable[[], bool] | None = None,
                 max_output_bytes: int = 8 * 1024 * 1024,
                 ok_exit_codes: tuple[int, ...] = (0,)) -> dict:
-    """跑一个外部程序(统一执行语义):独立进程组 + 取消即杀组 + 产物落盘 + sha256。
+    """跑一个外部程序(统一执行语义):进程组 + 取消/超时整组杀 + 有界输出。
 
-    与 `tools.shell_exec` 的差别:这里接受 **argv 列表**(不经 shell 解析),
-    适合 manifest 里声明的入口;两者共用同一套状态/超时/取消语义。
+    输出留在内存，不自动写 workspace artifact；需要长期保存由 Agent 自己重定向。
+    完整 `stdout`/`stderr` 保留到 max_output_bytes（供适配器解析），模型侧仍有 tail。
     """
     art = ctx.artifacts_dir or os.path.join(ctx.root, "state", "artifacts", ctx.run_id or "local")
-    try:
-        os.makedirs(art, exist_ok=True)
-        oid = "OUT-" + hashlib.sha256(f"{time.time()}-{os.getpid()}".encode()).hexdigest()[:8]
-        op = os.path.join(art, f"{oid}.stdout")
-        ep = os.path.join(art, f"{oid}.stderr")
-        open(op, "wb").close()                      # 先建空文件(创建失败要能干净报错)
-        open(ep, "wb").close()
-    except OSError as e:
-        return {"status": "error", "error": f"无法创建输出文件: {e}"}
-
-    status = "error"
-    code: int | None = None
-    try:
-        with open(op, "ab") as fo, open(ep, "ab") as fe:
-            try:
-                proc = subprocess.Popen(argv, cwd=cwd or ctx.root, stdout=fo, stderr=fe,
-                                        env={**os.environ, **(env or {})}, start_new_session=True)
-            except FileNotFoundError as e:
-                fe.write(f"入口不存在: {e}".encode())
-                return {"status": "error", "error": f"入口不存在: {argv[0]!r}",
-                        "stdout_path": op, "stderr_path": ep}
-            except OSError as e:
-                return {"status": "error", "error": f"启动失败: {e}",
-                        "stdout_path": op, "stderr_path": ep}
-            with contextlib.suppress(OSError):
-                _register_pgid(ctx, art, os.getpgid(proc.pid), proc.pid)
-            deadline = time.time() + float(timeout)
-            try:
-                while True:
-                    slice_s = max(0.02, min(0.2, deadline - time.time()))
-                    try:
-                        proc.wait(timeout=slice_s)
-                        code = proc.returncode
-                        status = "ok" if code in ok_exit_codes else (
-                            "cancelled" if (cancel_check and cancel_check()) else "error")
-                        break
-                    except subprocess.TimeoutExpired:
-                        if cancel_check and cancel_check():
-                            _kill_group(proc)
-                            with contextlib.suppress(Exception):
-                                proc.wait(timeout=2)
-                            status = "cancelled"
-                            break
-                        if time.time() >= deadline:
-                            _kill_group(proc)
-                            status = "timeout"
-                            break
-            except BaseException:                 # 被 Ctrl-C/信号打断:整组杀掉再抛出,不留孤儿
-                _kill_group(proc)
-                with contextlib.suppress(Exception):
-                    proc.wait(timeout=2)
-                raise
-    except OSError as e:
-        return {"status": "error", "error": f"无法写输出文件: {e}"}
-    tr_o = _cap_output(op, max_output_bytes)
-    tr_e = _cap_output(ep, max_output_bytes)
-    out_tail, out_trunc, out_bin = _tail_info(op)
-    err_tail, err_trunc, err_bin = _tail_info(ep)
-    out = {"status": status, "exit_code": code, "stdout_path": op, "stderr_path": ep,
-           # 有界摘要(模型不用为了看输出再跑一遍),完整内容仍在产物文件里
-           "stdout_tail": out_tail, "stderr_tail": err_tail,
-           "stdout_truncated": out_trunc or tr_o, "stderr_truncated": err_trunc or tr_e,
-           "stdout_binary": out_bin, "stderr_binary": err_bin,
-           "stdout_sha256": sha256_file(op), "stderr_sha256": sha256_file(ep),
-           "output_truncated": bool(tr_o or tr_e)}
+    out = _capture_process(argv, cwd=cwd or ctx.root, env=env, timeout=timeout,
+                           cancel_check=cancel_check, max_bytes=max_output_bytes,
+                           pgid_dir=art)
+    code = out.get("exit_code")
+    status = str(out.get("status") or "")
+    if status == "error" and code in ok_exit_codes:
+        status = "ok"
+        out["status"] = "ok"
+    elif status == "ok" and code not in ok_exit_codes:
+        status = "error"
+        out["status"] = "error"
     if status != "ok":
-        # 失败原因要跟着结果走(否则 Registry 只能记一个 status,审计会丢掉"为什么失败")
-        tail = _tail([ep, op], keep=400).strip()
-        out["error"] = {"timeout": f"超时({int(timeout)}s 上限)",
-                        "cancelled": "运行被取消,工具被中断"}.get(status) or \
-                       f"退出码 {code}" + (f": {tail}" if tail else "")
+        tail = (out.get("stderr_tail") or out.get("stdout_tail") or "").strip()
+        out["error"] = out.get("error") or (
+            {"timeout": f"超时({int(timeout)}s 上限)",
+             "cancelled": "运行被取消,工具被中断"}.get(status)
+            or f"退出码 {code}" + (f": {tail}" if tail else "")
+        )
     return out
-
 
 def num(value: Any, default: float) -> float:
     """把参数里的数字安全转成 float(非法值不炸工具调用,退回默认并让调用方记录)。"""
@@ -330,7 +276,7 @@ def _tail_info(path: str | None, max_chars: int = TAIL_CHARS) -> tuple[str, bool
     binary = b"\x00" in data
     if binary:
         # 二进制不塞进上下文:只给占位,让模型用路径/xxd/strings 处理
-        return (f"[binary output: {size} bytes; use stdout_path/xxd/strings]",
+        return (f"[binary output: {size} bytes; use stdout_tail / redirect to a file / xxd/strings]",
                 size > max_chars, True)
     text = data.decode("utf-8", errors="replace")
     return text[-max_chars:], (len(text) > max_chars or size > max_chars * 4), False
@@ -557,7 +503,8 @@ def build_spec(reg: Registry, root: str, m: Manifest) -> ToolSpec:
                         "meta": {"capability": m.capability_required, "provider": None}}
         out = adapter.call(ctx, m, args) or {}
         out.setdefault("status", "ok")
-        text = out.get("text") or _tail([out.get("stdout_path"), out.get("stderr_path")])
+        text = (out.get("text") or out.get("stdout") or out.get("stderr")
+                or out.get("stdout_tail") or out.get("stderr_tail") or "")
         if text:
             out["output_tail"] = text[-3000:]
             if observer_fn is not None:

@@ -99,30 +99,15 @@ def test_run_process_caps_output_size(tmp_path):
                       ["bash", "-c", "head -c 200000 /dev/zero | tr '\\0' 'a'"], timeout=20,
                       max_output_bytes=1000)
     assert out["status"] == "ok" and out["output_truncated"] is True
-    assert os.path.getsize(out["stdout_path"]) < 5000
+    assert len(out["stdout"]) <= 1000 and "stdout_path" not in out
 
 
-def test_run_process_kills_group_on_interrupt(tmp_path, monkeypatch):
-    """BaseException 路径:被打断时整组杀掉再抛出,不留孤儿。"""
+def test_run_process_cancel_kills_group(tmp_path):
+    """取消路径:启动后立即取消,整组杀掉并返回 cancelled。"""
     con, dom, root = _setup(tmp_path)
-    killed: list[int] = []
-
-    class FakeProc:
-        pid = 999999
-
-        def wait(self, timeout=None):
-            raise KeyboardInterrupt
-
-        def kill(self):
-            pass
-
-    monkeypatch.setattr("fwcore.toolreg.subprocess.Popen", lambda *a, **k: FakeProc())
-    monkeypatch.setattr("fwcore.toolreg.os.getpgid", lambda pid: 12345)
-    monkeypatch.setattr("fwcore.toolreg.os.killpg", lambda pg, sig: killed.append(pg))
-    with pytest.raises(KeyboardInterrupt):
-        run_process(_ctx(dom, root, rid="R1"), ["bash", "-c", "true"], timeout=5)
-    assert killed == [12345]
-
+    out = run_process(_ctx(dom, root, rid="R1"), ["bash", "-c", "sleep 30"],
+                      timeout=10, cancel_check=lambda: True)
+    assert out["status"] == "cancelled"
 
 def test_watchdog_reaps_inflight_script_tool(tmp_path):
     """主进程被杀后,独立看护按 .pgids 清理在飞脚本工具(不会留 sleep 30)。"""

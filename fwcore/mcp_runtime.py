@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .mcp_client import MCPClient, MCPError, ServerSpec, load_servers  # noqa: F401
+from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers  # noqa: F401
 from .tools import Registry, ToolSpec
 
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
@@ -54,18 +54,19 @@ class MCPBridge:
     registered: dict[str, list[str]] = field(default_factory=dict)
     closed: bool = False
     pgids_path: str | None = None
+    config_error: str | None = None
 
     def start(self) -> dict[str, dict]:
         """连接 + 注册;单个服务器失败不影响其它。可重复调用(已关闭的桥会重新打开)。"""
         self.closed = False
         self.status.clear()
         self.registered.clear()
+        if self.config_error:
+            self.status["_config"] = {"status": "config_error", "detail": self.config_error}
+            return self.status
         for spec in self.specs:
             if not spec.enabled:
                 self.status[spec.name] = {"status": "disabled"}
-                continue
-            if spec.transport != "stdio":
-                self.status[spec.name] = {"status": "unsupported_transport", "detail": f"url={spec.url}"}
                 continue
             client = MCPClient(spec, timeout=self.timeout, pgids_path=self.pgids_path)
             try:
@@ -164,6 +165,7 @@ class MCPBridge:
         """看护/CLI 可观测:MCP 是否还活着、注册了哪些工具。"""
         return {
             "closed": self.closed,
+            "config_error": self.config_error,
             "clients": sorted(self.clients),
             "servers": {k: v.get("status") for k, v in self.status.items()},
             "registered": {k: len(v) for k, v in self.registered.items()},
@@ -183,6 +185,11 @@ def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | 
         paths = [env_cfg] if env_cfg else [os.path.join(root, "state", "mcp.json")]
     else:
         paths = list(config_paths)
-    specs = list(load_servers(paths).values())
+    try:
+        specs = list(load_servers(paths).values())
+        err = None
+    except MCPConfigError as e:
+        specs, err = [], str(e)
     return MCPBridge(root=root, registry=registry, specs=specs,
-                     timeout=timeout, call_timeout=call_timeout, pgids_path=pgids_path)
+                     timeout=timeout, call_timeout=call_timeout, pgids_path=pgids_path,
+                     config_error=err)

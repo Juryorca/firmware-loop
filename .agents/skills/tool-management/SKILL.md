@@ -1,23 +1,30 @@
 ---
 name: tool-management
-description: 检查/补齐默认工具集、配置已有工具的运行时元数据、选择 Agent 自己的 Python 环境、安装或接入新的研究工具。用户触发 /tool-setup，或研究过程中发现工具/依赖缺失时加载。
+description: 配置已有工具、用 Bash 直接调用、选择 Agent 自己的 Python 环境、处理原生 MCP/Plugin。用户触发 /tool-setup，或研究过程中发现工具/依赖缺失时加载。
 ---
 
-# 工具管理：配置、安装与接入
+# 工具管理：配置、调用与安装
 
-## 先检查，不先安装
+## 原则
 
-1. `python3 -m fwcore toolset --json`：看默认资产、外部依赖、能力与服务状态。
-2. `python3 -m fwcore capabilities`：看 provider、架构、依赖的真实探针。
-3. `python3 -m fwcore.toolmeta`：看已有工具的本地元数据与实际路径。
-4. 只在确认“确实缺这项能力”后才安装；不要因为状态是 `partial` 就盲目升级。
+- **新增工具 ≠ 新增框架 Tool**。普通 CLI 用 `shell_exec` 直接跑，不新建 Tool manifest/provider/adapter/wrapper。
+- 已有 Plugin/MCP 保持原生接入；不转换成 Bash Wrapper。
+- 工具路径、解释器、cwd、env 写 `<root>/state/tools.json`（`FW_TOOL_CONFIG` 可覆盖）。
+- Python 环境队列（`state/pyenvs.json`）只服务 Agent 自己的 Python 代码和包安装；**不用于找工具**。
+- 工具经验在 SQLite（`kind=guideline`, tags 含 `tool-quirk`），不写回 Markdown。
+- 不重复安装；不扫描 Home/虚拟环境找工具；不重构 Runtime。
 
-## 两类配置不要混用
+## 先检查
 
-### 1. 已有工具：运行时元数据
+1. `python3 -m fwcore toolset --json`：只读默认资产/依赖/能力状态。
+2. `python3 -m fwcore capabilities`：复杂 Provider 探针。
+3. `python3 -m fwcore.toolmeta`：已有工具的元数据。
 
-已有工具通过 `<root>/state/tools.json` 定位（本地，不进 Git；也可用 `FW_TOOL_CONFIG`）。
-每条只放运行所需信息：
+`toolset.py` **只负责就绪检查**，不负责工具执行；执行是 Bash 或已有特殊适配器。
+
+## 已有工具：元数据 + Bash
+
+`state/tools.json` 只放运行信息：
 
 ```json
 {
@@ -25,86 +32,99 @@ description: 检查/补齐默认工具集、配置已有工具的运行时元数
     "path": "/opt/unblob/bin/unblob",
     "python": "/opt/unblob/bin/python",
     "cwd": ".",
-    "env": {}
+    "env": {"PATH": "/opt/unblob/bin:/usr/bin:/bin"}
   },
   "angr": {"python": "/opt/angr/bin/python", "cwd": "."},
-  "ghidra": {"path": "/opt/ghidra/support/analyzeHeadless"},
   "qemu-aarch64-patched": {"path": "/opt/qemu/bin/qemu-aarch64-patched"}
 }
 ```
 
-- `path`：实际可执行文件；`python`：Python 工具的解释器；`cwd`：工作目录；`env`：额外环境变量。
-- 系统命令（binwalk、qemu、strace 等）没有显式元数据时，才允许按 `PATH` 查找。
-- 配置了路径但不存在时，必须如实报“配置路径不存在”，不要偷偷换成别的路径。
-- 已有工具**不通过** Python 环境队列搜索。
+- `path` 实际可执行文件；`python` Python 工具解释器；`cwd` 工作目录；`env` 额外环境变量。
+- 配置路径不存在 → 明确报错，不静默换路径。
+- 系统命令未配置时才按 `PATH` 查找。
 
-### 2. Python 环境队列：只给 Agent 自己跑代码
+### Bash 调用示例（必须这样应用 cwd/env）
 
-配置优先 `state/pyenvs.json`（也兼容旧的 `state/toolenv.json`）：
+`toolmeta --shell` 只导出变量，**不会自动 cd**：
+
+```bash
+eval "$(python3 -m fwcore.toolmeta --shell unblob)" || exit $?
+cd "${FW_TOOL_CWD:-$PWD}" || exit 1
+"$FW_TOOL_PATH" --help
+```
+
+Python 工具：
+
+```bash
+eval "$(python3 -m fwcore.toolmeta --shell angr)" || exit $?
+"$FW_TOOL_PYTHON" -c 'import angr; print(angr.__version__)'
+```
+
+如果元数据里没有 `cwd`，不要 cd；如果命令需要保存输出，由 Agent 自己重定向：
+
+```bash
+"$FW_TOOL_PATH" --help > state/_scratch/unblob-help.txt
+```
+
+### shell mode
+
+`shell_exec` 的 `mode=auto` 只有真正 shell 语法（`; | && > $(...)` 等）才走 shell。
+需要 glob/tilde 展开时显式：
+
+```json
+{"command": "ls *.c ~/src", "mode": "shell"}
+```
+
+`mode=argv` 不解释 `* ? ~`；`mode=auto` 不会因为 `* ? ~` 自动进入 shell。
+
+## Python 环境队列（只给 Agent 代码/装包）
+
+配置优先 `state/pyenvs.json`（兼容旧 `state/toolenv.json`）：
 
 ```json
 {"python_envs": ["/path/to/python", "/another/venv/bin/python"]}
 ```
 
-或 `FW_PYTHON_ENVS`（路径分隔符分隔）。它只解决两件事：
-
-1. Agent 临时运行 Python 代码时选一个能 import 所需模块的解释器；
-2. 决定 Python 包安装到哪个环境。
-
-规则：
-
-- 顺序即优先级；缺失/依赖不满足就跳过，尝试下一个；
-- 不为了装一个包而大规模升级/降级已有环境；
-- 系统 Python、venv、系统包管理器分开判断；
-- 都不适合时才建立独立 venv；安装前后记录版本与命令；
-- 不把环境队列当工具发现器，也不为每个工具扫描所有环境。
+或 `FW_PYTHON_ENVS`。顺序即优先级；缺失/依赖不满足跳过；配置损坏必须报告，不静默回退当前解释器。
 
 ```bash
 python3 -m fwcore.pyenvs --list
 python3 -m fwcore.pyenvs --select json
 ```
 
+## 原生 Plugin / MCP
+
+- 已有 Plugin 用其原生生命周期/配置。
+- MCP 保持 MCP transport：先查 `transport`；stdio 用现有客户端，HTTP 若客户端不支持就明确报 `unsupported_transport`，不要转成 shell。
+- MCP 调用必须走授权门；不要用 Bash 重新包一层。
+
 ## 补齐已有默认工具
 
-1. 读 toolset 的 `reasons`，区分：仓库资产缺失 / 外部命令缺失 / Python 依赖 / 服务未启动 / 架构不符。
-2. 先看 `state/tools.json` 是否只是路径没配；能配路径就不要安装第二份。
-3. 系统包用系统包管理器；Python 包用 Agent 环境队列决定安装位置；冲突则跳过或新建 venv。
-4. 安装/配置后重跑 `fw-core toolset`、`capabilities`，再做一次真实无破坏性调用。
-5. “装上命令”不等于“能力可用”；要有真实探针/调用证据。
-6. 需要外部账号/付费/可能破坏环境时，先停下请求用户。
+1. 先看 `state/tools.json` 是否只是路径没配；能配路径就不安装第二份。
+2. 系统包用系统包管理器；Python 包用 Agent 环境队列决定安装位置；冲突则跳过/新建 venv。
+3. 安装/配置后重跑 `toolset`、`capabilities`，再做一次真实无破坏性 smoke test。
+4. “装上命令”不等于“能力可用”；不能只把存在的文件标 ready。
 
-## 接入新工具
+## 接入真正的新工具
 
-先检查是否已有相同 capability/provider/工具；优先复用原生 CLI/MCP/API。
-不要预设用户有复杂多环境、多架构或多执行节点。
+只有**普通 CLI 无法表达**时才增加框架层：
 
-标准流程：
+- 普通 CLI：`state/tools.json` + `shell_exec`；**不加** manifest/provider/adapter/wrapper；
+- 需要统一结构化能力探针/版本/依赖/架构：才加 Provider；
+- 需要生命周期/特殊协议（IDA、Ghidra 脚本路径、MCP、资源/证据保护脚本）：才加 Adapter/Wrapper；
+- 已有特殊工作流脚本（`fw_extract`、截图、IDA）保留，直接通过 Bash 调用。
 
-1. 确认能力、输入、输出、依赖、架构、风险、超时、取消、清理方式；
-2. 在 `tools/registry/*.json` 声明 Manifest（显式 Schema/argv）；
-3. 在 `fwcore/providers.py` 增加 Provider 探针；路径优先读 `state/tools.json`；
-4. 必要时写 Adapter（生命周期/特殊协议）；普通 CLI 不要额外包 shell；
-5. 用统一 `run_process`，返回 `status`、产物路径、来源；
-6. 真实调用一次，失败路径也要验证；缺依赖如实报，不伪装 ready；
-7. 更新 toolset 定义、测试、AGENTS/架构文档。
+## 安全边界
 
-## Wrapper 边界
-
-只有**真实特殊问题**才保留 Wrapper/Adapter：Ghidra 的脚本路径补齐、IDA 生命周期、
-`fw_extract` 的资源/证据约束、截图证据约束。不要为统一而给每个工具加一层 shell。
-普通 CLI 用 Manifest 显式 argv + Provider 路径解析即可。
-
-## 特殊 QEMU
-
-`qemu-aarch64-patched` 是特殊可选能力：独立路径、独立 Provider、独立验证；
-不替换系统 QEMU。调用时显式传 `qemu=` 路径，或将其写入 `state/tools.json`；
-不能只因为“发现文件”就算接入。
+- Authz 只做**授权与路径检查**，不是文件系统/网络沙箱；进程仍可访问 root 外。不要宣传成沙箱。
+- 不把工具执行状态当漏洞结论。
+- 需要账号/付费/可能破坏环境时先请求用户。
 
 ## 禁止
 
-- 不把仅配置存在当成服务 ready；
-- 工具经验记录到 SQLite（`kind=guideline`, tags 含 `tool-quirk`），不再写回 `knowledge/tool-quirks.md`；
-- 不把工具执行状态当漏洞结论；
-- 不在未授权时安装外部服务/账号依赖；
-- 不为“完整度”制造占位工具或伪造调用记录；
-- 不把 Python 虚拟环境队列当作工具注册表。
+- 普通 CLI 新建 `tools/registry/*.json`、Provider、Adapter 或 Wrapper；
+- 把 MCP/Plugin 改成 Bash；
+- 扫描 Home/虚拟环境找工具；
+- 把 Python 环境队列当工具注册表；
+- 工具经验写回 `knowledge/tool-quirks.md`；
+- 仅凭文件存在/配置存在报 ready。

@@ -14,6 +14,7 @@ import contextlib
 import hashlib
 import json
 import os
+import selectors
 import shlex
 import subprocess
 import time
@@ -142,20 +143,10 @@ class Registry:
                 status = "cancelled"
                 out["error"] = "运行已取消:工具执行被中断"
         dur = int((time.time() - t0) * 1000)
-        # 文本类工具(MCP/IDA/Ghidra 等)没有 stdout 文件 ⇒ 把结果本身落盘 + 算哈希,
-        # 这样"证据引用某次工具调用"时总有可校验的原始产物,而不是只留在对话里。
+        # 工具文本结果留在 tool result/session;不自动写 workspace artifact。
+        # 需要证据时由 Agent 用 bash 保存,或显式传 capture/path。
         result_path = out.get("result_path")
         result_sha = out.get("result_sha256")
-        if not result_path and isinstance(out.get("text"), str) and out["text"]:
-            art = ctx.artifacts_dir or os.path.join(ctx.root, "state", "artifacts", ctx.run_id or "local")
-            try:
-                os.makedirs(art, exist_ok=True)
-                result_path = os.path.join(art, f"{cid}.result.txt")
-                with open(result_path, "wb") as f:
-                    f.write(out["text"].encode("utf-8", errors="replace"))
-                result_sha = _sha256(result_path)
-            except OSError:
-                result_path, result_sha = None, None      # 落盘失败不改工具结论,但如实留空
         observation = out.get("observation")
         with _db.Tx(ctx.domain.con) as c:
             meta = out.get("meta") or {}
@@ -197,6 +188,131 @@ def _kill_group(proc: subprocess.Popen) -> None:
         os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=5)
+
+
+def _capture_process(argv: list[str], *, cwd: str, env: dict[str, str] | None,
+                     timeout: float, cancel_check: Callable[[], bool] | None = None,
+                     max_bytes: int = 8 * 1024 * 1024,
+                     tail_chars: int = 2000, pgid_dir: str | None = None) -> dict:
+    """执行一个进程并把输出留在内存(Pi 风格);不创建 stdout/stderr 文件。
+
+    只做进程生命周期与有界输出:
+      - 独立进程组;超时/取消整组杀掉;
+      - 每个流保留最多 max_bytes 前缀供调用方解析;
+      - 模型看 tail_chars 尾部;更长时标记 truncated;
+      - 不写 workspace artifact;需要长期保存由 Agent 自己用 bash 重定向。
+    """
+    import hashlib
+
+    try:
+        proc = subprocess.Popen(
+            argv, cwd=cwd, env={**os.environ, **(env or {})},
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            start_new_session=True, bufsize=0,
+        )
+    except FileNotFoundError as e:
+        return {"status": "error", "exit_code": None, "error": f"入口不存在: {argv[0]!r}",
+                "stdout": "", "stderr": str(e), "stdout_tail": "", "stderr_tail": str(e)}
+    except OSError as e:
+        return {"status": "error", "exit_code": None, "error": f"启动失败: {e}",
+                "stdout": "", "stderr": str(e), "stdout_tail": "", "stderr_tail": str(e)}
+
+    if pgid_dir:
+        try:
+            os.makedirs(pgid_dir, exist_ok=True)
+            with open(os.path.join(pgid_dir, ".pgids"), "a", encoding="utf-8") as pf:
+                pf.write(f"{os.getpgid(proc.pid)} {_proc_starttime(proc.pid) or 0}\n")
+        except OSError:
+            pass
+
+    sel = selectors.DefaultSelector()
+    assert proc.stdout is not None and proc.stderr is not None
+    sel.register(proc.stdout, selectors.EVENT_READ, "stdout")
+    sel.register(proc.stderr, selectors.EVENT_READ, "stderr")
+    bufs = {"stdout": bytearray(), "stderr": bytearray()}
+    tails = {"stdout": bytearray(), "stderr": bytearray()}
+    totals = {"stdout": 0, "stderr": 0}
+    hashes = {"stdout": hashlib.sha256(), "stderr": hashlib.sha256()}
+    truncated = {"stdout": False, "stderr": False}
+    tail_limit = max(256, tail_chars * 4)
+    timed_out = False
+    cancelled = False
+    deadline = time.time() + float(timeout)
+
+    def _read(stream: str, data: bytes) -> None:
+        totals[stream] += len(data)
+        hashes[stream].update(data)
+        room = max(0, max_bytes - len(bufs[stream]))
+        if room:
+            bufs[stream].extend(data[:room])
+        if len(data) > room:
+            truncated[stream] = True
+        tails[stream].extend(data)
+        if len(tails[stream]) > tail_limit * 4:
+            del tails[stream][: len(tails[stream]) - tail_limit]
+
+    try:
+        while True:
+            if cancel_check and cancel_check():
+                cancelled = True
+                _kill_group(proc)
+                break
+            now = time.time()
+            if now >= deadline and proc.poll() is None:
+                timed_out = True
+                _kill_group(proc)
+                break
+            if not sel.get_map():
+                break
+            wait = max(0.02, min(0.2, deadline - now))
+            events = sel.select(wait)
+            for key, _mask in events:
+                stream = key.data
+                try:
+                    data = os.read(key.fd, 65536)
+                except OSError:
+                    data = b""
+                if not data:
+                    # EOF:解除 selector 即可;fd 由 Popen 的 pipe 对象负责收尾。
+                    with contextlib.suppress(Exception):
+                        sel.unregister(key.fd)
+                    continue
+                _read(stream, data)
+            if proc.poll() is not None and not sel.get_map():
+                break
+    except BaseException:
+        _kill_group(proc)
+        raise
+    finally:
+        with contextlib.suppress(Exception):
+            sel.close()
+    code = proc.wait()
+    if cancelled:
+        status = "cancelled"
+    elif timed_out:
+        status = "timeout"
+    else:
+        status = "ok" if code == 0 else "error"
+
+    def _decode(stream: str) -> str:
+        data = bytes(bufs[stream])
+        return data.decode("utf-8", errors="replace")
+
+    out = {"status": status, "exit_code": code,
+           "stdout": _decode("stdout"), "stderr": _decode("stderr")}
+    for stream in ("stdout", "stderr"):
+        data = bytes(tails[stream])
+        binary = b"\x00" in data
+        if binary:
+            out[f"{stream}_tail"] = f"[binary output: {totals[stream]} bytes; redirect to a file / use xxd/strings]"
+        else:
+            out[f"{stream}_tail"] = data.decode("utf-8", errors="replace")[-tail_chars:]
+        out[f"{stream}_truncated"] = bool(truncated[stream] or totals[stream] > tail_limit)
+        out[f"{stream}_binary"] = binary
+        out[f"{stream}_bytes"] = totals[stream]
+        out[f"{stream}_sha256"] = hashes[stream].hexdigest()
+    out["output_truncated"] = bool(out["stdout_truncated"] or out["stderr_truncated"])
+    return out
 
 
 def _record(ctx: ToolContext, tool: str, args: dict, status: str, note: str = "",
@@ -244,18 +360,19 @@ def _needs_shell(cmd: str) -> bool:
 
 
 def shell_exec(ctx: ToolContext, args: dict) -> dict:
-    """跑一条命令(有超时);stdout/stderr 落盘并算 sha256。
+    """跑一条命令(有超时);输出留在内存,不自动落 workspace artifact。
 
-    语义:默认按 argv 直接执行(不经过 shell);若命令里含 shell 语法(`; | && $() > *` 等)
-    或显式 `shell=true`,则用 `bash -lc` 执行,并在结果里标注 `shell=true`
-    (实测模型天然按 shell 写命令,静默失败会浪费一整轮上下文)。
+    语义:
+    - 默认按 argv 直接执行;含 shell 语法(`; | && $() >` 等)或显式 mode=shell 时用 `bash -lc`;
+    - `mode=auto` 的 `* ? ~` 是普通字符,需要 glob/tilde 展开时显式 mode=shell;
+    - 只返回有界尾部 + 完整输出的哈希/字节数;需要长期保存由 Agent 自己重定向到文件。
     """
     cmd = args.get("command")
     if not cmd:
         return {"status": "error", "error": "command 必填"}
     mode = str(args.get("mode") or "auto").lower()
     if isinstance(cmd, list):
-        mode = "argv"                      # 已是 argv 形式
+        mode = "argv"
     if mode not in ("auto", "shell", "argv"):
         return {"status": "error", "error": f"mode 非法: {mode}(允许 auto|shell|argv)"}
     use_shell = (mode == "shell") or (
@@ -265,79 +382,28 @@ def shell_exec(ctx: ToolContext, args: dict) -> dict:
     if not os.path.isdir(workdir):
         return {"status": "error", "error": f"cwd 不存在: {args.get('cwd', '.')}"}
     timeout = pol.clamp_timeout(args.get("timeout", ctx.timeout))
+    # 仅为取消/看护登记 .pgids;不建 stdout/stderr 文件。
     art = ctx.artifacts_dir or os.path.join(ctx.root, "state", "artifacts", ctx.run_id or "local")
     try:
-        os.makedirs(art, exist_ok=True)
-    except OSError as e:
-        return {"status": "error", "error": f"无法创建产物目录: {e}"}
-    oid = new_id("OUT")
-    op = os.path.join(art, f"{oid}.stdout")
-    ep = os.path.join(art, f"{oid}.stderr")
+        argv = (["bash", "-lc", cmd] if use_shell
+                else (shlex.split(cmd) if isinstance(cmd, str) else cmd))
+    except ValueError as e:
+        return {"status": "error", "error": f"命令解析失败: {e}"}
     started = _now()
-    try:
-        with open(op, "ab") as fo, open(ep, "ab") as fe:
-            try:
-                argv = (["bash", "-lc", cmd] if use_shell
-                        else (shlex.split(cmd) if isinstance(cmd, str) else cmd))
-                proc = subprocess.Popen(
-                    argv, cwd=workdir, stdout=fo, stderr=fe,
-                    start_new_session=True,     # 独立进程组 ⇒ 超时可整组杀掉
-                )
-                try:                        # 记录 pgid + 启动时间:看护杀组前要核对,防 pid 复用误杀
-                    pg = os.getpgid(proc.pid)
-                    with open(os.path.join(art, ".pgids"), "a", encoding="utf-8") as pf:
-                        pf.write(f"{pg} {_proc_starttime(proc.pid) or 0}\n")
-                except OSError:
-                    pass
-                # 取消可能发生在"行已 running、进程刚起"的窗口(cancel() 扫 .pgids 时还没写)
-                # ⇒ 起进程后立刻复查一次,避免漏杀后干等到超时
-                if _cancel_requested(ctx):
-                    _kill_group(proc)
-                    with contextlib.suppress(Exception):
-                        proc.wait(timeout=2)
-            except FileNotFoundError as e:
-                with open(ep, "ab") as fe2:
-                    fe2.write(f"命令不存在: {e}".encode())
-                return {"status": "error", "exit_code": None, "stdout_path": op, "stderr_path": ep,
-                        "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep)}
-            deadline = time.time() + float(timeout)
-            try:
-                while True:
-                    slice_s = max(0.02, min(0.2, deadline - time.time()))
-                    try:
-                        proc.wait(timeout=slice_s)
-                        code = proc.returncode
-                        status = "ok" if code == 0 else (
-                            "cancelled" if _cancel_requested(ctx) else "error")
-                        break
-                    except subprocess.TimeoutExpired:
-                        if _cancel_requested(ctx):
-                            _kill_group(proc)              # 取消:整组杀掉,不留在飞进程
-                            with contextlib.suppress(Exception):
-                                proc.wait(timeout=2)
-                            code, status = None, "cancelled"
-                            break
-                        if time.time() >= deadline:
-                            _kill_group(proc)              # 超时:同理会收拾整组
-                            code, status = None, "timeout"
-                            break
-            except BaseException:               # 中断(KeyboardInterrupt 等)也要收拾干净
-                _kill_group(proc)
-                raise
-    except OSError as e:
-        return {"status": "error", "error": f"无法写输出文件: {e}"}
-    out_tail, out_trunc, out_bin = _tail_info(op)
-    err_tail, err_trunc, err_bin = _tail_info(ep)
-    return {
-        "status": status, "exit_code": code, "started_at": started,
-        "shell": use_shell, "mode": mode,
-        # 直接给有界摘要,模型不必再为了看输出重复跑同一条命令
-        "stdout_tail": out_tail, "stderr_tail": err_tail,
-        "stdout_truncated": out_trunc, "stderr_truncated": err_trunc,
-        "stdout_binary": out_bin, "stderr_binary": err_bin,
-        "stdout_path": op, "stderr_path": ep,
-        "stdout_sha256": _sha256(op), "stderr_sha256": _sha256(ep),
-    }
+    out: dict[str, Any] = _capture_process(argv, cwd=workdir, env=None, timeout=timeout,
+                                           cancel_check=lambda: _cancel_requested(ctx),
+                                           pgid_dir=art)
+    # 模型/会话只需要有界尾部;完整原文不塞进结果,避免重复保存。
+    out.pop("stdout", None)
+    out.pop("stderr", None)
+    out.update({"shell": use_shell, "mode": mode, "started_at": started})
+    status = str(out.get("status") or "")
+    if status != "ok":
+        tail = (out.get("stderr_tail") or out.get("stdout_tail") or "").strip()
+        out["error"] = {"timeout": f"超时({int(timeout)}s 上限)",
+                        "cancelled": "运行被取消,工具被中断"}.get(
+                            status, f"退出码 {out.get('exit_code')}" + (f": {tail}" if tail else ""))
+    return out
 
 
 _INTERNAL_PREFIXES = ("state/fwcore.sqlite3", "state/artifacts/", "state/ida/",
@@ -361,7 +427,7 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
         return {"status": "error",
                 "error": f"{rel} 是框架内部文件(状态库/产物目录),不是研究对象。"
                          "看汇总用 research_derived / research_queue;读工具输出用返回里的 "
-                         "stdout_path;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
+                         "stdout_tail;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
     limit = int(args.get("limit", 64_000))
@@ -389,7 +455,7 @@ def fs_hash(ctx: ToolContext, args: dict) -> dict:
         return {"status": "error",
                 "error": f"{rel} 是框架内部文件(状态库/产物目录),不是研究对象。"
                          "看汇总用 research_derived / research_queue;读工具输出用返回里的 "
-                         "stdout_path;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
+                         "stdout_tail;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
     return {"status": "ok", "sha256": _sha256(p), "bytes": os.path.getsize(p)}
@@ -600,7 +666,7 @@ def _tail_info(path: str, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]
     binary = b"\x00" in data
     if binary:
         # 二进制不塞进上下文:只给占位,让模型用路径/xxd/strings 处理
-        return (f"[binary output: {size} bytes; use stdout_path/xxd/strings]",
+        return (f"[binary output: {size} bytes; use stdout_tail / redirect to a file / xxd/strings]",
                 size > max_chars, True)
     text = data.decode("utf-8", errors="replace")
     return text[-max_chars:], (len(text) > max_chars or size > max_chars * 4), False
@@ -622,7 +688,7 @@ def default_registry() -> Registry:
     r = Registry()
     r.register(ToolSpec(
         "shell_exec",
-        "在工作区里执行一条命令(有超时;输出落盘 + sha256)。"
+        "在工作区里执行一条命令(有超时;有界输出 + sha256,不自动落 artifacts)。"
         "mode=auto(默认):含真正 shell 语法(; | && || > < $( ) ` 换行)时用 bash -lc,否则按 argv 执行;"
         "mode=shell 强制 bash -lc;mode=argv 强制直接执行(不解释语法)。`* ? ~` 不触发 shell 模式",
         {"type": "object", "properties": {

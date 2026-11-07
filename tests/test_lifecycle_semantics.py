@@ -310,5 +310,4 @@ def test_authz_root_check_does_not_sandbox_process(tmp_path):
     out = default_registry().call(ctx, "shell_exec",
                                   {"command": f"sh -c 'ls {outside} >/dev/null && echo reached'"})
     assert out["status"] == "ok", out
-    with open(out["stdout_path"], encoding="utf-8", errors="replace") as f:
-        assert "reached" in f.read()
+    assert "reached" in out["stdout_tail"]

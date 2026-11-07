@@ -164,28 +164,25 @@ def _text_registry():
     return reg
 
 
-def test_text_tool_result_is_persisted_with_hash_and_observation(tmp_path):
+def test_text_tool_result_stays_in_result_not_artifact(tmp_path):
     con, dom, root = _setup(tmp_path)
     out = _text_registry().call(_ctx(dom, root), "fake_decompile", {})
-    assert out["status"] == "ok"
+    assert out["status"] == "ok" and "strcpy" in out["text"]
     row = con.execute("SELECT result_path, result_sha256, observation FROM tool_calls WHERE id=?",
                       (out["tool_call_id"],)).fetchone()
-    assert row["result_path"] and os.path.isfile(row["result_path"])
-    with open(row["result_path"], encoding="utf-8") as f:
-        assert "strcpy" in f.read()
-    with open(row["result_path"], "rb") as f:
-        assert row["result_sha256"] == hashlib.sha256(f.read()).hexdigest()
+    assert row["result_path"] is None and row["result_sha256"] is None
     assert json.loads(row["observation"])["kind"] == "decompiled"
 
 
-def test_evidence_from_text_tool_defaults_to_its_artifact(tmp_path):
+def test_text_tool_evidence_requires_explicit_capture(tmp_path):
     con, dom, root = _setup(tmp_path)
     out = _text_registry().call(_ctx(dom, root), "fake_decompile", {})
-    tc = con.execute("SELECT result_path, result_sha256 FROM tool_calls WHERE id=?",
-                     (out["tool_call_id"],)).fetchone()
-    ev = dom.add_evidence("t1", "tool_output", tool_call_id=out["tool_call_id"])
-    row = con.execute("SELECT path, sha256, verified, source FROM evidence WHERE id=?", (ev,)).fetchone()
-    assert row["path"] and row["path"].endswith(".result.txt")
-    assert row["sha256"] == tc["result_sha256"]
+    with pytest.raises(InvariantViolation):
+        dom.add_evidence("t1", "tool_output", tool_call_id=out["tool_call_id"])
+    ev = dom.add_evidence("t1", "tool_output", tool_call_id=out["tool_call_id"],
+                          capture=out["text"])
+    row = con.execute("SELECT path, sha256, capture, verified, source FROM evidence WHERE id=?",
+                      (ev,)).fetchone()
+    assert row["path"] is None and row["sha256"] is None and "strcpy" in row["capture"]
     assert row["verified"] == 0
     assert row["source"] in ("tool:idb", "tool:ida.decompile"), row["source"]

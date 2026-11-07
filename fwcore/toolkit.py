@@ -3,7 +3,7 @@
 要点
 - **不重写研究工具**,只给它们"能力描述 + 参数 schema + 执行边界";模型据此自主选择。
 - 高风险(起仿真、跑 fuzz)标记 risk=high ⇒ 走 policy 的确认/默认拒绝。
-- 输出裁剪后返回(大文件留在 artifacts,模型拿到路径 + 摘要)。
+- 输出裁剪后返回;不自动落 artifacts,需要持久化时由 Agent 用 bash 重定向。
 """
 
 from __future__ import annotations
@@ -38,16 +38,10 @@ def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = 3000,
          tool: str | None = None, meta: dict | None = None) -> dict:
     out = shell_exec(ctx, {"command": cmd, "timeout": timeout})
     text = ""
-    for key in ("stdout_path", "stderr_path"):
-        p = out.get(key)
-        if not (p and os.path.isfile(p)):
-            continue
-        try:
-            with open(p, "rb") as f:
-                f.seek(max(0, os.path.getsize(p) - keep))
-                text += f.read().decode("utf-8", errors="replace")
-        except OSError:
-            continue
+    for key in ("stdout", "stderr", "stdout_tail", "stderr_tail"):
+        value = out.get(key)
+        if isinstance(value, str):
+            text += value
     out["output_tail"] = text[-keep:]
     if tool:
         fn = OBSERVERS.get(tool)

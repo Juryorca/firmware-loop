@@ -28,15 +28,13 @@ from .winenv import IdaConfig
 from .winenv import load as load_ida_config
 
 
-def _tail(path: str | None, keep: int = 600) -> str:
-    if not path or not os.path.isfile(path):
-        return ""
-    try:
-        with open(path, "rb") as f:
-            f.seek(max(0, os.path.getsize(path) - keep))
-            return f.read().decode("utf-8", errors="replace")
-    except OSError:
-        return ""
+def _tail(out: dict, keep: int = 600) -> str:
+    text = ""
+    for key in ("stdout", "stderr", "stdout_tail", "stderr_tail"):
+        value = out.get(key)
+        if isinstance(value, str):
+            text += value
+    return text[-keep:]
 
 
 def _probe_enabled() -> bool:
@@ -52,11 +50,7 @@ def _supervisor_up(ctx: ToolContext, cfg: IdaConfig) -> bool:
                             str(max(1, int(cfg.probe_timeout))),
                             "-o", os.devnull, "-w", "%{http_code}", cfg.url],
                       timeout=cfg.probe_timeout + 3)
-    try:
-        with open(out.get("stdout_path") or "", encoding="utf-8", errors="replace") as f:
-            code = f.read().strip()
-    except OSError:
-        code = ""
+    code = (out.get("stdout") or out.get("stdout_tail") or "").strip()
     return code not in ("", "000")
 
 
@@ -113,14 +107,14 @@ class IdAdapter(Adapter):
             argv.append(init)
         out = run_process(ctx, argv, timeout=cfg.start_timeout, env=_shell_env(cfg))
         if out.get("status") != "ok":
-            detail = (_tail(out.get("stdout_path")) + _tail(out.get("stderr_path"))).strip()
+            detail = (_tail(out)).strip()
             self.last_error = detail[-400:] or out.get("status")
             return {"status": "error",
                     "error": f"IDA supervisor 启动失败({out.get('status')}): {self.last_error}",
                     "meta": {"capability": "debug.ida", "provider": "ida:supervisor",
                              "startup_exit": out.get("exit_code"), "config_source": cfg.source}}
         if _probe_enabled() and not _supervisor_up(ctx, cfg):
-            detail = (_tail(out.get("stdout_path")) + _tail(out.get("stderr_path"))).strip()
+            detail = (_tail(out)).strip()
             self.last_error = detail[-400:]
             return {"status": "error",
                     "error": f"IDA 启动脚本返回成功,但 supervisor 不可达({cfg.url}): {self.last_error}",
@@ -148,7 +142,7 @@ class IdAdapter(Adapter):
                             "arch": args.get("arch"), "url": cfg.url})
         # IDA MCP 返回 JSON-RPC 信封。优先把内层 structuredContent 交给 observer，
         # 避免 600 字符尾部截断导致明明成功却显示 unparsed；原始 stdout 仍在路径里。
-        text = _tail(out.get("stdout_path"), keep=2_000_000) if out.get("stdout_path") else ""
+        text = (out.get("stdout") or out.get("stdout_tail") or "")[-2_000_000:]
         if text.strip().startswith("{"):
             try:
                 envelope = json.loads(text)

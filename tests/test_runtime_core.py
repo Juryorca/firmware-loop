@@ -42,7 +42,7 @@ def test_shell_exec_records_statuses(setup):
     # 三种状态都落库,且带 sha256/落盘路径
     rows = con.execute("SELECT status FROM tool_calls ORDER BY created_at").fetchall()
     assert {r["status"] for r in rows} == {"ok", "error", "timeout"}
-    assert os.path.isfile(ok["stdout_path"])
+    assert "stdout_path" not in ok and ok["stdout_tail"] == ""
 
 
 def test_high_risk_tool_requires_confirmation(setup):

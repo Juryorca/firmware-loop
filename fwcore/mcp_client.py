@@ -16,11 +16,18 @@ import select
 import signal
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 
 
 class MCPError(RuntimeError):
     pass
+
+
+class MCPConfigError(MCPError):
+    """MCP 配置文件存在但不可读/JSON 损坏/结构非法;不能静默跳过。"""
 
 
 @dataclass
@@ -41,7 +48,7 @@ class ServerSpec:
 
 
 def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
-    """按顺序合并配置(靠前的优先;同名不覆盖)。"""
+    """按顺序合并配置(靠前的优先;同名不覆盖)。配置损坏必须显式报错。"""
     out: dict[str, ServerSpec] = {}
     for path in config_paths:
         if not os.path.isfile(path):
@@ -49,9 +56,19 @@ def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
         try:
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            continue
-        for name, srv in (data.get("mcpServers") or {}).items():
+        except OSError as e:
+            raise MCPConfigError(f"{path}: 无法读取: {type(e).__name__}: {e}") from e
+        except json.JSONDecodeError as e:
+            raise MCPConfigError(
+                f"{path}: JSON 解析失败(第 {e.lineno} 行第 {e.colno} 列): {e.msg}") from e
+        if not isinstance(data, dict):
+            raise MCPConfigError(f"{path}: 顶层必须是 JSON object")
+        servers = data.get("mcpServers")
+        if servers is None:
+            servers = {}
+        if not isinstance(servers, dict):
+            raise MCPConfigError(f"{path}: mcpServers 必须是 object")
+        for name, srv in servers.items():
             if name in out or not isinstance(srv, dict):
                 continue
             out[name] = ServerSpec(
@@ -77,6 +94,7 @@ class MCPClient:
         self._proc: subprocess.Popen | None = None
         self._next_id = 0
         self._buf = b""
+        self._http_session: str | None = None
 
     # ---------- 生命周期 ----------
     def __enter__(self) -> MCPClient:
@@ -88,8 +106,10 @@ class MCPClient:
         return False
 
     def start(self) -> None:
-        if self.spec.transport != "stdio":
-            raise MCPError(f"{self.spec.name}: 目前只支持 stdio transport(url={self.spec.url})")
+        if self.spec.transport == "http":
+            if not (self.spec.url or "").startswith(("http://", "https://")):
+                raise MCPError(f"{self.spec.name}: HTTP transport 需要 http(s) URL")
+            return
         env = dict(os.environ, **{k: str(v) for k, v in self.spec.env.items()})
         self._proc = subprocess.Popen(
             [self.spec.command, *self.spec.args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -122,6 +142,56 @@ class MCPClient:
         self._proc.stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode())
         self._proc.stdin.flush()
 
+    def _http_post(self, payload: dict, timeout: float) -> dict:
+        """MCP Streamable HTTP:POST JSON-RPC;兼容 application/json 与 SSE。"""
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2024-11-05",
+        }
+        if self._http_session:
+            headers["Mcp-Session-Id"] = self._http_session
+        req = urllib.request.Request(
+            self.spec.url or "", data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=headers, method="POST")
+        try:
+            host = urllib.parse.urlparse(self.spec.url or "").hostname or ""
+            if host in ("127.0.0.1", "localhost", "::1"):
+                # 本机 MCP 端点不能被 http_proxy 劫持
+                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                stream = opener.open(req, timeout=timeout)
+            else:
+                stream = urllib.request.urlopen(req, timeout=timeout)
+            with stream as resp:
+                session = resp.headers.get("Mcp-Session-Id")
+                if session:
+                    self._http_session = session
+                raw = resp.read()
+                content_type = (resp.headers.get("Content-Type") or "").lower()
+                if not raw:
+                    return {}
+                if "text/event-stream" not in content_type:
+                    return json.loads(raw.decode("utf-8", errors="replace"))
+                # SSE:取第一个 data: JSON 行;忽略注释/心跳/其它事件。
+                for line in raw.decode("utf-8", errors="replace").splitlines():
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data or data == "[DONE]":
+                        continue
+                    try:
+                        return json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                raise MCPError(f"{self.spec.name}: SSE 中没有 JSON-RPC 响应")
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")[:500]
+            raise MCPError(f"{self.spec.name}: HTTP {e.code}: {body}") from e
+        except urllib.error.URLError as e:
+            raise MCPError(f"{self.spec.name}: HTTP 连接失败: {e.reason}") from e
+        except (OSError, ValueError) as e:
+            raise MCPError(f"{self.spec.name}: HTTP 请求失败: {type(e).__name__}: {e}") from e
+
     def _read_message(self, deadline: float, timeout: float | None = None) -> dict:
         if not self._proc or not self._proc.stdout:
             raise MCPError("连接未建立")
@@ -153,6 +223,13 @@ class MCPClient:
     def request(self, method: str, params: dict | None = None, timeout: float | None = None) -> dict:
         self._next_id += 1
         rid = self._next_id
+        if self.spec.transport == "http":
+            msg = self._http_post({"jsonrpc": "2.0", "id": rid, "method": method,
+                                   "params": params or {}},
+                                  timeout if timeout is not None else self.timeout)
+            if "error" in msg:
+                raise MCPError(f"{self.spec.name}: {method} 失败: {msg['error']}")
+            return msg.get("result") or {}
         self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}})
         deadline = time.time() + (timeout if timeout is not None else self.timeout)
         while True:
@@ -164,6 +241,10 @@ class MCPClient:
             return msg.get("result") or {}
 
     def notify(self, method: str, params: dict | None = None) -> None:
+        if self.spec.transport == "http":
+            self._http_post({"jsonrpc": "2.0", "method": method, "params": params or {}},
+                            self.timeout)
+            return
         self._send({"jsonrpc": "2.0", "method": method, "params": params or {}})
 
     # ---------- 便捷方法 ----------
@@ -190,9 +271,6 @@ def probe(spec: ServerSpec, *, timeout: float = 15.0) -> dict:
     """真实探针:只有 initialize + tools/list 都成功才算 reachable。"""
     if not spec.enabled:
         return {"server": spec.name, "status": "disabled", "evidence": "configured"}
-    if spec.transport != "stdio":
-        return {"server": spec.name, "status": "unsupported_transport", "evidence": "configured",
-                "detail": f"url={spec.url}"}
     client = MCPClient(spec, timeout=timeout)
     try:
         client.start()

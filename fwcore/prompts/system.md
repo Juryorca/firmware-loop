@@ -14,6 +14,8 @@
 
 - 工具是真实执行能力；工具描述说明参数、风险和失败语义。不要假设未注册的工具可用。
 - `shell_exec` 等高风险能力受授权、预算和确认约束；不要绕过它们。
+- **授权层只做权限与路径检查，不是操作系统沙箱**：进程仍可能访问 root 之外的文件/网络；不要把它描述成已隔离。真正隔离要靠容器/chroot 等外部环境。
+- 需要 glob/tilde 展开时，`shell_exec` 用显式 `mode=shell`；`mode=auto` 不会因为 `* ? ~` 自动进入 shell。
 - 工具 `status=error/timeout/cancelled` 不能当作研究结论；先分诊环境、工具、信号。
 - 工具输出应落到可追溯路径；需要证据时用 `state_add_observation/state_add_evidence` 登记，并保留 `db_tool_call_id`。
 - 工具是否可用、缺少依赖/服务未启动，以 `fw-core toolset` / `capabilities` 的只读状态为准；不要假设命令存在就可用，也不要为了状态检查擅自启动有副作用的服务。

@@ -73,6 +73,8 @@ class ChainModel:
             if m.get("name") == "mcp_fake_decompile" and data.get("db_tool_call_id"):
                 # 只认 MCP 那次调用的 id:所有工具结果都带自己的 tool_call_id,别被后来者覆盖
                 self.ids["tool_call_id"] = data["db_tool_call_id"]
+                if data.get("text"):
+                    self.ids["mcp_text"] = data["text"]
             for key in ("hypothesis_id", "attempt_id", "evidence_id", "check_id"):
                 if data.get(key):
                     self.ids[key] = data[key]
@@ -94,6 +96,7 @@ class ChainModel:
             return self._call("state_add_evidence", {
                 "target": "t1", "kind": "tool_output",
                 "tool_call_id": self.ids["tool_call_id"],
+                "capture": self.ids.get("mcp_text", ""),
                 "attempt_id": self.ids["attempt_id"],
                 "hypothesis_id": self.ids["hypothesis_id"]})
         if self.stage == 4 and "evidence_id" in self.ids:
@@ -138,16 +141,16 @@ def test_mcp_to_conclusion_end_to_end(tmp_path):
 
     assert res.state == "finished", (res.state, res.blockers)
 
-    # ① MCP 调用真的执行了,并留下原始产物+哈希
+    # ① MCP 调用真的执行了;文本留在 tool result,不自动落 artifact
     tc = con.execute("SELECT * FROM tool_calls WHERE tool='mcp_fake_decompile'").fetchone()
     assert tc and tc["status"] == "ok" and tc["provider"] == "mcp:fake"
-    assert tc["result_path"] and os.path.isfile(tc["result_path"]) and tc["result_sha256"]
+    assert tc["result_path"] is None and tc["result_sha256"] is None
 
-    # ② 证据绑定到该次调用,并指向同一份产物
+    # ② 证据显式 capture,绑定该次调用
     ev = con.execute("SELECT * FROM evidence").fetchone()
     assert ev["tool_call_id"] == tc["id"]
-    assert os.path.basename(ev["path"] or "") == os.path.basename(tc["result_path"])
-    assert ev["sha256"] == tc["result_sha256"]
+    assert ev["path"] is None and ev["sha256"] is None
+    assert "strcpy" in ev["capture"]
     assert ev["source"].startswith("tool:")
 
     # ③ 复核是可检查记录(recheck-sha256),而不是一句声明

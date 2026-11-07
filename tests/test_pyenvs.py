@@ -39,3 +39,16 @@ def test_legacy_toolenv_is_still_read(tmp_path):
     with open(os.path.join(root, "state", "toolenv.json"), "w", encoding="utf-8") as f:
         json.dump({"python_envs": ["/legacy/python", sys.executable]}, f)
     assert pyenvs.load(root)[0] == "/legacy/python"
+
+
+def test_corrupt_config_is_reported_not_silently_fallback(tmp_path):
+    root = str(tmp_path)
+    os.makedirs(os.path.join(root, "state"))
+    with open(os.path.join(root, "state", "pyenvs.json"), "w", encoding="utf-8") as f:
+        f.write("{bad json")
+    try:
+        pyenvs.load(root)
+    except pyenvs.PyEnvConfigError as e:
+        assert "JSON" in str(e)
+    else:
+        raise AssertionError("corrupt pyenvs.json must raise PyEnvConfigError")

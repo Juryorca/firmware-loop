@@ -1684,7 +1684,7 @@ def _bounded_tool_result(out: dict, limit: int = 8000) -> str:
 
     - `db_tool_call_id`:数据库 TC-…(state_add_evidence 认这个,不是协议 id)
     - 产物路径/哈希/状态/错误/退出码/摘要一律保留;大字段只给节选 + 原长度
-    - 完整输出仍在磁盘(`stdout_path`/`result_path`)与数据库
+    - 输出只在 tool result/检查点中有界保存;不自动占 workspace artifact
     """
     out = dict(out)
     if out.get("tool_call_id"):

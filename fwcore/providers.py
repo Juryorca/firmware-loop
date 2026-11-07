@@ -385,29 +385,26 @@ def windows_ida_provider(root: str) -> Provider:
 
 def mcp_provider(name: str, config_paths: list[str]) -> Provider:
     def _load() -> dict:
-        last_err = ""
-        for p in config_paths:
-            if os.path.isfile(p):
-                try:
-                    with open(p, encoding="utf-8") as f:
-                        d = json.load(f)
-                    srv = (d.get("mcpServers") or {}).get(name)
-                    if srv:
-                        return srv
-                except (OSError, json.JSONDecodeError) as e:
-                    last_err = f"{p}: {e}"
-                    continue
-        _ = last_err
-        return {}
+        from .mcp_client import MCPConfigError, load_servers
+
+        try:
+            srv = load_servers(config_paths).get(name)
+        except MCPConfigError as e:
+            return {"__config_error__": str(e)}
+        if not srv:
+            return {}
+        return {"command": srv.command, "url": srv.url, "enabled": srv.enabled}
 
     def probe() -> Probe:
         srv = _load()
+        if srv.get("__config_error__"):
+            return Probe(NOT_STARTED, f"MCP 配置损坏: {srv['__config_error__']}")
         if not srv:
             return Probe(MISSING, f"配置里没有 {name}")
         if srv.get("enabled") is False:
             return Probe(NOT_STARTED, "配置存在但 enabled=false")
         if srv.get("url"):
-            return Probe(PARTIAL, "已配置 HTTP transport;当前 MCP 运行时只支持 stdio,未连接",
+            return Probe(PARTIAL, "已配置 HTTP transport;探针未连接,状态不是 ready",
                          path=srv.get("url"), evidence="configured")
         return Probe(NOT_STARTED, "已配置 stdio;只读探针不启动服务,MCP 尚未连接",
                      path=srv.get("command"), evidence="configured")

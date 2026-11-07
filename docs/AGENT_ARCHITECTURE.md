@@ -185,12 +185,13 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 4. 不设人工审核；不再适用时用管理接口标 `deprecated` / `superseded`；
 5. 不把目标专属地址/当前证据写进知识正文。
 
-### 新增 Tool
+### 接入工具（默认不新增框架 Tool）
 
-1. 先查现有 registry/capability，避免重复；
-2. 真实执行能力 → `ToolSpec` 或 manifest；Skill 只写“怎么用”；
-3. 补 schema、失败语义、evidence/observer、授权/风险；
-4. 不能用占位实现冒充已接线；缺依赖如实标 `unavailable`。
+1. 先查已有 CLI/Plugin/MCP/元数据，避免重复安装或重复接入；
+2. **普通 CLI**：只写 `state/tools.json`，Agent 通过 `shell_exec` 直接调用；不新增 Manifest、Provider、Adapter、Wrapper；
+3. **已有 Plugin/MCP**：保持原生接入，不转换成 Bash；
+4. 只有确实需要统一能力探针、生命周期或特殊协议时，才加 Provider/Adapter；已有 `fw_extract`/截图/IDA 等特殊脚本保留；
+5. 补真实 smoke test；缺依赖如实标 `unavailable`，不能把“文件存在”当 ready。
 
 ## 9. 测试要求
 

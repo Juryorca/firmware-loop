@@ -27,7 +27,7 @@ def _ctx(dom, root, rid="R1"):
                        policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
 
 
-def test_shell_exec_returns_bounded_tail_and_keeps_artifacts(tmp_path):
+def test_shell_exec_returns_bounded_tail_without_artifacts(tmp_path):
     con, dom, root = _setup(tmp_path)
     out = default_registry().call(_ctx(dom, root), "shell_exec",
                                   {"command": "seq 1 2000"})
@@ -35,7 +35,7 @@ def test_shell_exec_returns_bounded_tail_and_keeps_artifacts(tmp_path):
     assert out["stdout_tail"] and len(out["stdout_tail"]) <= TAIL_CHARS
     assert out["stdout_truncated"] is True
     assert "2000" in out["stdout_tail"]          # 尾部内容确实可用
-    assert os.path.isfile(out["stdout_path"]) and out["stdout_sha256"]
+    assert out["stdout_sha256"] and "stdout_path" not in out  # Pi 风格:不自动落 artifact
 
 
 def test_binary_output_is_flagged_not_dumped(tmp_path):
@@ -55,8 +55,10 @@ def test_run_process_returns_tail_for_script_tools(tmp_path):
 def _evidence_with_call(con, dom, root):
     hid = dom.add_hypothesis("t1", "h", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
-    call = default_registry().call(_ctx(dom, root), "shell_exec", {"command": "echo produced"})
-    ev = dom.add_evidence("t1", "tool_output", path=call["stdout_path"],
+    call = default_registry().call(_ctx(dom, root), "shell_exec",
+                                   {"command": "echo produced > produced.txt"})
+    path = os.path.join(root, "produced.txt")
+    ev = dom.add_evidence("t1", "tool_output", path=path,
                           attempt_id=aid, hypothesis_id=hid)
     return hid, aid, call, ev
 
@@ -67,12 +69,12 @@ def test_link_existing_evidence_keeps_id_hash_and_verification(tmp_path):
     before = con.execute("SELECT sha256,path,verified FROM evidence WHERE id=?", (ev,)).fetchone()
     dom.verify_evidence(ev, "recheck-sha256")
     res = dom.link_evidence_source(ev, call["tool_call_id"])
-    assert res["relation"] == "direct-stdout" and res["direct"] is True
+    assert res["relation"] == "command-write" and res["direct"] is False
     row = con.execute("SELECT id,sha256,path,verified,tool_call_id,link_relation"
                       " FROM evidence WHERE id=?", (ev,)).fetchone()
     assert row["id"] == ev and row["sha256"] == before["sha256"]     # 同一 E-ID/哈希
     assert row["verified"] == 1 and row["tool_call_id"] == call["tool_call_id"]
-    assert row["link_relation"] == "direct-stdout"
+    assert row["link_relation"] == "command-write"
     kinds = [r["kind"] for r in con.execute("SELECT kind FROM events")]
     assert "evidence.linked" in kinds
     n = con.execute("SELECT COUNT(*) n FROM evidence").fetchone()["n"]

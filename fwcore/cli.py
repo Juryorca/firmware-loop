@@ -366,10 +366,14 @@ def main(argv: list[str] | None = None) -> int:
             out["last_compaction_kind"] = comp is not None and json.loads(comp["payload"]).get("error") is None
             print(json.dumps(out, ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":
-            from .mcp_client import MCPClient, load_servers, probe as mcp_probe
+            from .mcp_client import MCPClient, MCPConfigError, load_servers, probe as mcp_probe
             cfgs = [os.environ.get("FW_MCP_CONFIG") or
                     os.path.join(args.root, "state", "mcp.json")]
-            servers = load_servers(cfgs)
+            try:
+                servers = load_servers(cfgs)
+            except MCPConfigError as e:
+                print(f"MCP_CONFIG_ERROR: {e}", file=sys.stderr)
+                return 2
             if args.action == "list":
                 print(json.dumps({k: {"transport": v.transport, "enabled": v.enabled}
                                   for k, v in servers.items()}, ensure_ascii=False, indent=2))

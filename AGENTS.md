@@ -389,6 +389,11 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - 边界:只用于用户要求提交的报告;只填不点提交;不存不代填密码;登录态不进对外材料、不复制出工作区。
 - 多会话:①headless 天然隔离(每会话一进程 + `--isolated`),只费内存;②冲突只有一种 —— **两个会话连同一个可调试浏览器**(共用标签页)⇒ 同一时间只在一个会话 `enabled:true`;③`state/<目标>/` 单写者 ⇒ 一个目标只开一个会话。
 
+### 工具输出与证据(2026-11-08)
+- 工具输出默认留在 tool result/session（有界尾部）；**不自动在 `artifacts/` 建 stdout/stderr 文件**（Pi 风格）。
+- 需要长期保存时，Agent 自己用 bash 重定向到 `state/<target>/artifacts/` 或 `state/_scratch/`。
+- `observation` 记录研究事实；`evidence` 必须显式给 `path` 或 `capture`，并复核后才能支撑结论。工具跑过 ≠ 证据。
+
 ### 工具定位与 Python 环境(2026-11-06)
 - **已有工具**通过本地元数据 `state/tools.json` 定位(可用 `FW_TOOL_CONFIG` 覆盖):
   `path`(实际可执行文件)/ `python`(Python 工具解释器)/ `cwd` / `env`。
@@ -396,6 +401,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **Python 环境队列** `state/pyenvs.json`(或 `FW_PYTHON_ENVS`)只用于 Agent 自己跑 Python 代码
   和决定包安装位置;它不是工具注册表,不用来搜索 unblob/angr/Ghidra/QEMU。
 - 系统命令没有显式元数据时才按 `PATH` 查找;简单优先,不做多环境/多架构目录大扫描。
+- **Authz 只是权限与路径检查,不是 OS 沙箱**;进程仍能访问授权 root 之外的文件/网络。需要隔离时用容器/chroot,不要宣传成已有沙箱。
 
 ### 提取工具
 - binwalk: 系统 PATH(或 `state/tools.json` 的 `binwalk.path`)
