@@ -136,6 +136,7 @@ class FwApp(App):
         self._last_busy: bool | None = None
         self._assistant_rendered = False
         self._stream_error_notified = False
+        self._stop_requested = False
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -358,7 +359,7 @@ class FwApp(App):
             if text:
                 self._assistant_rendered = True
             status = ev.data.get("status") or "ok"
-            if status != "ok":
+            if status != "ok" and not (self._stop_requested and status == "cancelled"):
                 self._notice(f"回复未完整生成：{response_status_label(status)}", "warning")
             self._stream_msg = None
         elif ev.kind == "assistant_error":
@@ -397,19 +398,25 @@ class FwApp(App):
                 label = state_label(state)
                 prefix = "本轮" if label.startswith("已") else "本轮已"
                 # assistant_error 已经显示过同一条流错误时，不再重复一条泛化通知。
+                # 用户主动停止时，请求提示已经显示过一次；这里不再重复“已暂停”。
+                is_user_stop = str(hb or "").startswith("user_stop")
                 if not (self._stream_error_notified and str(hb or "").startswith("model_error")):
-                    self._notice(f"{prefix}{label}{reason}", "warning")
+                    if not (self._stop_requested and is_user_stop):
+                        self._notice(f"{prefix}{label}{reason}", "warning")
             elif hb in ("awaiting_user_close", "closed"):
                 self._notice("收尾条件已满足，等待你确认收尾" if hb == "awaiting_user_close"
                              else "已确认收尾", "success")
             if blockers:
                 self._notice(f"收尾检查还有 {len(blockers)} 项未通过；在研究面板可查看详情。",
                              "info")
+            # 保持到下一次 busy/新提交再清；cancelled 事件可能晚于 turn_done，
+            # 立刻清会重新放出重复的“已停止”提示。
             self._update_status()
         elif ev.kind == "error":
             self._notice(ev.text, "error")
         elif ev.kind == "cancelled":
-            self._notice(f"已停止: {ev.text}", "warning")
+            if not self._stop_requested:
+                self._notice(f"已停止: {ev.text}", "warning")
             back = self.sess.take_returned()
             if back:
                 self.query_one(PromptEditor).text = "\n".join(back)
@@ -458,6 +465,7 @@ class FwApp(App):
         self._append(MessageWidget("user", text + "  （已排队）"))
         self.query_one(PromptEditor).remember(text)
         self.query_one(PromptEditor).text = ""
+        self._stop_requested = False
         self.sess.submit(text)
         self._update_status()
 
@@ -467,8 +475,7 @@ class FwApp(App):
             pal.hide()
             return
         if self.sess.busy:
-            self.sess.cancel()
-            self._notice("已请求停止(在安全点暂停)", "warning")
+            self._request_stop()
         elif self.query_one(PromptEditor).text:
             self.query_one(PromptEditor).text = ""
 
@@ -525,6 +532,7 @@ class FwApp(App):
             self._notice("没有目标：请先选择目标，或运行 `fw-core init <目标>`。", "warning")
             return
         self._append(MessageWidget("user", text))
+        self._stop_requested = False
         self.sess.submit(text)
         self._update_status()
 
@@ -728,6 +736,7 @@ class FwApp(App):
         if self.sess.busy:
             self._notice("当前一轮仍在执行，暂时不能继续；请等它结束或先按 Esc 停止。", "warning")
             return
+        self._stop_requested = False
         if self.sess.continue_run():
             self._notice("继续推进…")
 
@@ -754,10 +763,16 @@ class FwApp(App):
             w.body.display = self._expand_tools
         self._notice("工具输出: " + ("展开" if self._expand_tools else "折叠"))
 
+    def _request_stop(self) -> None:
+        if self._stop_requested:
+            return
+        self._stop_requested = True
+        self.sess.cancel()
+        self._notice("正在停止…", "warning")
+
     def action_interrupt(self) -> None:
         if self.sess.busy:
-            self.sess.cancel()
-            self._notice("已请求停止(安全点暂停)", "warning")
+            self._request_stop()
             return
         editor = self.query_one(PromptEditor)
         if editor.text:

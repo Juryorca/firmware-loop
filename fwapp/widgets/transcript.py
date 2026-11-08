@@ -34,7 +34,12 @@ def _short(value, limit: int = 90) -> str:
 
 
 class TranscriptView(VerticalScroll):
-    """可滚动的对话区;新内容只在用户已在底部时自动跟随。"""
+    """可滚动的对话区;新内容只在用户已在底部时自动跟随。
+
+    点击对话区不应把键盘焦点从编辑器抢走；滚动条仍可用鼠标。
+    """
+
+    can_focus = False
 
     def at_bottom(self) -> bool:
         try:

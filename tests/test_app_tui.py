@@ -192,6 +192,29 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
         rt.dispose()
 
 
+def test_click_transcript_keeps_editor_focus(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.3)
+            ed = app.query_one(PromptEditor)
+            assert app.focused is ed
+            await pilot.click("#transcript")
+            await pilot.pause(0.2)
+            assert app.focused is ed
+            await pilot.press("a")
+            assert ed.text == "a"
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
 def test_tui_escape_cancels_running_turn(tmp_path):
     cfg = make_ws(tmp_path)
 
@@ -225,6 +248,11 @@ def test_tui_escape_cancels_running_turn(tmp_path):
                 (app.sess.run_id,)).fetchone()
             assert row["state"] == "paused"
             assert (row["handback_reason"] or "").startswith("user_stop")
+            notices = [str(w.render()) for w in app.query(NoticeWidget)]
+            assert sum("正在停止" in n for n in notices) == 1
+            assert not any("回复未完整生成" in n or "已停止:" in n or "本轮已暂停" in n
+                           for n in notices)
+            assert app.focused is ed
             # /continue 恢复同一 run(再走一轮,不新建)
             ed.text = "/continue"
             await pilot.press("enter")
