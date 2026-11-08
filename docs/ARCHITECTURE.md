@@ -132,6 +132,14 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **错误/探针摘要**（如 160/600 字符）只用于状态说明，不承载完整工具输出。
 - 需要长期保存时由 Agent 自己用 bash 重定向；临时 `full_output_path` 不能当 evidence 路径。
 
+### 常量来源（不要把本地经验当成 Pi 规范）
+
+- **Pi 原值**（有来源可核）：live tool output `2000` 行 / `50 KiB` 尾部；
+  structured/full read `1 MiB`；compaction 单条 tool result `2000` 字符。
+- **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP 单条消息 `8 MiB`、
+  Skill 文件 `512 KiB`、错误摘要 `160/600` 字符、legacy 修复 excerpt `1500`、
+  MCP observation `2000`。这些应保持命名常量/局部理由，不能反过来冒充 Pi。
+
 ## 5. 上下文生命周期(静态前缀 + 尾部状态 + 阈值压缩)
 
 - 请求 = `[system 静态规则] + history(append-only) + [user 尾部状态]`;状态块含派生量/事实/进度/目标
