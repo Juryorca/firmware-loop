@@ -70,7 +70,6 @@ tools = registry.describe()
 ---
 name: research-loop
 description: 一句话说明适用场景（Agent 据此判断是否加载）
-audience: research        # 可选；development 不进入研究 Agent catalog
 ---
 ```
 
@@ -82,10 +81,10 @@ audience: research        # 可选；development 不进入研究 Agent catalog
 
 `fwcore/skills.py`：
 
-- `discover_skills(root)`：只扫描 `.agents/skills/*/SKILL.md`；跳过 symlink/非法 frontmatter；返回完整发现结果（含开发 Skill）。
-- `catalog(root, include_development=False)`：返回 name/description/audience；研究 Agent 目录默认隐藏 `audience: development`；只有开发代码显式传 `include_development=True`。
-- `read_skill(root, name, reference=None, include_development=False)`：读取完整 `SKILL.md` 或 `references/*`；realpath 必须在 Skill 目录内；拒绝绝对路径、`..`、symlink、非文本、>512KB；研究 Agent 默认不能读取开发 Skill。
-- 工具：`skills_list`、`skill_read` 与研究 Agent 的 `/skills` 使用同一过滤规则。
+- `discover_skills(root)`：只扫描 `.agents/skills/*/SKILL.md`；跳过 symlink/非法 frontmatter；返回完整发现结果。
+- `catalog(root)`：返回 name/description/audience；不按 audience 隐藏任何 Skill。
+- `read_skill(root, name, reference=None)`：读取完整 `SKILL.md` 或 `references/*`；realpath 必须在 Skill 目录内；拒绝绝对路径、`..`、symlink、非文本、>512KB。
+- 工具：`skills_list`、`skill_read` 与 TUI `/skills` 使用同一完整目录，不做 development 过滤。
 - 不创建 Subagent、不引入新编排层；Skill 只是操作知识。
 
 ### 当前 Skills
@@ -99,7 +98,7 @@ audience: research        # 可选；development 不进入研究 Agent catalog
 | `report-submission` | advisory/CVE/厂商提交（只填不提交） |
 | `research-knowledge-curation` | 研究知识检索与直接沉淀（无中间审核态） |
 | `tool-management` | 工具元数据、Python 环境队列、安装与接入（用户 `/tool-setup` 触发） |
-| `fwcore-development` | 产品开发会话方法（开发用，不是研究流程；研究 Agent 的 catalog 不暴露） |
+| `fwcore-development` | 产品开发会话方法（开发用；按文件生命周期保留/删除，不在运行时隐藏） |
 
 ## 5. Slash Commands
 

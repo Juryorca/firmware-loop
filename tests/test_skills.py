@@ -67,26 +67,20 @@ def test_skill_tools(tmp_path):
     assert bad["status"] == "error"
 
 
-def test_development_skills_are_hidden_from_research_catalog_and_reader(tmp_path):
+def test_development_skills_are_visible_and_readable_to_agents(tmp_path):
     root = str(tmp_path)
     _mk(root, "demo")
     _mk(root, "dev", audience="development")
     assert [s.name for s in discover_skills(root)] == ["demo", "dev"]
-    assert [s["name"] for s in catalog(root)] == ["demo"]
-    assert [s["name"] for s in catalog(root, include_development=True)] == ["demo", "dev"]
-    try:
-        read_skill(root, "dev")
-    except SkillError:
-        pass
-    else:
-        raise AssertionError("研究 Agent 不应读取 development Skill")
-    assert read_skill(root, "dev", include_development=True)["content"].startswith("---")
+    assert [s["name"] for s in catalog(root)] == ["demo", "dev"]
+    out = read_skill(root, "dev")
+    assert out["content"].startswith("---") and "正文" in out["content"]
 
     con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
     dom = Domain(con, root)
     ctx = ToolContext(domain=dom, root=root)
     reg = default_registry()
     listed = reg.call(ctx, "skills_list", {})
-    assert [s["name"] for s in listed["skills"]] == ["demo"]
-    blocked = reg.call(ctx, "skill_read", {"name": "dev"})
-    assert blocked["status"] == "error"
+    assert [s["name"] for s in listed["skills"]] == ["demo", "dev"]
+    got = reg.call(ctx, "skill_read", {"name": "dev"})
+    assert got["status"] == "ok"

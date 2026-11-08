@@ -34,7 +34,7 @@ def project_instructions(root: str) -> str:
 
 
 def _skill_section(root: str) -> str:
-    items = [x for x in skill_catalog(root) if x.get("audience") != "development"]
+    items = skill_catalog(root)
     if not items:
         return ""
     lines = ["## Available Skills（仅目录；正文用 skill_read 按需加载）", ""]
