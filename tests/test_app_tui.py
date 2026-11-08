@@ -14,8 +14,14 @@ from fwapp.modes.interactive import FwApp
 from fwapp.runtime import AppRuntime
 from fwapp.widgets.editor import PromptEditor
 from fwapp.widgets.palette import CommandPalette
-from fwapp.widgets.screens import (ConfirmScreen, HelpScreen, ResearchScreen,
-                                   SelectorScreen, ToolsetScreen)
+from fwapp.widgets.screens import (
+    ConfirmScreen,
+    HelpScreen,
+    ResearchScreen,
+    SelectorScreen,
+    ToolsetScreen,
+)
+from fwapp.widgets.status import StatusBar
 from fwapp.widgets.transcript import ToolWidget
 from fwcore import db as _db
 from fwcore.domain import Domain
@@ -49,6 +55,7 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
 
     async def scenario():
         async with app.run_test(size=(100, 30)) as pilot:
+            q = app.query
             await pilot.pause(0.3)
             assert app.query_one("#title") is not None
             ed = app.query_one(PromptEditor)
@@ -89,7 +96,7 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
                 if not app.sess.busy and not app.sess.pending:
                     break
             await pilot.pause(0.4)
-            assert [w for w in app.query(ToolWidget)
+            assert [w for w in q(ToolWidget)
                     if w.call_data.get("tool") == "state_add_hypothesis"]
 
             # 历史输入:↑ 取回上一条
@@ -99,11 +106,11 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
 
             # /budget 走真实快照(命令执行会追加一条 notice)
             from fwapp.widgets.transcript import NoticeWidget
-            before = len(app.query(NoticeWidget))
+            before = len(q(NoticeWidget))
             ed.text = "/budget"
             await pilot.press("enter")
             await pilot.pause(0.2)
-            assert len(app.query(NoticeWidget)) > before
+            assert len(q(NoticeWidget)) > before
 
             # 其余 slash commands 也必须连真实服务(不是静态帮助)
             ed.text = "/model scripted"
@@ -134,16 +141,16 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
             await pilot.pause(0.1)
 
             # 新增命令也必须走真实服务(空库时只产生提示,不崩溃)
-            n_before = len(app.query(NoticeWidget))
+            n_before = len(q(NoticeWidget))
             ed.text = "/skills"
             await pilot.press("enter")
             await pilot.pause(0.2)
-            assert len(app.query(NoticeWidget)) > n_before
-            n_before = len(app.query(NoticeWidget))
+            assert len(q(NoticeWidget)) > n_before
+            n_before = len(q(NoticeWidget))
             ed.text = "/knowledge"
             await pilot.press("enter")
             await pilot.pause(0.2)
-            assert len(app.query(NoticeWidget)) > n_before
+            assert len(q(NoticeWidget)) > n_before
             ed.text = "/tools"
             await pilot.press("enter")
             await pilot.pause(0.3)
@@ -158,12 +165,16 @@ def test_tui_boot_palette_screens_resize_and_quit(tmp_path):
             await pilot.press("escape")
             await pilot.pause(0.1)
 
-            # resize 后布局仍可用
+            # resize 后布局仍可用;状态栏和编辑器保持紧凑
             await pilot.resize_terminal(80, 24)
             await pilot.pause(0.2)
-            await pilot.resize_terminal(120, 40)
+            assert app.size.width == 80 and app.size.height == 24
+            assert app.query_one(StatusBar).size.height == 1
+            assert app.query_one(PromptEditor).size.height == 3
+            await pilot.resize_terminal(120, 36)
             await pilot.pause(0.2)
-            assert app.size.width == 120 and app.size.height == 40
+            assert app.size.width == 120 and app.size.height == 36
+            assert app.query_one(StatusBar).size.height == 1
 
             await pilot.press("ctrl+q")
             await pilot.pause(0.2)

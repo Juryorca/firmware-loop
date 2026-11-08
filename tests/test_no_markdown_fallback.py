@@ -94,3 +94,31 @@ def test_derived_check_closure_reads_db_not_notes(tmp_path):
     assert "=== derived_check: FAIL" in r.stdout
     assert "没有任何假设" in r.stdout
     assert "notes.md" not in r.stdout
+
+
+def test_derived_check_round_logs_are_per_record(tmp_path):
+    root = str(tmp_path)
+    con = _make_target(root)
+    from fwcore.domain import Domain
+    dom = Domain(con, root)
+    dom.add_log("t1", "round", "轮 1",
+                "本轮目标: H-01\n本轮: H-01 → no_finding + evidence")
+    dom.add_log("t1", "round", "轮 2",
+                "本轮目标: H-02\n本轮: H-02 → no_finding + evidence")
+    r = subprocess.run(["bash", "tools/derived_check.sh", "t1", "--closure"], cwd=ROOT,
+                       env=dict(os.environ, FW_ROOT=root), capture_output=True,
+                       text=True, timeout=180)
+    assert "2 条 round 记录逐条检查无异常" in r.stdout
+    assert "轮结构: 最近" not in r.stdout
+
+
+def test_derived_check_falls_through_empty_local_db(tmp_path):
+    root = str(tmp_path)
+    _make_target(root)
+    from fwcore import db as _db
+    local = os.path.join(root, "state", "t1", "state", "fwcore.sqlite3")
+    _db.connect(local).close()          # local DB exists but has no target
+    r = subprocess.run(["bash", "tools/derived_check.sh", "t1"], cwd=ROOT,
+                       env=dict(os.environ, FW_ROOT=root), capture_output=True,
+                       text=True, timeout=180)
+    assert "=== derived_check: PASS" in r.stdout

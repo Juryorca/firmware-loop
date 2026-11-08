@@ -26,52 +26,66 @@ from ..session import AgentSession
 from ..widgets.editor import PromptEditor
 from ..widgets.palette import CommandPalette
 from ..widgets.screens import (
-    ConfirmScreen, HelpScreen, ResearchScreen, SelectItem, SelectorScreen,
+    ConfirmScreen,
+    HelpScreen,
+    ResearchScreen,
+    SelectItem,
+    SelectorScreen,
     ToolsetScreen,
 )
 from ..widgets.status import HINTS, StatusBar
 from ..widgets.transcript import (
-    MessageWidget, NoticeWidget, PendingBar, RunBanner, ToolWidget, TranscriptView,
+    MessageWidget,
+    NoticeWidget,
+    PendingBar,
+    RunBanner,
+    ToolWidget,
+    TranscriptView,
 )
 
 
 class FwApp(App):
     CSS = """
-    Screen { background: $surface; }
-    #title { height: 1; background: $primary-darken-2; color: $text; padding: 0 1; }
-    #transcript { height: 1fr; padding: 0 1; }
-    .msg { margin: 1 0 0 0; }
-    .msg-role { color: $accent; text-style: bold; }
-    .msg.user .msg-body { color: $text; }
-    .msg.assistant .msg-body { color: $text; }
-    .thinking { color: $text-muted; }
+    Screen { background: #10151C; color: #DCE3EA; }
+    #title { height: 1; background: #10151C; color: #8995A5; padding: 0 1; }
+    #transcript { height: 1fr; padding: 0 1; background: #10151C; }
+    .msg { margin: 0 0 1 0; padding: 0; }
+    .msg-role { color: #8995A5; text-style: bold; }
+    .msg.user .msg-role { color: #83A9D5; }
+    .msg.assistant .msg-role { color: #89B99D; }
+    .msg .msg-body { padding-left: 2; color: #DCE3EA; }
+    .thinking { color: #66717F; }
     .thinking.hidden { display: none; }
-    .notice { color: $text-muted; margin: 0 0 0 1; }
-    .notice.warning { color: $warning; }
-    .notice.error { color: $error; }
-    .notice.success { color: $success; }
-    .banner { margin: 1 0; color: $accent; }
-    .tool { margin: 0 0 0 1; padding-left: 1; border-left: thick $primary; }
-    .tool-header { color: $text; }
-    .tool.ok { border-left: thick $success; }
-    .tool.error { border-left: thick $error; }
-    .tool.cancelled { border-left: thick $warning; }
-    .tool.running { border-left: thick $accent; }
-    .tool-body { color: $text-muted; padding-left: 1; }
-    #pending { height: auto; max-height: 3; color: $warning; padding: 0 1; }
-    StatusBar { height: 2; background: $panel; color: $text; padding: 0 1; }
-    #palette { display: none; height: auto; max-height: 10; border: solid $accent; background: $panel; }
-    #editor { height: 5; border: tall $primary; background: $surface; }
-    #hints { height: 1; color: $text-muted; padding: 0 1; }
-    .dialog { width: 90%; height: 80%; margin: 2 4; padding: 1 2;
-              border: thick $accent; background: $panel; }
-    .dialog.confirm { width: 70%; height: auto; }
-    .dialog-title { text-style: bold; color: $accent; margin-bottom: 1; }
-    .dialog-hint { color: $text-muted; margin-top: 1; }
+    .notice { color: #8995A5; margin: 0 0 0 1; }
+    .notice.warning { color: #D5B47A; }
+    .notice.error { color: #CE8888; }
+    .notice.success { color: #89B99D; }
+    .banner { margin: 0 0 1 0; color: #83A9D5; }
+    .tool { margin: 0 0 0 0; padding-left: 1; }
+    .tool-header { color: #DCE3EA; }
+    .tool.ok .tool-header { color: #89B99D; }
+    .tool.error .tool-header { color: #CE8888; }
+    .tool.cancelled .tool-header { color: #D5B47A; }
+    .tool.running .tool-header { color: #83A9D5; }
+    .tool-body { color: #8995A5; padding-left: 3; }
+    #pending { height: auto; max-height: 2; color: #D5B47A; padding: 0 1; }
+    StatusBar { height: 1; background: #10151C; color: #8995A5; padding: 0 1; }
+    #palette { display: none; height: auto; max-height: 8; border: solid #2C3643;
+               background: #19212B; color: #DCE3EA; }
+    #editor { height: 3; border: none; background: #19212B; color: #DCE3EA; }
+    #hints { height: 1; color: #66717F; padding: 0 1; }
+    .dialog { width: 82%; height: 78%; margin: 2 4; padding: 1 2;
+              border: solid #2C3643; background: #19212B; }
+    .dialog.confirm { width: 58%; height: auto; }
+    .dialog-title { text-style: bold; color: #83A9D5; margin-bottom: 1; }
+    .dialog-hint { color: #8995A5; margin-top: 1; }
     .dialog-buttons { height: auto; margin-top: 1; }
-    .pane { height: 1fr; overflow-y: auto; }
-    #search { margin-bottom: 1; }
-    #options { height: 1fr; }
+    .pane { height: 1fr; overflow-y: auto; color: #DCE3EA; }
+    #search { margin-bottom: 1; background: #10151C; color: #DCE3EA; }
+    #options { height: 1fr; background: #19212B; }
+    DataTable { background: #19212B; color: #DCE3EA; }
+    DataTable > .datatable--header { background: #19212B; color: #83A9D5; }
+    TabbedContent { background: #19212B; }
     """
 
     BINDINGS = [
@@ -137,22 +151,22 @@ class FwApp(App):
     def _update_title(self) -> None:
         s = self.sess.snapshot()
         t = Text()
-        t.append("fw-core", style="bold")
+        t.append("fw-core", style="bold #8995A5")
         t.append("  ")
-        t.append(s.target or "no target", style="bold cyan")
+        t.append(s.target or "no target", style="bold #83A9D5")
         t.append("  ")
         t.append(s.run_id or "no run", style="dim")
         t.append("  ")
-        t.append(s.state, style="bold green" if s.state == "running" else "yellow")
+        t.append(s.state, style="bold #89B99D" if s.state == "running" else "#D5B47A")
         if s.busy:
-            t.append("  ⏳ working", style="yellow")
+            t.append("  working…", style="#D5B47A")
         self.query_one("#title", Static).update(t)
 
     def _update_status(self) -> None:
         try:
             s = self.sess.snapshot()
         except Exception as e:
-            self.query_one(StatusBar).update(Text(f"状态读取失败: {e}", style="red"))
+            self.query_one(StatusBar).update(Text(f"状态读取失败: {e}", style="#CE8888"))
             return
         self.query_one(StatusBar).update_snapshot(s)
         self.query_one(PendingBar).update_pending(s.pending)

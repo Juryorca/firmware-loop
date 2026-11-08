@@ -42,17 +42,26 @@ if not os.path.isdir(state):
     print("=== derived_check: FAIL ===")
     sys.exit(1)
 con = None
+target_row = None
 for cand in (os.path.join(state, "state", "fwcore.sqlite3"),
              os.path.join(root, "state", "fwcore.sqlite3")):
-    if os.path.isfile(cand):
-        con = sqlite3.connect(cand)
-        con.row_factory = sqlite3.Row
+    if not os.path.isfile(cand):
+        continue
+    _c = sqlite3.connect(cand)
+    _c.row_factory = sqlite3.Row
+    try:
+        target_row = _c.execute("SELECT id FROM targets WHERE name=?", (target,)).fetchone()
+    except sqlite3.DatabaseError:
+        target_row = None
+    if target_row is not None:
+        con = _c
         break
+    _c.close()
 if con is None:
     bad(f"缺权威状态: {target} 不在任何 fwcore.sqlite3 里(运行路径只读 SQLite)")
     print("=== derived_check: FAIL ===")
     sys.exit(1)
-t = con.execute("SELECT id FROM targets WHERE name=?", (target,)).fetchone()
+t = target_row
 if t is None:
     bad(f"缺权威状态: targets 表没有 {target}")
     print("=== derived_check: FAIL ===")
@@ -276,19 +285,24 @@ round_logs = [dict(r) for r in con.execute(
     "SELECT title,body FROM research_logs WHERE target_id=? AND kind='round'"
     " ORDER BY created_at DESC LIMIT 5", (tid,))]
 if round_logs:
-    txt = "\n".join((r["title"] or "") + "\n" + (r["body"] or "") for r in round_logs)
-    goals = re.findall(r"本轮目标\s*[:：]\s*\**\s*(H-\d+)", txt)
-    closes = re.findall(r"(?m)^>?\s*本轮\s*[:：]\s*\**\s*(H-\d+)", txt)
-    orphan = sorted({h for h in closes if h not in goals})
-    dup = sorted({h for h in closes if closes.count(h) > 1})
-    if len(goals) >= 2:
-        msg = f"最近 round 日志声明了 {len(goals)} 个本轮目标: {', '.join(goals)}"
-        bad("轮结构: " + msg) if closure else print("  ⚠ " + msg)
-    elif orphan or dup:
-        msg = f"轮结构: 无目标收口={orphan} 重复收口={dup}"
+    anomalies = []
+    checked = 0
+    for row in round_logs:
+        txt = (row["title"] or "") + "\n" + (row["body"] or "")
+        goals = re.findall(r"本轮目标\s*[:：]\s*\**\s*(H-\d+)", txt)
+        closes = re.findall(r"(?m)^>?\s*本轮\s*[:：]\s*\**\s*(H-\d+)", txt)
+        orphan = sorted({h for h in closes if h not in goals})
+        dup = sorted({h for h in closes if closes.count(h) > 1})
+        checked += 1
+        if len(goals) >= 2:
+            anomalies.append(f"记录#{checked} 声明 {len(goals)} 个目标({', '.join(goals)})")
+        elif orphan or dup:
+            anomalies.append(f"记录#{checked} 无目标收口={orphan} 重复收口={dup}")
+    if anomalies:
+        msg = "轮结构: " + "; ".join(anomalies)
         bad(msg) if closure else print("  ⚠ " + msg)
     else:
-        ok(f"轮结构(DB): round 日志 goals={len(goals)} 无可核异常")
+        ok(f"轮结构(DB): {checked} 条 round 记录逐条检查无异常")
 else:
     print("轮结构: 无 research_logs(kind=round)；新目标不因缺 notes 判 FAIL")
 

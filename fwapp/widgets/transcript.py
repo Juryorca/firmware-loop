@@ -22,8 +22,8 @@ STATUS_CLASS = {
     "timeout": "timeout", "cancelled": "cancelled",
 }
 STATUS_STYLE = {
-    "pending": "dim", "running": "yellow", "ok": "green", "error": "red",
-    "timeout": "yellow", "cancelled": "yellow",
+    "pending": "#8995A5", "running": "#83A9D5", "ok": "#89B99D",
+    "error": "#CE8888", "timeout": "#D5B47A", "cancelled": "#D5B47A",
 }
 
 
@@ -152,7 +152,7 @@ class ToolWidget(Vertical):
         hint = ""
         for k in ("command", "path", "url", "target", "name", "cmd", "query", "pattern"):
             if isinstance(a, dict) and a.get(k):
-                hint = _short(a[k], 110)
+                hint = _short(a[k], 78)
                 break
         if not hint and isinstance(a, dict):
             hint = _short(a)
@@ -162,8 +162,8 @@ class ToolWidget(Vertical):
         head.append(f"{icon} ", style=STATUS_STYLE.get(status, "dim"))
         head.append(name, style="bold")
         if hint:
-            head.append("  " + hint, style="dim")
-        head.append(dur_s, style="dim")
+            head.append("  " + hint, style="#8995A5")
+        head.append(dur_s, style="#66717F")
         self.header.update(head)
         for name_cls in set(STATUS_CLASS.values()):
             self.remove_class(name_cls)
@@ -181,11 +181,11 @@ class ToolWidget(Vertical):
         t.append("args\n", style="bold")
         t.append(str(pretty)[:3000] + "\n")
         if c.get("note"):
-            t.append("result\n", style="bold")
+            t.append("result\n", style="bold #8995A5")
             t.append(str(c["note"])[:4000] + "\n")
         out = _stdout_excerpt(c.get("stdout_path"))
         if out:
-            t.append("stdout\n", style="bold")
+            t.append("stdout\n", style="bold #8995A5")
             t.append(out + "\n")
         for label, key in (("exit", "exit_code"), ("stdout", "stdout_path"), ("file", "result_path")):
             if c.get(key) not in (None, ""):
