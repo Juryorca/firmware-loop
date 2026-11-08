@@ -35,6 +35,7 @@ from .status import (
     hypothesis_state_label,
     log_kind_label,
     state_label,
+    target_status_label,
     verdict_label,
 )
 
@@ -239,6 +240,9 @@ class ResearchScreen(ModalScreen[None]):
         prog.append(run.get("id") or "—")
         prog.append("   状态 ", style="bold")
         prog.append(state_label(run.get("state")) if run else "尚无研究会话")
+        target_status = (rows.get("target_row") or {}).get("status", "active")
+        if target_status != "active":
+            prog.append(f"   目标：{target_status_label(target_status)}", style="yellow")
         prog.append("\n")
         if run:
             prog.append(f"目标说明：{(run.get('goal') or '')[:300]}\n")

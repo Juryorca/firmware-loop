@@ -620,3 +620,11 @@ def test_summary_reserve_then_cancel_blocks_model_call(setup):
     assert len(calls) >= 2
     assert model.calls == []
     assert res.state == "paused" and (res.handback or "").startswith("user_stop")
+
+
+def test_runner_refuses_archived_target(setup):
+    con, dom, root = setup
+    dom.archive_target("t1", "用户归档")
+    with pytest.raises(Exception) as e:
+        Runner(con, root, ScriptedModel(script=[]), mcp=False, watchdog=False).start("t1")
+    assert "归档" in str(e.value) or "active" in str(e.value)

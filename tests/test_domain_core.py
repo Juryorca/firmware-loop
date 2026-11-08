@@ -222,3 +222,18 @@ def test_evidence_attempt_and_hypothesis_must_match(dom):
     h2 = dom.add_hypothesis("t1", "h2")
     with pytest.raises(InvariantViolation):
         dom.add_evidence("t1", "log", capture="x", attempt_id=a1, hypothesis_id=h2)
+
+
+def test_target_archive_lifecycle_preserves_research_rows(dom):
+    hid = dom.add_hypothesis("t1", "归档前的研究")
+    dom.archive_target("t1", "用户归档")
+    st = dom.status("t1")
+    assert st["target_status"] == "archived"
+    assert dom.con.execute(
+        "SELECT COUNT(*) n FROM hypotheses WHERE id=?", (hid,)
+    ).fetchone()["n"] == 1
+    with pytest.raises(InvariantViolation):
+        dom.require_active_target("t1")
+    dom.unarchive_target("t1")
+    assert dom.status("t1")["target_status"] == "active"
+    assert dom.require_active_target("t1").name == "t1"

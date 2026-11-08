@@ -29,11 +29,15 @@ from .contextinfo import build_status
 from .domain import ConversationPersistError, Domain, new_id
 from .limits import Limits
 from .models import Adapter, ModelHTTPError, Reply, ScriptedAdapter, assistant_message  # noqa: F401
-from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, limit_structured_for_model,
-                     truncate_tail)
+from .output import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    limit_structured_for_model,
+    truncate_tail,
+)
 from .policy import Policy
-from .streaming import StreamCancelled, StreamControl, StreamError, as_event
 from .research import Research
+from .streaming import StreamCancelled, StreamControl, StreamError, as_event
 from .toolkit import register_repo_tools
 from .tools import Registry, ToolContext, default_registry
 
@@ -173,7 +177,7 @@ class Runner:
                 "context_tokens": self.limits.context_tokens}
 
     def start(self, target: str, goal: str | None = None) -> str:
-        t = self.domain.target(target)
+        t = self.domain.require_active_target(target)
         self._load_authorization(target)
         rid = new_id("R")
         now = _now()
@@ -360,7 +364,8 @@ class Runner:
         st = _proc_starttime(me)
         cur = None
         with _db.Tx(self.con) as c:
-            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # nosec B608
+            # nosemgrep: python-sql-injection
+            cur = c.execute(  # noqa: S608  # set_sql 是内部固定片段，值全部走参数绑定
                 "UPDATE runs SET " + set_sql +
                 " WHERE id=? AND state='running'"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -379,7 +384,8 @@ class Runner:
         marks = ",".join("?" for _ in states)
         cur = None
         with _db.Tx(self.con) as c:
-            cur = c.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query  # nosec B608
+            # nosemgrep: python-sql-injection
+            cur = c.execute(  # noqa: S608  # set_sql 是内部固定片段，值全部走参数绑定
                 "UPDATE runs SET " + set_sql +
                 f" WHERE id=? AND state IN ({marks})"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -1529,6 +1535,7 @@ class Runner:
         ).fetchone()
         if not row:
             raise KeyError(f"run 不存在: {rid}")
+        self.domain.require_active_target(row["target_name"])
         history = self._load_history(rid)
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)

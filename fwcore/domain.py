@@ -86,11 +86,15 @@ def _event(con, kind: str, ref: str | None, payload: dict | None = None) -> None
     )
 
 
+TARGET_STATUSES = ("active", "closed_confirmed", "archived")
+
+
 @dataclass
 class Target:
     id: str
     name: str
     version: str | None
+    status: str = "active"
 
 
 class Domain:
@@ -124,10 +128,43 @@ class Domain:
         return tid
 
     def target(self, name: str) -> Target:
-        row = self.con.execute("SELECT id,name,version FROM targets WHERE name=?", (name,)).fetchone()
+        row = self.con.execute(
+            "SELECT id,name,version,status FROM targets WHERE name=?", (name,)).fetchone()
         if not row:
             raise NotFound(f"目标不存在: {name}")
-        return Target(row["id"], row["name"], row["version"])
+        return Target(row["id"], row["name"], row["version"],
+                       row["status"] or "active")
+
+    def require_active_target(self, name: str) -> Target:
+        """研究运行只能绑定 active 目标；已收尾/已归档目标只可查看。"""
+        t = self.target(name)
+        if t.status != "active":
+            label = {"closed_confirmed": "已收尾", "archived": "已归档"}.get(t.status, t.status)
+            raise InvariantViolation(
+                f"目标 {t.name} 当前为{label}状态，不能开始/继续研究；先执行 unarchive 恢复。")
+        return t
+
+    def archive_target(self, name: str, note: str = "") -> None:
+        """生命周期标记：只改 targets.status，不删除研究事实或文件。"""
+        t = self.target(name)
+        if t.status == "archived":
+            return
+        running = self.con.execute(
+            "SELECT 1 FROM runs WHERE target_id=? AND state='running' LIMIT 1",
+            (t.id,)).fetchone()
+        if running:
+            raise InvariantViolation("目标仍有运行中的研究会话，不能归档；先停止并收尾。")
+        with Tx(self.con) as c:
+            c.execute("UPDATE targets SET status='archived' WHERE id=?", (t.id,))
+            _event(c, "target.archived", t.id, {"note": note[:200]})
+
+    def unarchive_target(self, name: str) -> None:
+        t = self.target(name)
+        if t.status == "active":
+            return
+        with Tx(self.con) as c:
+            c.execute("UPDATE targets SET status='active' WHERE id=?", (t.id,))
+            _event(c, "target.unarchived", t.id, {})
 
     def status(self, name: str) -> dict:
         """UNKNOWN(没有这个目标) ≠ EMPTY(目标在,但还没有假设)。"""
@@ -142,6 +179,7 @@ class Domain:
             "state": "empty" if n_hyp == 0 else "active",
             "target": t.name,
             "version": t.version,
+            "target_status": t.status,
             "hypotheses": n_hyp,
             "open": self._count("hypotheses_open", t.id),
             "attempts_running": self._count("attempts_running", t.id),

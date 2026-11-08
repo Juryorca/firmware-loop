@@ -11,6 +11,8 @@ STATE_STYLE = {"running": "bold #89B99D", "paused": "bold #D5B47A",
                "finished": "bold #83A9D5", "failed": "bold #CE8888", "idle": "#66717F"}
 STATE_LABELS = {"running": "运行中", "paused": "已暂停", "finished": "已完成",
                 "failed": "失败", "idle": "空闲"}
+TARGET_STATUS_LABELS = {"active": "进行中", "closed_confirmed": "已收尾",
+                        "archived": "已归档"}
 HANDBACK_LABELS = {
     "awaiting_user_close": "等待你确认收尾",
     "closed": "收尾已确认",
@@ -40,6 +42,10 @@ KNOWLEDGE_STATUS_LABELS = {"approved": "已收录", "deprecated": "已退休",
 
 def state_label(value) -> str:
     return STATE_LABELS.get(str(value or ""), "未知状态")
+
+
+def target_status_label(value) -> str:
+    return TARGET_STATUS_LABELS.get(str(value or "active"), "状态未知")
 
 
 def handback_label(value) -> str:
@@ -130,6 +136,9 @@ def format_snapshot(s: Snapshot) -> Text:
     t.append(model_label(s.model), style="#8995A5")
     t.append(" · ", style="#66717F")
     t.append(state_label(s.state), style=STATE_STYLE.get(s.state, ""))
+    lifecycle = getattr(s, "target_status", "active")
+    if lifecycle != "active":
+        t.append(f" · {target_status_label(lifecycle)}", style="bold #D5B47A")
     if s.busy:
         t.append(" · 正在处理", style="#D5B47A")
     if s.handback:

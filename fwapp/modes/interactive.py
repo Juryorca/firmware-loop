@@ -44,6 +44,7 @@ from ..widgets.status import (
     model_label,
     response_status_label,
     state_label,
+    target_status_label,
 )
 from ..widgets.transcript import (
     MessageWidget,
@@ -151,9 +152,14 @@ class FwApp(App):
         for d in self.diagnostics:
             if d.level != "info":
                 self._notice(d.message, d.level)
-        names = self.sess.services.con.execute("SELECT COUNT(*) n FROM targets").fetchone()["n"]
-        if not names:
+        counts = self.sess.services.con.execute(
+            "SELECT COUNT(*) total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) active"
+            " FROM targets").fetchone()
+        if not counts["total"]:
             self._notice("状态库还没有目标：请先运行 `fw-core init <目标>` 或迁移历史目标。", "warning")
+        elif not counts["active"]:
+            self._notice("没有进行中的目标：已有目标已收尾或归档；可用 `/target` 查看，或执行 unarchive 恢复。",
+                         "warning")
         if self.sess.model_name in ("scripted", "fake"):
             self._notice("演示模式：当前使用本地脚本，不会调用真实模型。", "info")
         self.set_interval(0.25, self._tick)
@@ -185,6 +191,8 @@ class FwApp(App):
         t.append(s.target or "未选择目标", style="bold #83A9D5")
         t.append("  ")
         t.append(state_label(s.state), style="bold #89B99D" if s.state == "running" else "#D5B47A")
+        if s.target_status != "active":
+            t.append(f"  · {target_status_label(s.target_status)}", style="#D5B47A")
         if self.sess.model_name in ("scripted", "fake"):
             t.append("  · 演示模式", style="#D5B47A")
         if s.busy:
@@ -616,13 +624,14 @@ class FwApp(App):
             self.sess.set_target(arg)
             self._load_transcript()
             return
-        names = [r["name"] for r in self.sess.services.con.execute(
-            "SELECT name FROM targets ORDER BY name").fetchall()]
-        if not names:
+        rows = [dict(r) for r in self.sess.services.con.execute(
+            "SELECT name,status FROM targets ORDER BY name").fetchall()]
+        if not rows:
             self._notice("还没有目标：请先运行 `fw-core init <目标>`。", "warning")
             return
-        self.push_screen(SelectorScreen("选择目标", [SelectItem(n, n) for n in names]),
-                         self._switch_target)
+        items = [SelectItem(r["name"], r["name"], target_status_label(r["status"]))
+                 for r in rows]
+        self.push_screen(SelectorScreen("选择目标", items), self._switch_target)
 
     def _switch_target(self, value: str | None) -> None:
         if value:

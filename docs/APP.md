@@ -65,6 +65,11 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
   (Ctrl+O),展示参数、结果、stdout 摘录。
 - Slash Commands 带补全:`/help /model /target /resume /status /budget
   /hypotheses /evidence /skills /knowledge /tools /tool-setup /new /continue /clear /expand /quit`。
+- 目标生命周期：`targets.status` 为 `active` / `closed_confirmed` / `archived`。
+  `archived` 只表示生命周期，不删除 SQLite 研究事实、`report/` 或 `SOURCE_URL.txt`；
+  已归档/已收尾目标在 TUI 中只读显示，不能开始新研究或继续 run。
+  CLI：`fw-core archive <目标>`、`fw-core unarchive <目标>`；归档前必须没有运行中的 run，
+  文件释放仍按 `research-loop` 的清理生命周期由用户明确触发。
 - 选择器：模型、目标、历史研究会话（搜索 + 列表）。
 - 研究面板：进度、假设池、观察、证据、结论、收尾检查（每 2 秒刷新）。
 - 状态栏：目标、模型/演示模式、中文运行状态、模型调用数、工具调用数、缓存命中率（有数据时）、

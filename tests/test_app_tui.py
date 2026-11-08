@@ -470,6 +470,7 @@ def test_status_bar_uses_user_labels_and_cache():
 
     s: Any = SimpleNamespace(
         target="t1", model="scripted", state="running", busy=False, handback=None,
+        target_status="archived",
         limits={"max_model_calls": 200}, calls=2, tools=3,
         tokens={"prompt": 100, "completion": 20, "cached": 75, "total": 120},
         context={"window": 1000, "last_prompt": 100, "percent": 10},
@@ -481,6 +482,7 @@ def test_status_bar_uses_user_labels_and_cache():
     assert "缓存 75%" in text
     assert "收尾阻塞 1" in text
     assert "运行中" in text
+    assert "已归档" in text
     assert "H " not in text and " E " not in text
 
 

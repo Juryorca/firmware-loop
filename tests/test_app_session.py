@@ -344,3 +344,22 @@ def test_submit_context_survives_target_new_and_resume(tmp_path):
         assert sess._pending[0][2:] == ("t1", rid)
     finally:
         services.close()
+
+
+def test_default_target_skips_archived_and_archived_submit_is_blocked(tmp_path):
+    _root, cfg = make_ws(tmp_path)
+    from fwapp.services import build_services
+    from fwapp.session import AgentSession
+    from fwcore.domain import Domain
+    services = build_services(cfg)
+    try:
+        Domain(services.con, cfg.root).create_target("old")
+        Domain(services.con, cfg.root).archive_target("old", "归档")
+        sess = AgentSession(services, target=None, mcp=False, watchdog=False)
+        assert sess.target == "t1"  # 旧的 archived 目标不能成为默认目标
+        sess.set_target("old")
+        sess.submit("不应开始")
+        assert sess._q.empty()
+        assert any("归档" in e.text for e in sess.drain_events())
+    finally:
+        services.close()

@@ -8,7 +8,9 @@
   evidence add <target> --kind K (--path P | --capture C) [--attempt A] [--hypothesis H]
   observe <target> --text T [--attempt A]
   conclude <hyp-id> <verdict> --scope "适用范围"
-  status <target>        UNKNOWN(无此目标) / EMPTY(有目标无假设) / active
+  status <target>        UNKNOWN(无此目标) / EMPTY(有目标无假设) / active + target_status
+  archive <target>       标记为已归档（只改生命周期状态，不删研究事实/文件）
+  unarchive <target>     恢复为 active（可继续研究）
   derive <target>       派生量 + 收尾阻塞项
   migrate <target> [--notes PATH]
   view <target>         从状态生成人读 Markdown(替代手写 notes)
@@ -16,6 +18,7 @@
   resume <run-id> [--steps N]
 """
 
+# ruff: noqa: E702 (CLI parser table uses compact semicolons by design)
 from __future__ import annotations
 
 import argparse
@@ -39,7 +42,7 @@ _SUBCOMMANDS = frozenset({
     "init", "hyp", "surface", "attempt", "evidence", "observe", "conclude",
     "authz", "ida-env", "watchdog", "recover", "progress", "context", "mcp",
     "gates", "capabilities", "toolset", "knowledge", "status", "derive", "migrate", "view",
-    "run", "resume", "advance",
+    "archive", "unarchive", "run", "resume", "advance",
 })
 
 
@@ -171,6 +174,8 @@ def main(argv: list[str] | None = None) -> int:
     q = sp.add_parser("deprecate")
     q.add_argument("entry_id")
     p = sub.add_parser("status"); p.add_argument("target")
+    p = sub.add_parser("archive"); p.add_argument("target"); p.add_argument("--note", default="")
+    p = sub.add_parser("unarchive"); p.add_argument("target")
     p = sub.add_parser("derive"); p.add_argument("target")
     p = sub.add_parser("migrate", help="历史 Markdown → DB(一次性导入;--all 批量/--dry-run 预览)")
     p.add_argument("target", nargs="?", default=None)
@@ -324,14 +329,30 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"run {args.run_id} 不属于目标 {args.target}", file=sys.stderr)
                     return 2
                 run_ids = [args.run_id]
-            ph = ",".join("?" * len(run_ids))
-            ck = (con.execute(f"SELECT messages FROM checkpoints WHERE run_id IN ({ph})"
-                              " ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                              run_ids).fetchone() if run_ids else None)
+            # 固定 SQL + 绑定参数:run 过滤走 JOIN，不拼接 IN 占位符。
+            if args.run_id:
+                ck = con.execute(
+                    "SELECT c.messages FROM checkpoints c JOIN runs r ON r.id=c.run_id"
+                    " WHERE r.target_id=? AND c.run_id=?"
+                    " ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1",
+                    (t.id, args.run_id)).fetchone()
+                last = con.execute(
+                    "SELECT payload FROM events WHERE kind='model.call'"
+                    " AND ref=? ORDER BY ts DESC, id DESC LIMIT 1",
+                    (args.run_id,)).fetchone()
+            elif run_ids:
+                ck = con.execute(
+                    "SELECT c.messages FROM checkpoints c JOIN runs r ON r.id=c.run_id"
+                    " WHERE r.target_id=? ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1",
+                    (t.id,)).fetchone()
+                last = con.execute(
+                    "SELECT payload FROM events WHERE kind='model.call'"
+                    " AND ref IN (SELECT id FROM runs WHERE target_id=?)"
+                    " ORDER BY ts DESC, id DESC LIMIT 1",
+                    (t.id,)).fetchone()
+            else:
+                ck = last = None
             hist = json.loads(ck["messages"]) if ck else []
-            last = (con.execute(f"SELECT payload FROM events WHERE kind='model.call'"
-                                f" AND ref IN ({ph}) ORDER BY ts DESC, id DESC LIMIT 1",
-                                run_ids).fetchone() if run_ids else None)
             lu = (json.loads(last["payload"]).get("usage") or {}) if last else {}
             _k, _b, _m = load_model_config(args.root)
             from .research import Research
@@ -352,10 +373,21 @@ def main(argv: list[str] | None = None) -> int:
                 last_prompt_tokens=lu.get("prompt_tokens"),
                 last_cached_tokens=(lu.get("prompt_tokens_details") or {}).get("cached_tokens"),
                 system=_sys, state=_st, schema=schema)
-            comp = (con.execute(f"SELECT payload FROM events WHERE kind IN "
-                                f"('run.compacted','run.compact_failed') AND ref IN ({ph})"
-                                " ORDER BY ts DESC, id DESC LIMIT 1", run_ids).fetchone()
-                    if run_ids else None)
+            if args.run_id:
+                comp = con.execute(
+                    "SELECT payload FROM events WHERE kind IN"
+                    " ('run.compacted','run.compact_failed') AND ref=?"
+                    " ORDER BY ts DESC, id DESC LIMIT 1",
+                    (args.run_id,)).fetchone()
+            elif run_ids:
+                comp = con.execute(
+                    "SELECT payload FROM events WHERE kind IN"
+                    " ('run.compacted','run.compact_failed')"
+                    " AND ref IN (SELECT id FROM runs WHERE target_id=?)"
+                    " ORDER BY ts DESC, id DESC LIMIT 1",
+                    (t.id,)).fetchone()
+            else:
+                comp = None
             out = st.as_dict()
             out["checkpoint_messages"] = len(hist)
             out["run_scope"] = args.run_id or f"{len(run_ids)} run(s)"
@@ -364,7 +396,8 @@ def main(argv: list[str] | None = None) -> int:
             out["last_compaction_kind"] = comp is not None and json.loads(comp["payload"]).get("error") is None
             print(json.dumps(out, ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":
-            from .mcp_client import MCPClient, MCPConfigError, load_servers, probe as mcp_probe
+            from .mcp_client import MCPClient, MCPConfigError, load_servers
+            from .mcp_client import probe as mcp_probe
             cfgs = [os.environ.get("FW_MCP_CONFIG") or
                     os.path.join(args.root, "state", "mcp.json")]
             try:
@@ -396,9 +429,11 @@ def main(argv: list[str] | None = None) -> int:
             ok = rep["ok"] and not rep["dangling_refs"]
             return 0 if ok else 1
         elif args.cmd == "knowledge":
-            from .knowledge import (get as _kb_get, revise as _kb_revise,
-                                    search as _kb_search, set_status as _kb_set_status,
-                                    stats as _kb_stats)
+            from .knowledge import get as _kb_get
+            from .knowledge import revise as _kb_revise
+            from .knowledge import search as _kb_search
+            from .knowledge import set_status as _kb_set_status
+            from .knowledge import stats as _kb_stats
             if args.knowledge_cmd == "search":
                 print(json.dumps(_kb_search(con, args.query, kind=args.kind,
                                             status=args.status, limit=args.limit),
@@ -434,6 +469,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             print(json.dumps(data, ensure_ascii=False, indent=2))
         elif args.cmd == "status":
+            print(json.dumps(dom.status(args.target), ensure_ascii=False, indent=2))
+        elif args.cmd == "archive":
+            dom.archive_target(args.target, args.note)
+            print(json.dumps(dom.status(args.target), ensure_ascii=False, indent=2))
+        elif args.cmd == "unarchive":
+            dom.unarchive_target(args.target)
             print(json.dumps(dom.status(args.target), ensure_ascii=False, indent=2))
         elif args.cmd == "derive":
             print(json.dumps(dom.derived(args.target), ensure_ascii=False, indent=2))

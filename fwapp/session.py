@@ -65,6 +65,7 @@ class Snapshot:
     pending: list[str]
     last_error: str | None
     updated_at: str | None
+    target_status: str = "active"
 
 
 @dataclass
@@ -119,8 +120,17 @@ class AgentSession:
     # ---------------- 生命周期 ----------------
     def _default_target(self) -> str | None:
         row = self.services.con.execute(
-            "SELECT name FROM targets ORDER BY created_at DESC LIMIT 1").fetchone()
+            "SELECT name FROM targets WHERE status='active'"
+            " ORDER BY created_at DESC LIMIT 1").fetchone()
         return row["name"] if row else None
+
+    def _target_status(self, target: str | None = None) -> str:
+        target = target or self.target
+        if not target:
+            return "active"
+        row = self.services.con.execute(
+            "SELECT status FROM targets WHERE name=?", (target,)).fetchone()
+        return (row["status"] if row else "active") or "active"
 
     def start(self) -> None:
         if self._started:
@@ -191,6 +201,9 @@ class AgentSession:
             busy = self._busy
             target = self.target
             run_id = self.run_id
+        if target and self._target_status(target) != "active":
+            self.emit("error", "目标已收尾或归档，不能开始新研究；先执行 unarchive 恢复。")
+            return
         if not busy:
             # 新的一轮用户输入生效:清除上一轮的取消标记
             self._cancel_event.clear()
@@ -235,6 +248,9 @@ class AgentSession:
         if not row:
             self.emit("error", f"研究会话不存在：{run_id}")
             return
+        if self._target_status(row["name"]) != "active":
+            self.emit("error", "目标已收尾或归档，不能继续研究会话；先执行 unarchive 恢复。")
+            return
         with self._lock:
             if self._busy:
                 self.emit("error", "当前一轮仍在执行，暂时不能切换研究会话。")
@@ -255,6 +271,9 @@ class AgentSession:
             busy = self._busy
         if not run_id:
             self.emit("error", "当前没有可继续的研究会话。")
+            return False
+        if target and self._target_status(target) != "active":
+            self.emit("error", "目标已收尾或归档，不能继续研究；先执行 unarchive 恢复。")
             return False
         if busy:
             self.emit("error", "当前一轮仍在执行，暂时不能继续。")
@@ -437,6 +456,9 @@ class AgentSession:
         if not target:
             self.emit("error", "还没有选择目标：请先选择目标，或运行 `fw-core init <目标>`。")
             return
+        if self._target_status(target) != "active":
+            self.emit("error", "目标已收尾或归档，不能开始研究；先执行 unarchive 恢复。")
+            return
         if not rid:
             rid = runner.start(target, text)      # start 内持久化首条用户消息
             with self._lock:
@@ -511,6 +533,7 @@ class AgentSession:
             blockers=blockers,
             busy=self.busy, pending=self.pending, last_error=self._last_error,
             updated_at=row["updated_at"] if row else None,
+            target_status=self._target_status(target),
         )
 
     def _tokens(self) -> dict:
