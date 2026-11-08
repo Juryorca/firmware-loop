@@ -130,9 +130,17 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **manifest / toolkit**：`output_tail` / `text` 走 `truncate_tail`（2000 行/50 KiB）。
 - **MCP**：单独按 Pi MCP 策略：模型可见文本 `20 KiB` **中间截断**（保留头/尾），
   完整文本写临时 `full_output_path`；`isError` 也走同一路径。完整
-  `structuredContent` 写临时 `structured_full_output_path`，模型只保留小摘要；
-  当前 JSON tool result 只能记录图片块数量，尚未渲染图片。HTTP SSE 按行增量读取，
+  `structuredContent` 写临时 `structured_full_output_path`，模型只保留小摘要。
+  MCP `content` 的 text/image 转成有序 `parts`：图片按 MIME/base64/大小/数量校验后
+  保存临时文件，历史只存路径/哈希，不把 base64 放进 JSON/DB；模型适配层再把
+  image part 读成 data URI。Chat Completions 可在显式 `image_mode="tool_parts"`
+  时走 image content part；标准 OpenAI Responses 走合法的 `function_call_output`
+  text/image 数组；纯文本模型只收到路径和明确限制。HTTP SSE 按行增量读取，
   只接受与请求 id 匹配的响应。
+- **MCP Resources**：连接服务器声明 `capabilities.resources` 时才注册
+  `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`；
+  支持 server 过滤、分页、resource_link、嵌入 text/image/binary/audio；图片按图片处理，
+  二进制落临时文件，音频明确标注无音频输入能力。
 - **conversation/checkpoint**：conversation 的 live tool payload 与 Pi 边界一致；
   checkpoint 的磁盘保护另有 `CHECKPOINT_TOOL_TAIL_CHARS=2000`，不混同 live 输出。
 - **错误/探针摘要**（如 160/600 字符）只用于状态说明，不承载完整工具输出。
@@ -148,7 +156,8 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   也只能留摘要，完整 JSON 落临时文件并在 `structured_full_output_path` 指回。
 - **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP transport 单条消息 `8 MiB`、
   Skill 文件 `512 KiB`、错误摘要 `160/600` 字符、legacy 修复 excerpt `1500`、
-  MCP observation `2000`。这些应保持命名常量/局部理由，不能反过来冒充 Pi。
+  MCP observation `2000`、图片单张 `4 MiB`/单结果 `8` 张、资源分页 `50` 页。
+  这些应保持命名常量/局部理由，不能反过来冒充 Pi。
 
 ## 5. 上下文生命周期(静态前缀 + 尾部状态 + 阈值压缩)
 
@@ -205,4 +214,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 73 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 74 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

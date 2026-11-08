@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from collections.abc import Callable, Iterable
 from typing import Protocol
 
+from .mcp_content import image_data_uri
 from .streaming import StreamCancelled, StreamControl, StreamError, StreamEvent
 
 
@@ -91,7 +92,21 @@ def http_transport(url: str, headers: dict, payload: dict) -> dict:
 urllib_transport = http_transport
 
 
-def to_api_messages(messages: list[dict]) -> list[dict]:
+def _tool_text_and_images(m: dict) -> tuple[str, list[dict]]:
+    raw_parts = m.get("parts")
+    parts: list[dict] = raw_parts if isinstance(raw_parts, list) else []
+    text_parts = [str(p.get("text") or "") for p in parts
+                  if isinstance(p, dict) and p.get("type") == "text"]
+    text = "\n".join(text_parts).strip()
+    if not text:
+        content = m.get("content")
+        text = content if isinstance(content, str) else json.dumps(content or {}, ensure_ascii=False)
+    images = [p for p in parts if isinstance(p, dict) and p.get("type") == "image"]
+    return text, images
+
+
+def to_api_messages(messages: list[dict], *, supports_vision: bool = False,
+                    image_mode: str = "none") -> list[dict]:
     """内部历史 → API 消息。
 
     内部历史一律用 API 形状(assistant 带 tool_calls;tool 带 tool_call_id),
@@ -128,9 +143,36 @@ def to_api_messages(messages: list[dict]) -> list[dict]:
             if tcid not in pending:
                 raise ValueError(f"非法历史:tool 消息的 tool_call_id={tcid} 没有对应 assistant.tool_calls")
             pending.discard(tcid)
-            out.append({"role": "tool", "tool_call_id": tcid,
-                        "content": m.get("content") if isinstance(m.get("content"), str)
-                        else json.dumps(m.get("content"), ensure_ascii=False)})
+            text, images = _tool_text_and_images(m)
+            images_sent = bool(images and supports_vision and image_mode == "tool_parts")
+            if images and not images_sent:
+                paths = ", ".join(str(p.get("path") or "?") for p in images)
+                why = ("text-only model" if not supports_vision
+                       else f"model image mode {image_mode!r} does not carry tool images")
+                text = (text + f"\n\n[Images returned by this tool are not sent to the "
+                               f"configured {why}; saved files: {paths}]").strip()
+            if images_sent:
+                blocks: list[dict] = []
+                raw_parts = m.get("parts")
+                parts_list: list[dict] = raw_parts if isinstance(raw_parts, list) else []
+                for part in parts_list:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        blocks.append({"type": "text", "text": str(part.get("text") or "")})
+                    elif part.get("type") == "image":
+                        uri = image_data_uri(part)
+                        if uri:
+                            blocks.append({"type": "image_url", "image_url": {"url": uri}})
+                        else:
+                            blocks.append({"type": "text",
+                                           "text": f"[image unavailable: {part.get('path') or 'missing'}]"})
+                if not any(b.get("type") == "text" for b in blocks):
+                    blocks.insert(0, {"type": "text",
+                                      "text": text or "(see attached image)"})
+                out.append({"role": "tool", "tool_call_id": tcid, "content": blocks})
+            else:
+                out.append({"role": "tool", "tool_call_id": tcid, "content": text})
         elif role in ("system", "user"):
             out.append({"role": role, "content": m.get("content") or ""})
         else:
@@ -138,6 +180,125 @@ def to_api_messages(messages: list[dict]) -> list[dict]:
     if pending:
         raise ValueError(f"非法历史:assistant 声明了 tool_calls 但没有对应 tool 结果: {sorted(pending)}")
     return out
+
+
+def to_responses_input(messages: list[dict], *, supports_vision: bool = False) -> list[dict]:
+    """内部历史 → OpenAI Responses input items。
+
+    Responses 的 function_call_output.output 是合法的 text/image 数组；因此视觉模型
+    不需要伪造 user 消息，也不需要把 image_url 塞进 Chat Completions 的 tool role。
+    """
+    out: list[dict] = []
+    for m in messages:
+        role = m.get("role")
+        if role in ("system", "user"):
+            text = m.get("content")
+            if isinstance(text, str) and text:
+                out.append({"role": role, "content": text})
+        elif role == "assistant":
+            text = m.get("content")
+            if isinstance(text, str) and text:
+                out.append({"role": "assistant",
+                            "content": [{"type": "output_text", "text": text}]})
+            for c in m.get("tool_calls") or []:
+                fn = c.get("function") or {}
+                args = fn.get("arguments")
+                if not isinstance(args, str):
+                    args = json.dumps(args or {}, ensure_ascii=False)
+                out.append({"type": "function_call", "call_id": c.get("id"),
+                            "name": fn.get("name"), "arguments": args})
+        elif role == "tool":
+            text, images = _tool_text_and_images(m)
+            if images and supports_vision:
+                output: object = []
+                raw_parts = m.get("parts")
+                parts_list: list[dict] = raw_parts if isinstance(raw_parts, list) else []
+                for part in parts_list:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        output.append({"type": "input_text", "text": str(part.get("text") or "")})
+                    elif part.get("type") == "image":
+                        uri = image_data_uri(part)
+                        if uri:
+                            output.append({"type": "input_image", "detail": "auto",
+                                           "image_url": uri})
+                        else:
+                            output.append({"type": "input_text",
+                                           "text": f"[image unavailable: {part.get('path') or 'missing'}]"})
+                if not output:
+                    output = "(see attached image)"
+                elif isinstance(output, list) and not any(
+                        isinstance(x, dict) and x.get("type") == "input_text" for x in output):
+                    output.insert(0, {"type": "input_text",
+                                      "text": text or "(see attached image)"})
+            else:
+                if images:
+                    paths = ", ".join(str(p.get("path") or "?") for p in images)
+                    text = (text + f"\n\n[Images returned by this tool are not sent to the "
+                                   f"configured text-only model; saved files: {paths}]").strip()
+                output = text or "(no tool output)"
+            out.append({"type": "function_call_output",
+                        "call_id": m.get("tool_call_id"), "output": output})
+        else:
+            raise ValueError(f"非法消息 role: {role}")
+    return out
+
+
+@dataclass
+class OpenAIResponsesModel:
+    """OpenAI Responses API（非流式），用于合法的工具结果图片输入。"""
+
+    model: str
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    api_key_env: str = "FW_API_KEY"
+    temperature: float = 0.2
+    transport: Transport = http_transport
+    supports_vision: bool = False
+    last_request: dict | None = field(default=None, repr=False)
+
+    def chat(self, messages: list[dict], tools: list[dict]) -> dict:
+        key = self.api_key or os.environ.get(self.api_key_env, "")
+        if not key:
+            raise RuntimeError(f"缺少 API key(环境变量 {self.api_key_env})")
+        payload: dict = {"model": self.model,
+                         "input": to_responses_input(messages, supports_vision=self.supports_vision),
+                         "temperature": self.temperature}
+        if tools:
+            payload["tools"] = [{"type": "function", "name": t["name"],
+                                 "description": t.get("description", ""),
+                                 "parameters": t.get("input_schema") or {"type": "object", "properties": {}}}
+                                for t in tools]
+            payload["tool_choice"] = "auto"
+        self.last_request = payload
+        url = self.base_url.rstrip("/") + "/responses"
+        _check_url(url)
+        data = self.transport(url, {"Content-Type": "application/json",
+                                    "Authorization": f"Bearer {key}"}, payload)
+        text_parts: list[str] = []
+        calls: list[dict] = []
+        for item in data.get("output") or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "message":
+                for part in item.get("content") or []:
+                    if isinstance(part, dict) and part.get("type") == "output_text":
+                        text_parts.append(str(part.get("text") or ""))
+            elif item.get("type") == "function_call":
+                raw = item.get("arguments") or "{}"
+                try:
+                    args = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                except json.JSONDecodeError:
+                    args = {"__invalid_json__": raw}
+                calls.append({"id": item.get("call_id"), "type": "function",
+                              "function": {"name": item.get("name"),
+                                           "arguments": raw if isinstance(raw, str)
+                                           else json.dumps(raw, ensure_ascii=False)},
+                              "_args": args})
+        return {"content": "".join(text_parts), "tool_calls": calls,
+                "finish_reason": data.get("status") or "",
+                "usage": data.get("usage") or {}}
 
 
 @dataclass
@@ -153,9 +314,14 @@ class OpenAICompatModel:
     # 流式传输可注入(测试用 Mock SSE);默认走下面的 http SSE 实现
     stream_transport: Callable | None = None
     last_request: dict | None = field(default=None, repr=False)
+    supports_vision: bool = False
+    image_mode: str = "none"
 
     def _payload(self, messages: list[dict], tools: list[dict], *, stream: bool) -> dict:
-        payload: dict = {"model": self.model, "messages": to_api_messages(messages),
+        payload: dict = {"model": self.model,
+                         "messages": to_api_messages(
+                             messages, supports_vision=self.supports_vision,
+                             image_mode=self.image_mode),
                          "temperature": self.temperature}
         if tools:
             payload["tools"] = [

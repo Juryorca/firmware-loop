@@ -12,17 +12,20 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers
-from .output import limit_structured_for_model, save_temp_text, truncate_middle
-
-MCP_OUTPUT_MAX_BYTES = 20 * 1024
+from .mcp_content import (MCP_OUTPUT_MAX_BYTES, bound_parts, content_parts,
+                          parts_images, resource_parts)
+from .output import limit_structured_for_model
 from .tools import Registry, ToolSpec
 
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
+MAX_RESOURCE_PAGES = 50
 
 
 def tool_name(server: str, tool: str) -> str:
@@ -42,21 +45,6 @@ def disambiguated_name(server: str, tool: str) -> str:
     return base[:57] + "_" + h
 
 
-def _bounded_mcp_text(raw_text: str) -> tuple[str, dict, str | None]:
-    """Pi MCP 的模型可见文本：20 KiB 中间截断 + 截断时保存完整文本。"""
-    mid = truncate_middle(raw_text, max_bytes=MCP_OUTPUT_MAX_BYTES)
-    text = mid["content"]
-    full_path = None
-    if mid["truncated"]:
-        try:
-            full_path = save_temp_text(raw_text, prefix="fwcore-mcp", suffix=".txt")
-            where = f"[Full output: {full_path} (read it with offset/limit)]"
-        except OSError as e:
-            where = f"[Could not save full MCP output: {type(e).__name__}: {e}]"
-        tokens = (mid["total_bytes"] + 3) // 4
-        text = (f"Warning: truncated output (original token count: {tokens})\n"
-                f"Total output lines: {mid['total_lines']}\n\n{text}\n\n{where}")
-    return text, mid, full_path
 
 
 def _bounded_mcp_structured(value):
@@ -88,6 +76,7 @@ class MCPBridge:
     closed: bool = False
     pgids_path: str | None = None
     config_error: str | None = None
+    resource_tools_registered: bool = False
 
     def start(self) -> dict[str, dict]:
         """连接 + 注册;单个服务器失败不影响其它。可重复调用(已关闭的桥会重新打开)。"""
@@ -105,11 +94,22 @@ class MCPBridge:
             try:
                 client.start()
                 client.initialize()
-                tools = client.list_tools()
             except (MCPError, OSError) as e:
                 client.close()
                 self.status[spec.name] = {"status": "unreachable", "detail": str(e)[:300]}
                 continue
+            tools_error = None
+            try:
+                tools = client.list_tools()
+            except (MCPError, OSError) as e:
+                # Resources-only MCP servers may not implement tools/list; keep them
+                # only when they explicitly advertised resources.
+                if not client.supports_resources:
+                    client.close()
+                    self.status[spec.name] = {"status": "unreachable", "detail": str(e)[:300]}
+                    continue
+                tools = []
+                tools_error = str(e)[:300]
             self.clients[spec.name] = client
             names = []
             external = True if spec.external is None else bool(spec.external)
@@ -143,7 +143,8 @@ class MCPBridge:
                 names.append(final)
             self.registered[spec.name] = names
             st = {"status": "ready", "tools": names, "server": spec.name,
-                  "external": external, "external_declared": spec.external is not None}
+                  "external": external, "external_declared": spec.external is not None,
+                  "resources": bool(client.supports_resources)}
             hint = [t["name"] for t in tools if self._is_external(t)]
             if hint:
                 st["external_hint"] = hint        # 仅作审计提示,**不参与**授权判定
@@ -152,8 +153,167 @@ class MCPBridge:
                                   "该声明由运维负责,调用仍受授权与 confirm 约束")
             if collisions:
                 st["name_collisions"] = collisions
+            if tools_error:
+                st["tools_error"] = tools_error
+                st["resources"] = bool(client.supports_resources)
             self.status[spec.name] = st
+        self._register_resource_tools()
         return self.status
+
+    def _resource_servers(self) -> list[tuple[str, MCPClient]]:
+        return [(name, c) for name, c in sorted(self.clients.items())
+                if c.supports_resources]
+
+    def _register_resource_tools(self) -> None:
+        """只在至少一个已连接服务器声明 resources 时注册三个只读工具。"""
+        if self.resource_tools_registered or not self._resource_servers():
+            return
+        specs = [
+            ToolSpec(
+                "list_mcp_resources",
+                "Lists resources provided by MCP servers. Omit server to list every page of every server.",
+                {"type": "object", "properties": {
+                    "server": {"type": "string"},
+                    "cursor": {"type": "string"}},
+                 "additionalProperties": False},
+                handler=lambda ctx, args: self._list_resources_tool(args, "resources"),
+                risk="low", requires="mcp"),
+            ToolSpec(
+                "list_mcp_resource_templates",
+                "Lists URI templates for MCP resources. Omit server to list every page of every server.",
+                {"type": "object", "properties": {
+                    "server": {"type": "string"},
+                    "cursor": {"type": "string"}},
+                 "additionalProperties": False},
+                handler=lambda ctx, args: self._list_resources_tool(args, "resourceTemplates"),
+                risk="low", requires="mcp"),
+            ToolSpec(
+                "read_mcp_resource",
+                "Reads an MCP resource by server and URI. Text becomes text and images become images; binary resources are saved.",
+                {"type": "object", "properties": {
+                    "server": {"type": "string"},
+                    "uri": {"type": "string"}},
+                 "required": ["server", "uri"], "additionalProperties": False},
+                handler=lambda ctx, args: self._read_resource_tool(args),
+                risk="low", requires="mcp"),
+        ]
+        for spec in specs:
+            if spec.name not in self.registry.specs:
+                self.registry.register(spec)
+        self.resource_tools_registered = True
+
+    def _find_resource_client(self, server: str) -> MCPClient:
+        clients = dict(self._resource_servers())
+        client = clients.get(server)
+        if client is not None:
+            return client
+        available = ", ".join(sorted(clients)) or "none"
+        raise MCPError(f'MCP server "{server}" has no resources. Servers with resources: {available}')
+
+    @staticmethod
+    def _visible_resource(item: dict) -> bool:
+        """过滤 MCP App UI 资源；普通数据和资源模板保留。"""
+        uri = str(item.get("uri") or item.get("uriTemplate") or "")
+        if uri.startswith("ui://"):
+            return False
+        mime = str(item.get("mimeType") or "")
+        return not re.search(r';\s*profile\s*=\s*"?mcp-app"?', mime, re.I)
+
+    @staticmethod
+    def _listed_resource(server: str, item: dict) -> dict:
+        out = {k: v for k, v in item.items() if k not in ("_meta", "icons")}
+        out["server"] = server
+        return out
+
+    def _resource_page(self, client: MCPClient, key: str, cursor: str | None) -> dict:
+        if key == "resources":
+            return client.list_resources(cursor)
+        return client.list_resource_templates(cursor)
+
+    def _list_resources_tool(self, args: dict, key: str) -> dict:
+        server = args.get("server")
+        cursor = args.get("cursor")
+        if server is not None and (not isinstance(server, str) or not server.strip()):
+            return {"status": "error", "error": "server 必须是非空字符串"}
+        if cursor is not None and (not isinstance(cursor, str) or not cursor.strip()):
+            return {"status": "error", "error": "cursor 必须是非空字符串"}
+        try:
+            if server:
+                client = self._find_resource_client(server)
+                result = self._resource_page(client, key, cursor)
+                items = [self._listed_resource(server, item) for item in result.get(key, [])
+                         if isinstance(item, dict) and self._visible_resource(item)]
+                payload = {"server": server, key: items}
+                if result.get("nextCursor") is not None:
+                    payload["nextCursor"] = result["nextCursor"]
+            else:
+                if cursor:
+                    raise MCPError("cursor 只能与 server 一起使用")
+                items = []
+                errors = []
+                for name, client in self._resource_servers():
+                    try:
+                        cur = None
+                        pages = 0
+                        while True:
+                            result = self._resource_page(client, key, cur)
+                            items.extend(self._listed_resource(name, item)
+                                         for item in result.get(key, [])
+                                         if isinstance(item, dict) and self._visible_resource(item))
+                            cur = result.get("nextCursor")
+                            if not cur:
+                                break
+                            pages += 1
+                            if pages >= MAX_RESOURCE_PAGES:
+                                raise MCPError(f"资源分页超过 {MAX_RESOURCE_PAGES} 页上限")
+                    except (MCPError, OSError, ValueError) as e:
+                        errors.append({"server": name, "error": str(e)[:300]})
+                payload = {key: items}
+                if errors:
+                    payload["errors"] = errors
+        except (MCPError, OSError, ValueError) as e:
+            return {"status": "error", "error": str(e)[:500],
+                    "meta": {"provider": "mcp", "capability": "mcp.resources"}}
+        text = json.dumps(payload, ensure_ascii=False)
+        return self._resource_result(text, payload)
+
+    def _read_resource_tool(self, args: dict) -> dict:
+        server = args.get("server")
+        uri = args.get("uri")
+        if not isinstance(server, str) or not server.strip():
+            return {"status": "error", "error": "server 必须是非空字符串"}
+        if not isinstance(uri, str) or not uri.strip():
+            return {"status": "error", "error": "uri 必须是非空字符串"}
+        try:
+            client = self._find_resource_client(server)
+            result = client.read_resource(uri)
+            contents = result.get("contents") if isinstance(result, dict) else []
+            parts = resource_parts(contents, server=server, uri=uri,
+                                   labels=len(contents or []) > 1)
+            if not parts:
+                parts = [{"type": "text", "text": f"Resource {uri} is empty."}]
+        except (MCPError, OSError, ValueError) as e:
+            return {"status": "error", "error": str(e)[:500],
+                    "meta": {"provider": "mcp", "capability": "mcp.resources"}}
+        structured = {"server": server, "uri": uri, "contents": contents or []}
+        return self._resource_result(parts=parts, structured=structured)
+
+    def _resource_result(self, text: str | None = None, payload: dict | None = None,
+                         *, parts: list[dict] | None = None,
+                         structured: dict | None = None) -> dict:
+        if parts is None:
+            parts = [{"type": "text", "text": text or ""}]
+        bounded = bound_parts(parts)
+        result = {"status": "ok", "text": bounded["text"],
+                  "parts": bounded["parts"], "images": parts_images(bounded["parts"]),
+                  "truncated": bounded["truncated"],
+                  "meta": {"provider": "mcp", "capability": "mcp.resources"}}
+        if bounded["full_output_path"]:
+            result["full_output_path"] = bounded["full_output_path"]
+        value = structured if structured is not None else payload
+        if value is not None:
+            result["structured"] = value
+        return result
 
     @staticmethod
     def _is_external(tool: dict) -> bool:
@@ -161,7 +321,7 @@ class MCPBridge:
         blob = f"{tool.get('name', '')} {tool.get('description', '')}".lower()
         return any(k in blob for k in ("submit", "upload", "publish", "send", "login", "http request"))
 
-    def _make_handler(self, server: str, remote_name: str):
+    def _make_handler(self, server: str, remote_name: str) -> Callable[[object, dict], dict]:
         def _handler(ctx, args: dict) -> dict:
             client = self.clients.get(server)
             if client is None:
@@ -176,19 +336,26 @@ class MCPBridge:
                 return {"status": status, "error": msg[:500], "meta": meta}
             except (OSError, ValueError) as e:
                 return {"status": "error", "error": f"{type(e).__name__}: {e}"[:500], "meta": meta}
-            raw_text = out.get("text") or ""
-            text, mid, full_path = _bounded_mcp_text(raw_text)
-            structured, structured_path = _bounded_mcp_structured(out.get("structured"))
             content = out.get("content") or []
+            parts = content_parts(content, server=server)
+            if not parts and out.get("structured") is not None:
+                # Pi 的 fallback：没有 content blocks 时把 structuredContent 当文本。
+                parts = [{"type": "text", "text": json.dumps(
+                    out["structured"], ensure_ascii=False, default=str)}]
+            bounded = bound_parts(parts)
+            structured, structured_path = _bounded_mcp_structured(out.get("structured"))
             content_types: dict[str, int] = {}
             for block in content:
                 if isinstance(block, dict):
                     kind = str(block.get("type") or "unknown")
                     content_types[kind] = content_types.get(kind, 0) + 1
+            images = parts_images(bounded["parts"])
 
             def _attach_common(result: dict) -> dict:
-                if full_path:
-                    result["full_output_path"] = full_path
+                result["parts"] = bounded["parts"]
+                result["images"] = images
+                if bounded["full_output_path"]:
+                    result["full_output_path"] = bounded["full_output_path"]
                 if structured is not None:
                     result["structured"] = structured
                 if structured_path:
@@ -198,27 +365,23 @@ class MCPBridge:
                     result["content_types"] = content_types
                 return result
 
+            text = bounded["text"]
             if out.get("is_error"):
-                # 错误也走同一 20 KiB 中间截断并保存完整文本；不能再只留 500/2000。
+                # 错误也走同一 20 KiB 中间截断并保存完整文本；图片仍保留。
                 result = {"status": "error",
                           "error": text or "MCP tool error",
-                          "truncated": mid["truncated"],
-                          "removed_chars": mid["removed_chars"],
-                          "total_lines": mid["total_lines"],
-                          "total_bytes": mid["total_bytes"],
+                          "truncated": bounded["truncated"],
                           "meta": meta,
-                          "observation": {"status": "error", "text": raw_text[:2000],
+                          "observation": {"status": "error", "text": text[:2000],
                                           "content_items": len(content)}}
                 return _attach_common(result)
             result = {"status": "ok", "text": text,
-                      "truncated": mid["truncated"],
-                      "removed_chars": mid["removed_chars"],
-                      "total_lines": mid["total_lines"],
-                      "total_bytes": mid["total_bytes"],
+                      "truncated": bounded["truncated"],
                       "meta": meta,
-                      "observation": {"status": "ok", "text": raw_text[:2000],
+                      "observation": {"status": "ok", "text": text[:2000],
                                       "content_items": len(content)}}
             return _attach_common(result)
+
         return _handler
 
     def close(self) -> None:

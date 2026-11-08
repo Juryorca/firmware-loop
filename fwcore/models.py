@@ -22,6 +22,7 @@ from typing import Protocol
 from .model_client import (
     ModelHTTPError,
     OpenAICompatModel,
+    OpenAIResponsesModel,
     assistant_message,
     to_api_messages,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "Adapter",
     "ModelHTTPError",
     "OpenAICompatAdapter",
+    "OpenAIResponsesAdapter",
     "Reply",
     "ScriptedAdapter",
     "assistant_message",
@@ -160,10 +162,14 @@ class OpenAICompatAdapter:
     transport: object = None
     stream_transport: object = None
     name: str = "openai-compat"
+    supports_vision: bool = False
+    image_mode: str = "none"
 
     def __post_init__(self) -> None:
+        mode = self.image_mode
         kw = {"model": self.model, "base_url": self.base_url, "api_key": self.api_key,
-              "api_key_env": self.api_key_env, "temperature": self.temperature}
+              "api_key_env": self.api_key_env, "temperature": self.temperature,
+              "supports_vision": self.supports_vision, "image_mode": mode}
         if self.transport is not None:
             kw["transport"] = self.transport
         if self.stream_transport is not None:
@@ -189,6 +195,43 @@ class OpenAICompatAdapter:
         return Reply(content=r.get("content") or "", tool_calls=calls,
                      reasoning=r.get("reasoning_content") or "",
                      # 诊断字段必须贯通:截断/长度限制不能和普通空转混为一谈
+                     finish_reason=r.get("finish_reason") or "",
+                     usage=r.get("usage") or {})
+
+
+@dataclass
+class OpenAIResponsesAdapter:
+    """OpenAI Responses API 适配器（非流式）：合法支持 tool result 图片。"""
+
+    model: str
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    api_key_env: str = "FW_API_KEY"
+    temperature: float = 0.2
+    transport: object = None
+    supports_vision: bool = True
+    name: str = "openai-responses"
+
+    def __post_init__(self) -> None:
+        kw = {"model": self.model, "base_url": self.base_url, "api_key": self.api_key,
+              "api_key_env": self.api_key_env, "temperature": self.temperature,
+              "supports_vision": self.supports_vision}
+        if self.transport is not None:
+            kw["transport"] = self.transport
+        self._client = OpenAIResponsesModel(**kw)
+
+    @property
+    def supports_stream(self) -> bool:
+        return False
+
+    def chat(self, messages: list[dict], tools: list[dict]) -> Reply:
+        r = self._client.chat(messages, tools)
+        calls = []
+        for c in r.get("tool_calls") or []:
+            fn = c.get("function") or {}
+            calls.append({"id": c.get("id"), "name": fn.get("name"),
+                          "args": c.get("_args") or {}, "args_raw": fn.get("arguments")})
+        return Reply(content=r.get("content") or "", tool_calls=calls,
                      finish_reason=r.get("finish_reason") or "",
                      usage=r.get("usage") or {})
 
@@ -231,10 +274,30 @@ def limits_config(root: str | None = None) -> dict:
 def build_adapter(kind: str = "scripted", **kw) -> Adapter:
     if kind in ("scripted", "fake"):
         return ScriptedAdapter(script=kw.get("script") or [])
+    api = (os.environ.get("FW_MODEL_API") or "").lower()
+    if kind == "openai-responses":
+        return OpenAIResponsesAdapter(
+            model=kw.get("model") or os.environ.get("FW_MODEL", "gpt-4o"),
+            base_url=kw.get("base_url") or os.environ.get("FW_BASE_URL", "https://api.openai.com/v1"),
+            api_key=kw.get("api_key", ""),
+            supports_vision=bool(kw.get("supports_vision", True)))
+    if kind in ("openai", "deepseek", "openai-compat") and api == "responses":
+        return OpenAIResponsesAdapter(
+            model=kw.get("model") or os.environ.get("FW_MODEL", "gpt-4o"),
+            base_url=kw.get("base_url") or os.environ.get("FW_BASE_URL", "https://api.openai.com/v1"),
+            api_key=kw.get("api_key", ""),
+            supports_vision=bool(kw.get("supports_vision", True)))
     if kind in ("openai", "deepseek", "openai-compat"):
-        return OpenAICompatAdapter(model=kw.get("model") or os.environ.get("FW_MODEL", "deepseek-chat"),
-                                   base_url=kw.get("base_url") or os.environ.get("FW_BASE_URL", "https://api.deepseek.com/v1"),
-                                   api_key=kw.get("api_key", ""))
+        vision = kw.get("supports_vision")
+        if vision is None:
+            vision = (os.environ.get("FW_MODEL_VISION") or "").lower() in ("1", "true", "yes")
+        mode = kw.get("image_mode") or os.environ.get("FW_MODEL_IMAGE_MODE") or "none"
+        return OpenAICompatAdapter(
+            model=kw.get("model") or os.environ.get("FW_MODEL", "deepseek-chat"),
+            base_url=kw.get("base_url") or os.environ.get("FW_BASE_URL", "https://api.deepseek.com/v1"),
+            api_key=kw.get("api_key", ""),
+            supports_vision=bool(vision),
+            image_mode=str(mode))
     raise ValueError(f"未知 adapter: {kind}")
 
 

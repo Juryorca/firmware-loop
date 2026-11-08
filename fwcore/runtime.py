@@ -793,7 +793,7 @@ class Runner:
                        "stdout_total_bytes", "stderr_total_bytes",
                        "stdout_full_output_path", "stderr_full_output_path",
                        "full_output_path", "structured_full_output_path",
-                       "observation_full_output_path")
+                       "observation_full_output_path", "images")
                    if out.get(k) not in (None, "")}
         for key in ("stdout_tail", "stderr_tail", "text", "output_tail"):
             value = payload.get(key)
@@ -1234,8 +1234,10 @@ class Runner:
                         history.append({"role": "tool", "tool_call_id": call.get("id"),
                                         "name": call["name"],
                                         # 有界且**始终合法**的 JSON:硬截断会把大字段切在中间,
-                                        # 模型收到坏 JSON、并丢掉后面的 tool_call_id/产物路径
-                                        "content": _bounded_tool_result(out)})
+                                        # 模型收到坏 JSON、并丢掉后面的 tool_call_id/产物路径。
+                                        # parts 是图片/文本顺序的内部载体，不把 base64 放进 JSON。
+                                        "content": _bounded_tool_result(out),
+                                        "parts": out.get("parts") or []})
                         try:
                             self._record_tool_conversation(rid, call, out)
                         except ConversationPersistError as e:
@@ -1688,6 +1690,11 @@ def _render_for_summary(messages: list[dict], limit: int = 2_000_000) -> str:
                 lines.append(f"[assistant] {c}")
         elif role == "tool":
             lines.append(f"[tool {m.get('tool_call_id')}] {c}")
+            images = [p for p in (m.get("parts") or [])
+                      if isinstance(p, dict) and p.get("type") == "image"]
+            if images:
+                lines.append("[tool images] " + ", ".join(
+                    f"{p.get('path')} ({p.get('mimeType')})" for p in images))
         else:
             lines.append(f"[{role}] {c}")
     return "\n".join(lines)[:limit]
@@ -1701,6 +1708,8 @@ def _bounded_tool_result(out: dict, limit: int | None = None) -> str:
     JSON 合法性与元数据保留；`limit` 仅保留给调用方显式做硬预算。
     """
     out = dict(out)
+    # parts 是模型适配层用的内部部件（图片路径/哈希）；JSON 里只保留 images 摘要。
+    out.pop("parts", None)
     if out.get("tool_call_id"):
         # 数据库 TC-… 与协议 tool_call_id(模型给的 call_…)不是一回事:
         # 内容里只保留 db_tool_call_id,协议 id 留在消息层,避免模型拿错

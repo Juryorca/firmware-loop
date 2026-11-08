@@ -113,6 +113,7 @@ class MCPClient:
         self._next_id = 0
         self._buf = b""
         self._http_session: str | None = None
+        self.capabilities: dict = {}
         self._stderr_tail = bytearray()
         self._stderr_thread: threading.Thread | None = None
 
@@ -344,14 +345,51 @@ class MCPClient:
     def initialize(self) -> dict:
         result = self.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                              "clientInfo": {"name": "fwcore", "version": "0.4"}})
+        caps = result.get("capabilities") if isinstance(result, dict) else {}
+        self.capabilities = caps if isinstance(caps, dict) else {}
         self.notify("notifications/initialized")
         return result
 
+    @property
+    def supports_resources(self) -> bool:
+        return "resources" in self.capabilities
+
     def list_tools(self) -> list[dict]:
-        result = self.request("tools/list")
-        tools = result.get("tools") or []
-        return [{"name": t.get("name"), "description": t.get("description", ""),
-                 "input_schema": t.get("inputSchema") or {}} for t in tools]
+        """读取 tools/list 的全部页（MCP 用 nextCursor 分页）。"""
+        out: list[dict] = []
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _ in range(50):
+            result = self.request("tools/list", {} if not cursor else {"cursor": cursor})
+            tools = result.get("tools") or []
+            for t in tools:
+                out.append({"name": t.get("name"), "description": t.get("description", ""),
+                            "input_schema": t.get("inputSchema") or {}})
+            nxt = result.get("nextCursor")
+            if not nxt:
+                return out
+            if nxt in seen:
+                raise MCPError(f"{self.spec.name}: tools/list 返回重复 cursor")
+            seen.add(nxt)
+            cursor = nxt
+        raise MCPError(f"{self.spec.name}: tools/list 分页超过 50 页上限")
+
+    # ---------- Resources ----------
+    def list_resources(self, cursor: str | None = None) -> dict:
+        params = {} if not cursor else {"cursor": cursor}
+        result = self.request("resources/list", params)
+        return result if isinstance(result, dict) else {}
+
+    def list_resource_templates(self, cursor: str | None = None) -> dict:
+        params = {} if not cursor else {"cursor": cursor}
+        result = self.request("resources/templates/list", params)
+        return result if isinstance(result, dict) else {}
+
+    def read_resource(self, uri: str) -> dict:
+        if not isinstance(uri, str) or not uri.strip():
+            raise MCPError(f"{self.spec.name}: resource uri 不能为空")
+        result = self.request("resources/read", {"uri": uri})
+        return result if isinstance(result, dict) else {}
 
     def call_tool(self, name: str, args: dict | None = None, timeout: float | None = None) -> dict:
         result = self.request("tools/call", {"name": name, "arguments": args or {}}, timeout=timeout)
