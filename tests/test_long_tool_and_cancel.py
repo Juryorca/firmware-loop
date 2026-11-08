@@ -94,7 +94,14 @@ def test_cancel_marks_inflight_tool_cancelled(tmp_path):
             break
         time.sleep(0.05)
     assert row, "工具没进入 running 状态"
-    r.cancel(rid, "用户取消")
+    # 主连接正在被工具线程使用；生产里的取消来自独立控制连接，不能在同一
+    # sqlite3 Connection 上从两个线程并发开事务。
+    cancel_con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    try:
+        Runner(cancel_con, root, model=_Stub(),
+               limits=Limits(max_tool_seconds=600)).cancel(rid, "用户取消")
+    finally:
+        cancel_con.close()
     t.join(timeout=15)
 
     st = con.execute("SELECT status FROM tool_calls WHERE id=?", (row["id"],)).fetchone()["status"]

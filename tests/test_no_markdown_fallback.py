@@ -122,3 +122,34 @@ def test_derived_check_falls_through_empty_local_db(tmp_path):
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
                        text=True, timeout=180)
     assert "=== derived_check: PASS" in r.stdout
+
+
+def test_derived_check_db_only_target_after_real_init(tmp_path):
+    root = str(tmp_path / "ws")
+    env = dict(os.environ, PYTHONPATH=ROOT)
+    r = subprocess.run(
+        [sys.executable, "-m", "fwcore", "--root", root, "init", "db-only"],
+        cwd=ROOT, env=env, capture_output=True, text=True, timeout=180,
+    )
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert not os.path.isdir(os.path.join(root, "state", "db-only"))
+    r = subprocess.run(["bash", "tools/derived_check.sh", "db-only"], cwd=ROOT,
+                       env=dict(os.environ, FW_ROOT=root), capture_output=True,
+                       text=True, timeout=180)
+    assert "目标目录不存在" not in r.stdout
+    assert "=== derived_check: PASS" in r.stdout
+
+
+def test_derived_check_release_marker_is_per_reference(tmp_path):
+    root = str(tmp_path)
+    _make_target(root)
+    rdir = os.path.join(root, "state", "t1", "report")
+    os.makedirs(rdir)
+    with open(os.path.join(rdir, "notes.md"), "w", encoding="utf-8") as f:
+        f.write("- t1/not-there-a（已释放）\n- t1/not-there-b\n")
+    r = subprocess.run(["bash", "tools/derived_check.sh", "t1"], cwd=ROOT,
+                       env=dict(os.environ, FW_ROOT=root), capture_output=True,
+                       text=True, timeout=180)
+    assert "断链引用未标注(1 处)" in r.stdout, r.stdout
+    assert "not-there-b" in r.stdout
+    assert "=== derived_check: FAIL" in r.stdout

@@ -23,11 +23,20 @@ from textual.widgets import (
 )
 from textual.widgets.option_list import Option
 
-from fwcore.toolset import check_toolset, render_report
+from fwcore.toolset import check_toolset
 
 from ..commands import COMMANDS
 from ..services import state_store_rows
 from ..session import AgentSession
+from .status import (
+    blocker_label,
+    disposition_label,
+    handback_label,
+    hypothesis_state_label,
+    log_kind_label,
+    state_label,
+    verdict_label,
+)
 
 
 @dataclass
@@ -102,7 +111,7 @@ class HelpScreen(ModalScreen[None]):
     BINDINGS = [("escape", "close", "关闭")]
 
     def compose(self) -> ComposeResult:
-        lines = ["# fw-core 命令与快捷键", "", "## Slash Commands", ""]
+        lines = ["# fw-core 命令与快捷键", "", "## 命令", ""]
         for c in COMMANDS:
             hint = f" `{c.arg_hint}`" if c.arg_hint else ""
             lines.append(f"- **/{c.name}**{hint} — {c.description}")
@@ -110,7 +119,7 @@ class HelpScreen(ModalScreen[None]):
             "", "## 快捷键", "",
             "- `Enter` 发送 · `Shift+Enter` 换行 · `Alt+Enter` 排队",
             "- `Esc` 停止当前运行 · `Ctrl+C` 取消/清空/退出",
-            "- `Ctrl+L` 模型 · `Ctrl+R` 恢复 run · `Ctrl+T` 目标",
+            "- `Ctrl+L` 模型 · `Ctrl+R` 恢复会话 · `Ctrl+T` 目标",
             "- `Ctrl+O` 展开/折叠工具 · `Ctrl+G` 研究面板",
             "- `F1` 帮助 · `F2` 研究面板 · `Ctrl+Q` 退出",
             "", "## 说明", "",
@@ -156,8 +165,18 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+def _fmt_duration(seconds) -> str:
+    try:
+        s = float(seconds or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if s >= 60:
+        return f"{int(s // 60)}分{int(s % 60)}秒"
+    return f"{s:.1f}秒"
+
+
 class ResearchScreen(ModalScreen[None]):
-    """研究专用视图:假设池 / 观察 / 证据 / 进度 / Gate。"""
+    """研究专用视图：进度、假设池、观察、证据、结论与收尾检查。"""
 
     BINDINGS = [("escape", "close", "关闭"), ("g", "close", "关闭")]
 
@@ -168,7 +187,7 @@ class ResearchScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog research"):
-            yield Static("研究状态(只读 · 来自权威 SQLite)", classes="dialog-title")
+            yield Static("研究状态（只读）", classes="dialog-title")
             with TabbedContent(initial=self.initial_tab, id="tabs"):
                 with TabPane("进度", id="progress"):
                     yield Static(id="progress-body", classes="pane")
@@ -180,16 +199,16 @@ class ResearchScreen(ModalScreen[None]):
                     yield DataTable(id="ev-table", cursor_type="row")
                 with TabPane("结论", id="conclusions"):
                     yield DataTable(id="con-table", cursor_type="row")
-                with TabPane("Gate", id="gates"):
+                with TabPane("收尾检查", id="gates"):
                     yield Static(id="gate-body", classes="pane")
             yield Static("Esc 关闭 · 数据每 2 秒刷新", classes="dialog-hint")
 
     def on_mount(self) -> None:
         for tid, cols in (
-            ("#hyp-table", ("id", "state", "verdict", "pri", "title")),
-            ("#obs-table", ("time", "text")),
-            ("#ev-table", ("id", "kind", "verified", "version", "path")),
-            ("#con-table", ("id", "hypothesis", "verdict", "scope", "time")),
+            ("#hyp-table", ("编号", "状态", "结论", "优先级", "标题")),
+            ("#obs-table", ("时间", "观察")),
+            ("#ev-table", ("编号", "类型", "复核", "版本", "位置")),
+            ("#con-table", ("编号", "关联假设", "结论", "适用范围", "时间")),
         ):
             self.query_one(tid, DataTable).add_columns(*cols)
         self.refresh_data()
@@ -208,56 +227,59 @@ class ResearchScreen(ModalScreen[None]):
         except Exception as e:
             derived = {"error": str(e)}
 
-        def counts(d):
-            return ", ".join(f"{k}={v}" for k, v in sorted((d or {}).items()) if v) or "—"
+        def counts(d, labels=None):
+            labels = labels or {}
+            return ", ".join(f"{labels.get(k, k)}={v}"
+                             for k, v in sorted((d or {}).items()) if v) or "—"
 
         prog = Text()
         prog.append("目标 ", style="bold")
         prog.append(sess.target or "—")
-        prog.append("   run ", style="bold")
+        prog.append("   研究会话 ", style="bold")
         prog.append(run.get("id") or "—")
-        prog.append("   state ", style="bold")
-        prog.append(run.get("state") or "—")
+        prog.append("   状态 ", style="bold")
+        prog.append(state_label(run.get("state")) if run else "尚无研究会话")
         prog.append("\n")
         if run:
-            prog.append(f"goal: {(run.get('goal') or '')[:300]}\n")
-            prog.append(f"calls={run.get('model_calls')} tools={run.get('tool_calls')} "
-                        f"step={run.get('step')} rounds={run.get('rounds')} "
-                        f"elapsed={run.get('elapsed_s')}s\n")
+            prog.append(f"目标说明：{(run.get('goal') or '')[:300]}\n")
+            prog.append(f"模型调用 {run.get('model_calls')} · 工具调用 {run.get('tool_calls')} "
+                        f"· 步骤 {run.get('step')} · 轮次 {run.get('rounds')} "
+                        f"· 用时 {_fmt_duration(run.get('elapsed_s'))}\n")
             if run.get("handback_reason"):
-                prog.append(f"handback: {run['handback_reason']}\n", style="yellow")
-        prog.append(f"假设: {counts(derived.get('hypotheses'))}\n")
-        prog.append(f"面覆盖: {derived.get('surface_coverage')}  "
-                    f"面状态: {counts(derived.get('surfaces'))}\n")
-        prog.append(f"尝试: {counts(derived.get('attempts'))}\n")
+                prog.append(f"暂停原因：{handback_label(run['handback_reason'])}\n", style="yellow")
+        prog.append(f"假设：{counts(derived.get('hypotheses'), {k: hypothesis_state_label(k) for k in ('open','investigating','concluded','dropped')})}\n")
+        prog.append(f"攻击面覆盖：{derived.get('surface_coverage')}  "
+                    f"面状态：{counts(derived.get('surfaces'), {k: disposition_label(k) for k in ('unjudged','vulnerable','no_finding','out_of_scope')})}\n")
+        prog.append(f"尝试：{counts(derived.get('attempts'))}\n")
         prog.append(f"证据 {derived.get('evidence')} · 观察 {derived.get('observations')}"
                     f" · 结论 {len(rows.get('conclusions') or [])}\n")
         blockers = derived.get("closure_blockers") or []
-        prog.append("\nGate 阻塞\n", style="bold")
+        prog.append("\n收尾检查\n", style="bold")
         if blockers:
             for b in blockers:
-                prog.append(f"- {b}\n", style="red")
+                prog.append(f"- {blocker_label(b)}\n", style="red")
         else:
-            prog.append("- 无(程序未报阻塞)\n", style="green")
+            prog.append("- 没有阻塞\n", style="green")
         logs = rows.get("logs") or []
         if logs:
-            prog.append("\n最近日志\n", style="bold")
+            prog.append("\n最近记录\n", style="bold")
             for lg in logs[:10]:
-                prog.append(f"- [{lg['kind']}] {lg['title'][:100]} ({lg['created_at'][:10]})\n")
+                prog.append(f"- [{log_kind_label(lg['kind'])}] {lg['title'][:100]} ({lg['created_at'][:10]})\n")
         self.query_one("#progress-body", Static).update(prog)
 
         gate = Text()
-        gate.append("收尾阻塞(程序可核)\n", style="bold")
+        gate.append("收尾检查\n", style="bold")
         for b in blockers:
-            gate.append(f"- {b}\n", style="red")
+            gate.append(f"- {blocker_label(b)}\n", style="red")
         if not blockers:
-            gate.append("- 无\n", style="green")
+            gate.append("- 没有阻塞\n", style="green")
         self.query_one("#gate-body", Static).update(gate)
 
         hyp = self.query_one("#hyp-table", DataTable)
         hyp.clear()
         for h in rows.get("hypotheses") or []:
-            hyp.add_row(h["id"], h["state"], h.get("verdict") or "", str(h["priority"]),
+            hyp.add_row(h["id"], hypothesis_state_label(h["state"]),
+                        verdict_label(h.get("verdict") or ""), str(h["priority"]),
                         (h["title"] or "")[:120])
         obs = self.query_one("#obs-table", DataTable)
         obs.clear()
@@ -266,12 +288,13 @@ class ResearchScreen(ModalScreen[None]):
         ev = self.query_one("#ev-table", DataTable)
         ev.clear()
         for e in rows.get("evidence") or []:
-            ev.add_row(e["id"], e.get("kind") or "", "✓" if e.get("verified") else "·",
+            ev.add_row(e["id"], e.get("kind") or "", "已复核" if e.get("verified") else "未复核",
                        str(e.get("version") or ""), (e.get("path") or e.get("capture") or "")[:100])
         con_table = self.query_one("#con-table", DataTable)
         con_table.clear()
         for c in rows.get("conclusions") or []:
-            con_table.add_row(c["id"], c.get("hypothesis_id") or "", c.get("verdict") or "",
+            con_table.add_row(c["id"], c.get("hypothesis_id") or "",
+                              verdict_label(c.get("verdict") or ""),
                               (c.get("scope_note") or "")[:80], (c.get("created_at") or "")[:19])
 
     def action_close(self) -> None:
@@ -280,7 +303,33 @@ class ResearchScreen(ModalScreen[None]):
 
 def parse_run_label(row: dict) -> str:
     goal = (row.get("goal") or "").replace("\n", " ")
-    return f"{row['id']} · {row.get('state','?')} · {goal[:70]}"
+    return f"{row['id']} · {state_label(row.get('state'))} · {goal[:70]}"
+
+
+
+TOOLSET_STATUS_LABELS = {
+    "ready": "已就绪", "partial": "部分可用", "missing": "缺失",
+    "deps_missing": "缺依赖", "not_started": "未启动",
+    "arch_mismatch": "架构不匹配", "optional": "可选未就绪",
+}
+
+
+def _toolset_user_text(report: dict) -> str:
+    lines = ["工具就绪检查", ""]
+    req = report.get("required_total", 0)
+    ready = report.get("required_ready", 0)
+    lines.append(f"必需项：{ready}/{req} 就绪；未就绪 {report.get('required_incomplete', 0)} 项")
+    if report.get("config_error"):
+        lines.append(f"配置错误：{report['config_error']}")
+        return "\n".join(lines)
+    for item in report.get("items", []):
+        if not item.get("required"):
+            continue
+        status = TOOLSET_STATUS_LABELS.get(item.get("status"), "状态未知")
+        lines.append(f"- {item.get('label', '未命名工具')}：{status}")
+        for reason in (item.get("reasons") or [])[:2]:
+            lines.append(f"  · {reason}")
+    return "\n".join(lines)
 
 
 class ToolsetScreen(ModalScreen[None]):
@@ -294,8 +343,8 @@ class ToolsetScreen(ModalScreen[None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog research"):
-            yield Static("默认工具集完整性", classes="dialog-title")
-            yield Static("正在检查默认工具集…", id="toolset-body", classes="pane")
+            yield Static("工具就绪检查", classes="dialog-title")
+            yield Static("正在检查工具…", id="toolset-body", classes="pane")
             yield Static("Esc 关闭", classes="dialog-hint")
 
     def on_mount(self) -> None:
@@ -310,7 +359,7 @@ class ToolsetScreen(ModalScreen[None]):
                 self.query_one("#toolset-body", Static).update(f"检查失败: {e}")
             return
         with contextlib.suppress(Exception):
-            self.query_one("#toolset-body", Static).update(render_report(report))
+            self.query_one("#toolset-body", Static).update(_toolset_user_text(report))
 
     def action_close(self) -> None:
         self.dismiss(None)

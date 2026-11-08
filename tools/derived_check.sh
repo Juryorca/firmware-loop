@@ -38,9 +38,9 @@ def bad(msg):
     print("FAIL " + msg)
 
 if not os.path.isdir(state):
-    bad(f"目标目录不存在: state/{target}")
-    print("=== derived_check: FAIL ===")
-    sys.exit(1)
+    # DB-only 目标（例如刚用 `fw-core init` 创建、尚无 notes/report/工作副本）
+    # 是合法状态；不能把缺少工作目录本身当成 FAIL。
+    print(f"NOTE 没有 state/{target} 工作目录；以 SQLite 状态继续检查")
 con = None
 target_row = None
 for cand in (os.path.join(state, "state", "fwcore.sqlite3"),
@@ -95,12 +95,15 @@ for f in scanned:
                 exists = os.path.exists(p)
             if exists:
                 continue
-            if any(k in "\n".join(lines) for k in
+            # 豁免只看当前引用所在行，不能因为文件任意处出现一次“已释放”
+            # 就放过同一文件里的其他断链。
+            if any(k in ln for k in
                    ("已释放", "需按配方重建", "重下见", "SOURCE_URL", "已随目标清理", "公式重建")):
                 continue
             dangle.append((f, f"{m.group(1)}/{m.group(2)[:40]}"))
 if dangle:
-    bad(f"断链引用未标注({len(dangle)} 处): {sorted({os.path.relpath(f, root) for f, _ in dangle})[:6]}")
+    where = sorted({f"{os.path.relpath(f, root)}:{ref}" for f, ref in dangle})
+    bad(f"断链引用未标注({len(dangle)} 处): {where[:6]}")
 else:
     ok(f"引用完整性: {len(scanned)} 个 report 文件无未标注断链")
 

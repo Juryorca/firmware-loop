@@ -17,15 +17,15 @@ import json
 import queue
 import sqlite3
 import threading
-import uuid
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 
 from fwcore import db as _db
 from fwcore.compact import estimate_tokens
 from fwcore.models import ScriptedAdapter
-from fwcore.runtime import RunResult, Runner
+from fwcore.runtime import Runner, RunResult
 
 from .config import AppConfig, adapter_for
 from .services import Services, latest_run
@@ -98,14 +98,16 @@ class AgentSession:
         self._mcp = mcp
         self._watchdog = watchdog
         self._q: queue.Queue = queue.Queue()
-        self._pending: list[tuple[str, str]] = []
+        self._pending: list[tuple[str, str, str | None, str | None]] = []
         self._returned: list[str] = []
         self._lock = threading.Lock()
+        self._events_lock = threading.Lock()
         self._busy = False
         self._closed = False
         self._last_error: str | None = None
         self._thread: threading.Thread | None = None
-        self._events: deque[UiEvent] = deque(maxlen=400)
+        # 不在 drain 时丢事件：UI 的 250ms tick 负责消费；并发列表+clear 会丢 turn_done。
+        self._events: deque[UiEvent] = deque()
         self._tool_cache: dict[str, tuple] = {}
         self._usage_cache: tuple | None = None
         self._started = False
@@ -128,13 +130,17 @@ class AgentSession:
         self._started = True
 
     def close(self) -> None:
+        # 先走现有 Runner.cancel / 安全点机制，再停止 worker；不创建第二套取消系统。
+        if self.busy:
+            self.cancel("应用退出")
         with self._lock:
             queued, self._pending = list(self._pending), []
-        for text, cid in queued:
-            if self.run_id:
+        for text, cid, _target, queued_run in queued:
+            run = queued_run or self.run_id
+            if run:
                 try:
                     self.services.domain.add_conversation(
-                        self.run_id, "user", text, status="cancelled", client_id=cid,
+                        run, "user", text, status="cancelled", client_id=cid,
                         meta={"source": "tui-queue", "cancelled": True})
                 except Exception as e:
                     self.emit("error", f"关闭时排队消息状态写入失败: {e}")
@@ -152,7 +158,7 @@ class AgentSession:
     @property
     def pending(self) -> list[str]:
         with self._lock:
-            return [text for text, _cid in self._pending]
+            return [item[0] for item in self._pending]
 
     @property
     def last_error(self) -> str | None:
@@ -165,11 +171,14 @@ class AgentSession:
 
     # ---------------- UI 事件 ----------------
     def emit(self, kind: str, text: str = "", **data) -> None:
-        self._events.append(UiEvent(kind=kind, text=text, data=data))
+        ev = UiEvent(kind=kind, text=text, data=data)
+        with self._events_lock:
+            self._events.append(ev)
 
     def drain_events(self) -> list[UiEvent]:
-        out = list(self._events)
-        self._events.clear()
+        with self._events_lock:
+            out = list(self._events)
+            self._events.clear()
         return out
 
     # ---------------- 提交与控制 ----------------
@@ -180,29 +189,36 @@ class AgentSession:
         client_id = f"tui-{uuid.uuid4().hex}"     # 同一提交重试幂等
         with self._lock:
             busy = self._busy
+            target = self.target
+            run_id = self.run_id
         if not busy:
             # 新的一轮用户输入生效:清除上一轮的取消标记
             self._cancel_event.clear()
         if busy:
-            # 排队也持久化(状态 queued);执行时同一 client_id 推进为 ok,不产生第二条
-            if self.run_id:
+            # 排队也持久化(状态 queued);并把目标/会话与消息绑定，防止 busy 短暂间隙后串台。
+            if run_id:
                 try:
                     self.services.domain.add_conversation(
-                        self.run_id, "user", text, status="queued",
+                        run_id, "user", text, status="queued",
                         client_id=client_id, meta={"source": "tui-queue"})
                 except Exception as e:
                     self.emit("error", f"排队消息写入失败(仍会尝试执行): {e}")
             with self._lock:
-                self._pending.append((text, client_id))
+                self._pending.append((text, client_id, target, run_id))
             self.emit("queued", text)
             return
-        self._q.put(("turn", text, client_id))
+        self._q.put(("turn", text, client_id, target, run_id))
 
     def new_session(self, text: str | None = None) -> None:
-        if self.busy:
-            self.emit("error", "正在执行;先 Esc 停止再 /new")
+        with self._lock:
+            if self._busy:
+                busy = True
+            else:
+                busy = False
+                self.run_id = None
+        if busy:
+            self.emit("error", "当前一轮仍在执行，请先按 Esc 停止，再新建会话。")
             return
-        self.run_id = None
         self._tool_cache.clear()
         self._model_cursor = None
         self.emit("session.new", "")
@@ -211,47 +227,68 @@ class AgentSession:
 
     def resume_run(self, run_id: str, *, run_now: bool = False) -> None:
         if self.busy:
-            self.emit("error", "正在执行;不能切换 run")
+            self.emit("error", "当前一轮仍在执行，暂时不能切换研究会话。")
             return
         row = self.services.con.execute(
             "SELECT r.id,t.name FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
             (run_id,)).fetchone()
         if not row:
-            self.emit("error", f"run 不存在: {run_id}")
+            self.emit("error", f"研究会话不存在：{run_id}")
             return
-        self.target = row["name"]
-        self.run_id = run_id
+        with self._lock:
+            if self._busy:
+                self.emit("error", "当前一轮仍在执行，暂时不能切换研究会话。")
+                return
+            self.target = row["name"]
+            self.run_id = run_id
+            target = self.target
         self._tool_cache.clear()
         self._model_cursor = None
-        self.emit("session.resumed", run_id, run=run_id, target=self.target)
+        self.emit("session.resumed", run_id, run=run_id, target=target)
         if run_now:
-            self._q.put(("continue", None))
+            self._q.put(("continue", None, None, target, run_id))
 
-    def continue_run(self) -> None:
-        if not self.run_id:
-            self.emit("error", "没有可继续的 run")
-            return
-        if self.busy:
-            self.emit("queued", "(continue)")
-            return
-        self._q.put(("continue", None))
+    def continue_run(self) -> bool:
+        with self._lock:
+            run_id = self.run_id
+            target = self.target
+            busy = self._busy
+        if not run_id:
+            self.emit("error", "当前没有可继续的研究会话。")
+            return False
+        if busy:
+            self.emit("error", "当前一轮仍在执行，暂时不能继续。")
+            return False
+        self._q.put(("continue", None, None, target, run_id))
+        return True
 
     def set_target(self, name: str) -> None:
         if self.busy:
-            self.emit("error", "正在执行;不能切换目标")
+            self.emit("error", "当前一轮仍在执行，暂时不能切换目标。")
             return
         if not self.services.con.execute("SELECT 1 FROM targets WHERE name=?", (name,)).fetchone():
-            self.emit("error", f"目标不存在: {name}")
+            self.emit("error", f"目标不存在：{name}")
             return
-        self.target = name
-        self.run_id = latest_run(self.services.con, name)
+        with self._lock:
+            if self._busy:
+                self.emit("error", "当前一轮仍在执行，暂时不能切换目标。")
+                return
+            self.target = name
+            self.run_id = latest_run(self.services.con, name)
         self._tool_cache.clear()
         self._model_cursor = None
         self.emit("session.target", name, target=name, run=self.run_id)
 
-    def set_model(self, name: str) -> None:
+    def set_model(self, name: str) -> bool:
+        from .config import ModelConfigError, adapter_for
+        try:
+            adapter_for(self.cfg, name)
+        except ModelConfigError as e:
+            self.emit("error", str(e))
+            return False
         self.model_name = name
         self.emit("session.model", name, model=name)
+        return True
 
     def cancel(self, reason: str = "用户取消") -> bool:
         rid = self.run_id
@@ -262,7 +299,7 @@ class AgentSession:
             with self._lock:
                 queued = list(self._pending)
                 self._pending.clear()
-                self._returned.extend(text for text, _cid in queued)
+                self._returned.extend(item[0] for item in queued)
             self.emit("cancelled", reason, run=None)
             return True
         runner = self._runner_ref
@@ -290,11 +327,11 @@ class AgentSession:
         with self._lock:
             queued = list(self._pending)
             self._pending.clear()
-            self._returned.extend(text for text, _cid in queued)
-        for text, cid in queued:
+            self._returned.extend(item[0] for item in queued)
+        for text, cid, _target, queued_run in queued:
             try:
                 self.services.domain.add_conversation(
-                    rid, "user", text, status="cancelled", client_id=cid,
+                    queued_run or rid, "user", text, status="cancelled", client_id=cid,
                     meta={"source": "tui-queue", "cancelled": True})
             except Exception as e:
                 self.emit("error", f"取消排队消息状态写入失败: {e}")
@@ -305,15 +342,16 @@ class AgentSession:
         """把排队消息还给编辑器(Pi 的 Alt+Up 语义);DB 中标记为 cancelled。"""
         with self._lock:
             items, self._pending = list(self._pending), []
-        for text, cid in items:
-            if self.run_id:
+        for text, cid, _target, queued_run in items:
+            run = queued_run or self.run_id
+            if run:
                 try:
                     self.services.domain.add_conversation(
-                        self.run_id, "user", text, status="cancelled", client_id=cid,
+                        run, "user", text, status="cancelled", client_id=cid,
                         meta={"source": "tui-queue", "cancelled": True})
                 except Exception as e:
                     self.emit("error", f"取回排队消息状态写入失败: {e}")
-        return [text for text, _cid in items]
+        return [item[0] for item in items]
 
     # ---------------- worker ----------------
     def _loop(self) -> None:
@@ -325,9 +363,13 @@ class AgentSession:
                 item = self._q.get()
                 if item is None:
                     break
+                if self._closed:
+                    break
                 kind = item[0]
                 arg = item[1] if len(item) > 1 else None
                 client_id = item[2] if len(item) > 2 else None
+                target = item[3] if len(item) > 3 else self.target
+                run_id = item[4] if len(item) > 4 else self.run_id
                 with self._lock:
                     self._busy = True
                 self.emit("busy", kind)
@@ -340,9 +382,9 @@ class AgentSession:
                         runner.model = self._adapter_for(self.model_name)
                         self._runner_model_name = self.model_name
                     if kind == "turn":
-                        self._do_turn(runner, str(arg), client_id)
+                        self._do_turn(runner, str(arg), client_id, target, run_id)
                     elif kind == "continue":
-                        self._do_continue(runner)
+                        self._do_continue(runner, target, run_id)
                     elif kind == "restart":
                         runner.close()
                         runner = self._make_runner(con)
@@ -355,8 +397,11 @@ class AgentSession:
                     with self._lock:
                         self._busy = False
                         nxt = self._pending.pop(0) if self._pending else None
+                        if nxt and nxt[3] is None and nxt[2] == self.target:
+                            # 首轮尚未创建 run_id 时排队的消息属于同一会话。
+                            nxt = (nxt[0], nxt[1], nxt[2], self.run_id)
                     if nxt and not self._closed:
-                        self._q.put(("turn", nxt[0], nxt[1]))
+                        self._q.put(("turn", nxt[0], nxt[1], nxt[2], nxt[3]))
         finally:
             if runner is not None:
                 with contextlib.suppress(Exception):
@@ -381,16 +426,22 @@ class AgentSession:
 
     def _on_stream(self, ev: dict) -> None:
         kind = str(ev.get("type") or "stream")
-        self._events.append(UiEvent(kind=kind, text=str(ev.get("text") or ""), data=dict(ev)))
+        text = str(ev.get("text") or "")
+        data = {k: v for k, v in ev.items() if k not in ("type", "text")}
+        self.emit(kind, text, **data)
 
-    def _do_turn(self, runner: Runner, text: str, client_id: str | None = None) -> None:
-        if not self.target:
-            self.emit("error", "没有目标:先用 `fw-core init <target>` 创建,或在选择器里选目标")
+    def _do_turn(self, runner: Runner, text: str, client_id: str | None = None,
+                 target: str | None = None, run_id: str | None = None) -> None:
+        target = target if target is not None else self.target
+        rid = run_id
+        if not target:
+            self.emit("error", "还没有选择目标：请先选择目标，或运行 `fw-core init <目标>`。")
             return
-        rid = self.run_id
         if not rid:
-            rid = runner.start(self.target, text)      # start 内持久化首条用户消息
-            self.run_id = rid
+            rid = runner.start(target, text)      # start 内持久化首条用户消息
+            with self._lock:
+                if self.target == target and self.run_id is None:
+                    self.run_id = rid
             if self._cancel_event.is_set():
                 # 取消发生在 start 之前/期间:创建后立即暂停,绝不发起模型调用
                 runner.cancel(rid, "用户取消")
@@ -398,17 +449,19 @@ class AgentSession:
                                 "user_stop: 用户取消", [])
                 self._publish_result(res)
                 return
-            res = runner.run(rid, self.target, goal=text)
+            res = runner.run(rid, target, goal=text)
         else:
             res = runner.resume(rid, goal=text, user_client_id=client_id)
         self._publish_result(res)
 
-    def _do_continue(self, runner: Runner) -> None:
-        if not self.run_id:
-            self.emit("error", "没有可继续的 run")
+    def _do_continue(self, runner: Runner, target: str | None = None,
+                     run_id: str | None = None) -> None:
+        rid = run_id or self.run_id
+        if not rid:
+            self.emit("error", "当前没有可继续的研究会话。")
             return
         self._cancel_event.clear()
-        res = runner.resume(self.run_id)    # 不伪造新的用户消息
+        res = runner.resume(rid)    # 不伪造新的用户消息
         self._publish_result(res)
 
     def _publish_result(self, res) -> None:
@@ -532,9 +585,9 @@ class AgentSession:
             if role == "user" and content.strip():
                 suffix = ""
                 if e.get("status") == "queued":
-                    suffix = "  (queued)"
+                    suffix = "  （已排队）"
                 elif e.get("status") == "cancelled":
-                    suffix = "  (cancelled)"
+                    suffix = "  （已取消）"
                 item = TranscriptItem("user", content + suffix)
             elif role == "assistant" and content.strip():
                 item = TranscriptItem("assistant", content)

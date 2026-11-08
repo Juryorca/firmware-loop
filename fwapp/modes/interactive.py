@@ -18,10 +18,11 @@ from typing import Any
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from ..commands import BY_NAME
-from ..config import available_models
+from ..config import ModelConfigError, adapter_for, available_models
 from ..runtime import AppRuntime
 from ..session import AgentSession
 from ..widgets.editor import PromptEditor
@@ -34,7 +35,16 @@ from ..widgets.screens import (
     SelectorScreen,
     ToolsetScreen,
 )
-from ..widgets.status import HINTS, StatusBar
+from ..widgets.status import (
+    HINTS,
+    StatusBar,
+    handback_label,
+    knowledge_kind_label,
+    knowledge_status_label,
+    model_label,
+    response_status_label,
+    state_label,
+)
 from ..widgets.transcript import (
     MessageWidget,
     NoticeWidget,
@@ -49,7 +59,10 @@ class FwApp(App):
     CSS = """
     Screen { background: #10151C; color: #DCE3EA; }
     #title { height: 1; background: #10151C; color: #8995A5; padding: 0 1; }
-    #transcript { height: 1fr; padding: 0 1; background: #10151C; }
+    #transcript { height: 1fr; padding: 0 1; background: #10151C;
+                 scrollbar-size: 1 1; scrollbar-background: #10151C;
+                 scrollbar-color: #2C3643; scrollbar-color-hover: #8995A5;
+                 scrollbar-color-active: #83A9D5; }
     .msg { margin: 0 0 1 0; padding: 0; }
     .msg-role { color: #8995A5; text-style: bold; }
     .msg.user .msg-role { color: #83A9D5; }
@@ -70,7 +83,8 @@ class FwApp(App):
     .tool.cancelled .tool-header { color: #D5B47A; }
     .tool.running .tool-header { color: #83A9D5; }
     #pending { height: auto; max-height: 2; color: #D5B47A; padding: 0 1; }
-    StatusBar { height: 1; background: #10151C; color: #8995A5; padding: 0 1; }
+    StatusBar { height: auto; background: #10151C; color: #8995A5;
+                padding: 0 1; text-wrap: wrap; }
     #palette { display: none; height: auto; max-height: 8; border: solid #2C3643;
                background: #19212B; color: #DCE3EA; }
     #editor { height: 3; border: none; background: #19212B; color: #DCE3EA; }
@@ -115,6 +129,7 @@ class FwApp(App):
         self._expand_tools = False
         self._show_thinking = False
         self._last_sigint = 0.0
+        self._signal_exit = False
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -138,9 +153,13 @@ class FwApp(App):
                 self._notice(d.message, d.level)
         names = self.sess.services.con.execute("SELECT COUNT(*) n FROM targets").fetchone()["n"]
         if not names:
-            self._notice("状态库还没有目标:先运行 `fw-core init <target>` 或迁移历史目标。", "warning")
+            self._notice("状态库还没有目标：请先运行 `fw-core init <目标>` 或迁移历史目标。", "warning")
+        if self.sess.model_name in ("scripted", "fake"):
+            self._notice("演示模式：当前使用本地脚本，不会调用真实模型。", "info")
         self.set_interval(0.25, self._tick)
         self.set_interval(1.0, self._update_status)
+        # 信号处理函数不能直接依赖 Textual 的消息泵；置标志，由事件循环安全退出。
+        self.set_interval(0.1, self._check_signal_exit)
 
     # ---------------- 渲染 ----------------
     def _append(self, widget) -> None:
@@ -149,18 +168,27 @@ class FwApp(App):
     def _notice(self, text: str, level: str = "info") -> None:
         self._append(NoticeWidget(text, level))
 
+    def request_exit(self) -> None:
+        """供 SIGTERM/SIGHUP 等信号处理函数调用（只置标志，不跨线程操作 UI）。"""
+        self._signal_exit = True
+
+    def _check_signal_exit(self) -> None:
+        if self._signal_exit:
+            self._signal_exit = False
+            self.exit()
+
     def _update_title(self) -> None:
         s = self.sess.snapshot()
         t = Text()
         t.append("fw-core", style="bold #8995A5")
         t.append("  ")
-        t.append(s.target or "no target", style="bold #83A9D5")
+        t.append(s.target or "未选择目标", style="bold #83A9D5")
         t.append("  ")
-        t.append(s.run_id or "no run", style="dim")
-        t.append("  ")
-        t.append(s.state, style="bold #89B99D" if s.state == "running" else "#D5B47A")
+        t.append(state_label(s.state), style="bold #89B99D" if s.state == "running" else "#D5B47A")
+        if self.sess.model_name in ("scripted", "fake"):
+            t.append("  · 演示模式", style="#D5B47A")
         if s.busy:
-            t.append("  working…", style="#D5B47A")
+            t.append("  · 正在处理", style="#D5B47A")
         self.query_one("#title", Static).update(t)
 
     def _update_status(self) -> None:
@@ -169,9 +197,13 @@ class FwApp(App):
         except Exception as e:
             self.query_one(StatusBar).update(Text(f"状态读取失败: {e}", style="#CE8888"))
             return
-        self.query_one(StatusBar).update_snapshot(s)
-        self.query_one(PendingBar).update_pending(s.pending)
-        self._update_title()
+        try:
+            self.query_one(StatusBar).update_snapshot(s)
+            self.query_one(PendingBar).update_pending(s.pending)
+            self._update_title()
+        except NoMatches:
+            # interval 可能在 App 退出/卸载后仍触发一次；不能把退出变成异常。
+            return
 
     def _load_transcript(self) -> None:
         tv = self.query_one(TranscriptView)
@@ -209,18 +241,11 @@ class FwApp(App):
             self._handle_event(ev)
         for call in self.sess.tool_updates():
             self._upsert_tool(call)
-        for upd in self.sess.model_updates():
-            p = upd.get("payload") or {}
-            usage = []
-            if p.get("prompt_tokens") is not None:
-                usage.append(f"prompt={p.get('prompt_tokens')}")
-            if p.get("completion_tokens") is not None:
-                usage.append(f"completion={p.get('completion_tokens')}")
-            if p.get("tool_calls"):
-                usage.append(f"tools={p['tool_calls']}")
-            self._notice("model call" + (f" step={p.get('step')}" if p.get("step") else "")
-                         + (" · " + " ".join(usage) if usage else ""))
-        self.query_one(PendingBar).update_pending(self.sess.pending)
+        # 模型调用的内部 usage 不刷进聊天区；状态栏和 /budget 负责展示。
+        try:
+            self.query_one(PendingBar).update_pending(self.sess.pending)
+        except NoMatches:
+            return
 
     def _reset_stream(self) -> None:
         self._stream_msg = None
@@ -290,19 +315,19 @@ class FwApp(App):
                 self._append(self._stream_msg)
             self._stream_msg.append_reasoning(ev.data.get("text") or ev.text)
         elif ev.kind == "assistant_done":
-            text = ev.data.get("text") or ""
+            text = ev.data.get("text") or ev.text or ""
             if self._stream_msg is None:
                 self._stream_msg = MessageWidget("assistant", text)
                 self._append(self._stream_msg)
             self._stream_msg.finalize(text)
             status = ev.data.get("status") or "ok"
             if status != "ok":
-                self._notice("assistant 未完成: " + status, "warning")
+                self._notice(f"回复未完整生成：{response_status_label(status)}", "warning")
             self._stream_msg = None
         elif ev.kind == "assistant_error":
             if self._stream_msg is not None:
                 self._stream_msg.finalize(ev.data.get("text") or "")
-            self._notice("模型流中断: " + str(ev.data.get("error") or "")[:300], "error")
+            self._notice("模型输出中断：" + str(ev.data.get("error") or "")[:300], "error")
             self._stream_msg = None
         elif ev.kind in ("toolcall_start", "toolcall_delta"):
             self._stream_tool_event(ev.data)
@@ -312,12 +337,14 @@ class FwApp(App):
             hb = ev.data.get("handback")
             blockers = ev.data.get("blockers") or []
             if state and state != "finished":
-                self._notice(f"run {state}" + (f" · {hb}" if hb else ""), "warning")
+                reason = f"：{handback_label(hb)}" if hb else ""
+                self._notice(f"本轮已{state_label(state)}{reason}", "warning")
             elif hb in ("awaiting_user_close", "closed"):
-                self._notice(f"程序判定收尾条件{'已满足' if hb == 'awaiting_user_close' else '已确认'}"
-                             "(等用户确认,不自动收尾)", "success")
+                self._notice("收尾条件已满足，等待你确认收尾" if hb == "awaiting_user_close"
+                             else "已确认收尾", "success")
             if blockers:
-                self._notice("未收口: " + "; ".join(blockers[:4]), "info")
+                self._notice(f"收尾检查还有 {len(blockers)} 项未通过；在研究面板可查看详情。",
+                             "info")
             self._update_status()
         elif ev.kind == "error":
             self._notice(ev.text, "error")
@@ -329,16 +356,20 @@ class FwApp(App):
         elif ev.kind == "session.new":
             self.query_one(TranscriptView).remove_children()
             self._tool_widgets.clear()
-            self._append(RunBanner("新 run:下一条消息会创建新的研究会话"))
+            self._append(RunBanner("新研究会话：下一条消息会创建新的研究会话"))
             self._update_status()
         elif ev.kind in ("session.resumed", "session.target"):
             self._load_transcript()
             data = ev.data or {}
+            run = data.get("run") or self.sess.run_id
             self._append(RunBanner(
-                f"已切换: {data.get('target') or self.sess.target} · {data.get('run') or self.sess.run_id or 'no run'}"))
+                f"已切换目标：{data.get('target') or self.sess.target}"
+                + (f" · 研究会话 {run}" if run else " · 尚无研究会话")))
             self._update_status()
         elif ev.kind == "session.model":
-            self._notice(f"模型 → {ev.data.get('model') or self.sess.model_name}")
+            self._notice(f"模型已切换：{model_label(ev.data.get('model') or self.sess.model_name)}")
+            if (ev.data.get("model") or self.sess.model_name) in ("scripted", "fake"):
+                self._notice("演示模式：本地脚本，不会调用真实模型。", "info")
             self._update_status()
         elif ev.kind == "busy":
             self._update_status()
@@ -362,7 +393,7 @@ class FwApp(App):
         text = (msg.text or "").strip()
         if not text:
             return
-        self._append(MessageWidget("user", text + "  (queued)"))
+        self._append(MessageWidget("user", text + "  （已排队）"))
         self.query_one(PromptEditor).remember(text)
         self.query_one(PromptEditor).text = ""
         self.sess.submit(text)
@@ -429,7 +460,7 @@ class FwApp(App):
             self._command(text)
             return
         if not self.sess.target:
-            self._notice("没有目标:先 `fw-core init <target>`。", "warning")
+            self._notice("没有目标：请先选择目标，或运行 `fw-core init <目标>`。", "warning")
             return
         self._append(MessageWidget("user", text))
         self.sess.submit(text)
@@ -479,7 +510,7 @@ class FwApp(App):
         self.run_worker(self._tool_setup_worker(), exclusive=True)
 
     async def _tool_setup_worker(self) -> None:
-        from fwcore.toolset import check_toolset, render_report
+        from fwcore.toolset import check_toolset
         try:
             rep = await asyncio.to_thread(check_toolset, self.sess.services.cfg.root)
         except Exception as e:  # noqa: BLE001 - UI 必须把异常显示出来，而不是退出
@@ -488,15 +519,13 @@ class FwApp(App):
         missing = [x for x in rep["items"]
                    if x["required"] and x["status"] != "ready"]
         if not missing:
-            self._notice("默认工具集已完整。使用 /tools 查看详情。")
+            self._notice("工具都已就绪，无需处理。使用 /tools 查看详情。")
             return
         if not self.sess.target:
-            self._notice("工具管理需要先选择 target；当前缺失:\n" + render_report(rep))
+            self._notice("请先选择目标，再检查并补齐工具。", "warning")
             return
-        task = ("使用 tool-management Skill 处理默认工具集缺失项。"
-                "先读取 toolset/capabilities、state/tools.json 与 state/pyenvs.json；已有工具先补元数据，Py 环境队列只用于 Agent 代码/装包；"
-                "按授权范围安装/配置，跳过依赖冲突，最后做真实能力验证并恢复研究。"
-                "当前缺失: " + "; ".join(x["label"] for x in missing))
+        self._notice("发现未就绪工具：" + "、".join(x["label"] for x in missing), "warning")
+        task = "使用 tool-management Skill 检查并补齐默认工具，完成后继续当前研究。"
         self._append(MessageWidget("user", task))
         self.sess.submit(task)
 
@@ -509,9 +538,9 @@ class FwApp(App):
         from fwcore.skills import catalog
         rows = catalog(self.sess.services.cfg.root)
         if not rows:
-            self._notice("没有发现 Skills(.agents/skills/*/SKILL.md)", "warning")
+            self._notice("还没有可用技能（.agents/skills/*/SKILL.md）。", "warning")
             return
-        lines = ["可用 Skills(正文用 skill_read 按需加载)", ""]
+        lines = ["可用技能（需要时再读取正文）", ""]
         for r in rows:
             lines.append(f"- {r['name']}: {r['description']}")
         self._notice("\n".join(lines))
@@ -532,7 +561,8 @@ class FwApp(App):
             return
         lines = [f"知识检索: {arg}", ""]
         for r in rows:
-            lines.append(f"- {r['id']} [{r['kind']}/{r['status']}] {r['title']}")
+            lines.append(f"- {r['id']} [{knowledge_kind_label(r['kind'])}/"
+                         f"{knowledge_status_label(r['status'])}] {r['title']}")
         self._notice("\n".join(lines))
 
     def _cmd_budget(self, arg: str) -> None:
@@ -543,30 +573,43 @@ class FwApp(App):
         t = Text()
         t.append("预算与用量\n", style="bold")
         t.append(f"- 模型调用 {s.calls}/{lim.get('max_model_calls')} · "
-                 f"工具 {s.tools} · 时长 {s.elapsed:.0f}s/{lim.get('max_seconds')}\n")
-        t.append(f"- Token prompt={tok.get('prompt')} completion={tok.get('completion')} "
-                 f"cache={tok.get('cached')} total={tok.get('total')}\n")
+                 f"工具调用 {s.tools} · 用时 {s.elapsed:.0f}s/{lim.get('max_seconds')}\n")
+        t.append(f"- Token 输入 {tok.get('prompt')} · 输出 {tok.get('completion')} · "
+                 f"合计 {tok.get('total')}\n")
+        prompt = int(tok.get("prompt") or 0)
+        cached = int(tok.get("cached") or 0)
+        if prompt:
+            t.append(f"- 缓存命中率 {min(100, cached / prompt * 100):.0f}% ({cached}/{prompt})\n")
         if ctx.get("window"):
             t.append(f"- 上下文 {ctx.get('last_prompt') or ctx.get('estimated')}/{ctx['window']}")
             if ctx.get("percent") is not None:
                 t.append(f" ({ctx['percent']}%)")
             t.append("\n")
         else:
-            t.append("- 上下文窗口未配置(state/model.json 的 context_tokens)\n")
+            t.append("- 上下文窗口未配置（可选：state/model.json 的 context_tokens）\n")
         if s.budget.get("last_limit"):
-            t.append(f"- 最近触发: {s.budget['last_limit']}\n", style="yellow")
+            t.append(f"- 最近触发：{s.budget['last_limit']}\n", style="yellow")
         self._notice(t.plain)
 
     def _cmd_model(self, arg: str) -> None:
         if arg:
-            self.sess.set_model(arg)
+            # 先构造适配器验证配置；失败不能先改 UI 显示，下一轮才报错。
+            try:
+                adapter_for(self.runtime.cfg, arg)
+            except ModelConfigError as e:
+                self._notice(f"模型不可用：{e}；当前模型未改变。", "error")
+                return
+            if not self.sess.set_model(arg):
+                self._notice("模型切换失败；当前模型未改变。", "error")
             return
         items = [SelectItem(v, v, d) for v, d in available_models(self.runtime.cfg)]
         if not items:
             self._notice("没有可用模型", "warning")
             return
-        self.push_screen(SelectorScreen("选择模型", items),
-                         lambda v: self.sess.set_model(v) if v else None)
+        def choose(value: str | None) -> None:
+            if value and not self.sess.set_model(value):
+                self._notice("模型切换失败；当前模型未改变。", "error")
+        self.push_screen(SelectorScreen("选择模型", items), choose)
 
     def _cmd_target(self, arg: str) -> None:
         if arg:
@@ -576,7 +619,7 @@ class FwApp(App):
         names = [r["name"] for r in self.sess.services.con.execute(
             "SELECT name FROM targets ORDER BY name").fetchall()]
         if not names:
-            self._notice("还没有目标:先 `fw-core init <target>`", "warning")
+            self._notice("还没有目标：请先运行 `fw-core init <目标>`。", "warning")
             return
         self.push_screen(SelectorScreen("选择目标", [SelectItem(n, n) for n in names]),
                          self._switch_target)
@@ -597,12 +640,13 @@ class FwApp(App):
             " JOIN targets t ON t.id=r.target_id ORDER BY r.started_at DESC, r.rowid DESC LIMIT 200"
         ).fetchall()]
         if not rows:
-            self._notice("没有历史 run", "warning")
+            self._notice("没有历史研究会话。", "warning")
             return
         items = [SelectItem(r["id"], f"{r['id']} · {r['target']}",
-                            f"{r['state']} · {r['started_at'][:19]} · {(r['goal'] or '')[:80]}")
+                            f"{state_label(r['state'])} · {r['started_at'][:19]} · "
+                            f"{(r['goal'] or '')[:80]}")
                  for r in rows]
-        self.push_screen(SelectorScreen("恢复历史 run", items), self._resume_selected)
+        self.push_screen(SelectorScreen("恢复历史研究会话", items), self._resume_selected)
 
     def _resume_selected(self, value: str | None) -> None:
         if value:
@@ -616,10 +660,13 @@ class FwApp(App):
 
     def _cmd_continue(self, arg: str) -> None:
         if not self.sess.run_id:
-            self._notice("没有可继续的 run(先发一条消息)", "warning")
+            self._notice("当前没有可继续的研究会话（先发一条消息）。", "warning")
             return
-        self.sess.continue_run()
-        self._notice("继续推进…")
+        if self.sess.busy:
+            self._notice("当前一轮仍在执行，暂时不能继续；请等它结束或先按 Esc 停止。", "warning")
+            return
+        if self.sess.continue_run():
+            self._notice("继续推进…")
 
     # ---------------- Actions ----------------
     def action_help(self) -> None:
@@ -684,7 +731,7 @@ def run_interactive(runtime: AppRuntime, diagnostics=None) -> int:
 
     def _terminate(signum, frame):     # SIGTERM/SIGHUP:走正常退出路径,恢复终端
         with contextlib.suppress(Exception):
-            app.exit()
+            app.request_exit()
 
     for sig in (signal.SIGTERM, signal.SIGHUP):
         with contextlib.suppress(Exception):

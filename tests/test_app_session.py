@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 from fwapp.args import AppOptions
@@ -197,3 +198,149 @@ def test_print_mode_prints_final_and_uses_session(tmp_path, capsys):
     out = capsys.readouterr()
     assert rc == 0
     assert "FINAL: 打印结果" in out.out
+
+
+def test_event_queue_concurrent_drain_keeps_terminal_event(tmp_path):
+    _root, cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    try:
+        sess = rt.session
+        seen = []
+        start = threading.Barrier(2)
+        done = threading.Event()
+
+        def produce():
+            start.wait()
+            for i in range(1200):
+                sess.emit("stream", f"chunk-{i}")
+            sess.emit("turn_done", "done")
+            done.set()
+
+        def consume():
+            start.wait()
+            while not done.is_set():
+                seen.extend(sess.drain_events())
+            seen.extend(sess.drain_events())
+
+        p = threading.Thread(target=produce)
+        c = threading.Thread(target=consume)
+        p.start()
+        c.start()
+        p.join(5)
+        c.join(5)
+        assert len(seen) >= 1201, len(seen)
+        assert [e for e in seen if e.kind == "turn_done"], "终止事件不能丢"
+    finally:
+        rt.dispose()
+
+
+def test_submit_binds_target_before_switch(tmp_path):
+    _root, cfg = make_ws(tmp_path)
+    from fwapp.services import build_services
+    from fwapp.session import AgentSession
+    services = build_services(cfg)
+    try:
+        Domain(services.con, cfg.root).create_target("t2")
+        sess = AgentSession(services, target="t1", mcp=False, watchdog=False)
+        sess.submit("绑定测试")
+        item = sess._q.get_nowait()
+        assert item[3] == "t1" and item[4] is None
+        sess.set_target("t2")
+        assert item[3] == "t1"  # 已在队列中的消息不能被后来的 target 改写
+        with sess._lock:
+            sess._busy = True
+        sess.submit("排队测试")
+        with sess._lock:
+            sess._busy = False
+        assert sess._pending[0][2] == "t2"
+    finally:
+        services.close()
+
+
+def test_continue_while_busy_is_not_acknowledged_as_queued(tmp_path):
+    _root, cfg = make_ws(tmp_path)
+
+    class Slow:
+        name = "scripted"
+
+        def __init__(self):
+            self.calls = 0
+
+        def chat(self, messages, tools):
+            self.calls += 1
+            time.sleep(0.35)
+            return Reply(content="FINAL: done", tool_calls=[])
+
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: Slow(),
+                    mcp=False, watchdog=False)
+    try:
+        sess = rt.session
+        sess.submit("开始")
+        t0 = time.time()
+        while not sess.busy and time.time() - t0 < 3:
+            time.sleep(0.02)
+        assert sess.continue_run() is False
+        assert not any(e.kind == "queued" for e in sess.drain_events())
+        while sess.busy and time.time() - t0 < 5:
+            time.sleep(0.02)
+    finally:
+        rt.dispose()
+
+
+def test_close_while_busy_cancels_to_paused(tmp_path):
+    _root, cfg = make_ws(tmp_path)
+
+    class Slow:
+        name = "scripted"
+
+        def chat(self, messages, tools):
+            time.sleep(0.5)
+            return Reply(content="FINAL: late", tool_calls=[])
+
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: Slow(),
+                    mcp=False, watchdog=False)
+    sess = rt.session
+    sess.submit("退出测试")
+    t0 = time.time()
+    while (not sess.busy or not sess.run_id) and time.time() - t0 < 3:
+        time.sleep(0.02)
+    rid = sess.run_id
+    assert rid
+    rt.dispose()
+    con = _db.connect(cfg.db_path)
+    try:
+        row = con.execute("SELECT state,handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+        assert row["state"] == "paused", dict(row)
+        assert (row["handback_reason"] or "").startswith("user_stop"), dict(row)
+    finally:
+        con.close()
+
+
+def test_submit_context_survives_target_new_and_resume(tmp_path):
+    _root, cfg = make_ws(tmp_path)
+    from fwapp.services import build_services
+    from fwapp.session import AgentSession
+    from fwcore.runtime import Runner
+    services = build_services(cfg)
+    try:
+        Domain(services.con, cfg.root).create_target("t2")
+        runner = Runner(services.con, cfg.root, ScriptedAdapter(script=[]),
+                        mcp=False, watchdog=False)
+        rid = runner.start("t1", "seed")
+        runner.close()
+        sess = AgentSession(services, target="t1", run_id=rid, mcp=False, watchdog=False)
+        sess.submit("before switch")
+        item = sess._q.get_nowait()
+        assert item[3:] == ("t1", rid)
+        sess.set_target("t2")
+        sess.new_session()
+        sess.resume_run(rid)
+        assert item[3:] == ("t1", rid)
+        with sess._lock:
+            sess._busy = True
+        sess.submit("queued after switch")
+        with sess._lock:
+            sess._busy = False
+        assert sess._pending[0][2:] == ("t1", rid)
+    finally:
+        services.close()

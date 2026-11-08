@@ -52,7 +52,7 @@ class TranscriptView(VerticalScroll):
 class MessageWidget(Vertical):
     def __init__(self, role: str, text: str, meta: dict | None = None):
         meta = meta or {}
-        label = {"user": "you", "assistant": "fw-core", "notice": "system"}.get(role, role)
+        label = {"user": "你", "assistant": "fw-core", "notice": "系统"}.get(role, role)
         head = Static(Text(label, style="bold"), classes="msg-role")
         body: Static
         if role == "assistant" and text:
@@ -102,8 +102,13 @@ class MessageWidget(Vertical):
 
 
 class NoticeWidget(Static):
+    MAX_DETAIL_CHARS = 1200
+
     def __init__(self, text: str, level: str = "info"):
         icons = {"info": "·", "warning": "!", "error": "✗", "success": "✓"}
+        # 长错误/警告不把主聊天区刷满；详细信息仍可从工具记录/状态页追溯。
+        if level in ("warning", "error") and len(text) > self.MAX_DETAIL_CHARS:
+            text = text[:self.MAX_DETAIL_CHARS] + "…（已截断）"
         super().__init__(Text(f"{icons.get(level, '·')} {text}", style="dim" if level == "info" else ""),
                          classes=f"notice {level}")
 
@@ -178,16 +183,18 @@ class ToolWidget(Vertical):
             pretty = json.dumps(json.loads(args), ensure_ascii=False, indent=1) if isinstance(args, str) and args else (args or "")
         except (TypeError, ValueError):
             pretty = args or ""
-        t.append("args\n", style="bold")
+        t.append("参数\n", style="bold")
         t.append(str(pretty)[:3000] + "\n")
+        if c.get("id"):
+            t.append(f"工具 ID: {c['id']}\n", style="dim")
         if c.get("note"):
-            t.append("result\n", style="bold #8995A5")
+            t.append("结果\n", style="bold #8995A5")
             t.append(str(c["note"])[:4000] + "\n")
         out = _stdout_excerpt(c.get("stdout_path"))
         if out:
-            t.append("stdout\n", style="bold #8995A5")
+            t.append("标准输出\n", style="bold #8995A5")
             t.append(out + "\n")
-        for label, key in (("exit", "exit_code"), ("stdout", "stdout_path"), ("file", "result_path")):
+        for label, key in (("退出码", "exit_code"), ("输出文件", "stdout_path"), ("结果文件", "result_path")):
             if c.get(key) not in (None, ""):
                 t.append(f"{label}: {c[key]}\n", style="dim")
         return t
@@ -211,6 +218,6 @@ class PendingBar(Static):
             self.update("")
             return
         self.display = True
-        t = Text("queued (Alt+Up 取回): ", style="dim")
+        t = Text("已排队（Alt+↑ 取回）：", style="dim")
         t.append(" | ".join(_short(x, 60) for x in pending), style="italic")
         self.update(t)

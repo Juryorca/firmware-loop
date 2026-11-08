@@ -12,8 +12,12 @@ from dataclasses import dataclass, field
 
 from fwcore import db as _db
 from fwcore.limits import Limits
-from fwcore.models import (build_adapter, limits_config, load_model_config,
-                           load_model_options)
+from fwcore.models import (
+    build_adapter,
+    limits_config,
+    load_model_config,
+    load_model_options,
+)
 
 REAL_KINDS = ("openai", "deepseek", "openai-compat")
 
@@ -136,7 +140,7 @@ def load_script(path: str | None) -> list[dict]:
 
 def available_models(cfg: AppConfig) -> list[tuple[str, str]]:
     """给 /model 选择器:(名字, 说明)。"""
-    out = [("scripted", "离线脚本(不产生外部调用)")]
+    out = [("scripted", "演示模式（本地脚本，不调用真实模型）")]
     if cfg.api_key and cfg.base_url and cfg.model:
         out.append((cfg.model, f"OpenAI 兼容端点 · {cfg.base_url}"))
     return out
