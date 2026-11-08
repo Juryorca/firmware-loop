@@ -363,3 +363,36 @@ def test_default_target_skips_archived_and_archived_submit_is_blocked(tmp_path):
         assert any("归档" in e.text for e in sess.drain_events())
     finally:
         services.close()
+
+
+def test_transcript_keeps_tool_without_call_key_before_later_assistant(tmp_path):
+    from fwcore.runtime import Runner
+
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    runner = Runner(con, str(root), ScriptedAdapter(script=[]), mcp=False, watchdog=False)
+    rid = runner.start("t1", "hello")
+    dom = Domain(con, str(root))
+    dom.add_conversation(rid, "assistant", "before tools",
+                         meta={"tool_calls": ["call_x"]})
+    dom.add_conversation(
+        rid, "tool", '{"status": "cancelled"}', status="cancelled",
+        tool_call_id="call_x", meta={"tool": "shell_exec", "status": "cancelled"})
+    created = con.execute(
+        "SELECT created_at FROM conversation_entries WHERE run_id=? AND role='tool'",
+        (rid,)).fetchone()["created_at"]
+    # 未授权工具的真实 tool_calls 行没有 call_key；它仍必须在原位置显示。
+    con.execute(
+        "INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,created_at)"
+        " VALUES(?,?,?,?,?,?,?)",
+        ("TC-test", None, rid, "shell_exec", "{}", "cancelled", created))
+    con.commit()
+    dom.add_conversation(rid, "assistant", "after tools")
+
+    rt = AppRuntime(cfg, target="t1", run_id=rid, mcp=False, watchdog=False)
+    try:
+        items = rt.session.transcript()
+        assert [i.kind for i in items] == ["user", "assistant", "tool", "assistant"]
+        assert items[2].meta["call"]["id"] == "TC-test"
+    finally:
+        rt.dispose()

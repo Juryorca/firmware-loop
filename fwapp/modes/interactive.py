@@ -69,8 +69,9 @@ class FwApp(App):
     .msg.user .msg-role { color: #83A9D5; }
     .msg.assistant .msg-role { color: #89B99D; }
     .msg .msg-body { padding-left: 2; color: #DCE3EA; }
-    .thinking { color: #66717F; }
-    .thinking.hidden { display: none; }
+    .thinking-block { height: auto; margin: 0 0 1 0; padding-left: 2; }
+    .thinking-head { color: #66717F; text-style: italic; }
+    .thinking-body { color: #66717F; padding-left: 2; text-style: italic; }
     .notice { color: #8995A5; margin: 0 0 0 1; }
     .notice.warning { color: #D5B47A; }
     .notice.error { color: #CE8888; }
@@ -351,10 +352,14 @@ class FwApp(App):
             self._stream_msg.append_reasoning(ev.data.get("text") or ev.text)
         elif ev.kind == "assistant_done":
             text = ev.data.get("text") or ev.text or ""
-            if self._stream_msg is None and text:
-                self._stream_msg = MessageWidget("assistant", text)
+            reasoning = (ev.data.get("reasoning") or "").strip()
+            if self._stream_msg is None and (text or reasoning):
+                self._stream_msg = MessageWidget(
+                    "assistant", text, {"reasoning": reasoning} if reasoning else None)
                 self._append(self._stream_msg)
             if self._stream_msg is not None:
+                if reasoning and not getattr(self._stream_msg, "_reasoning", "").strip():
+                    self._stream_msg.append_reasoning(reasoning)
                 self._stream_msg.finalize(text)
             if text:
                 self._assistant_rendered = True

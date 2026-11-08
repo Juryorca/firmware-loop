@@ -23,7 +23,13 @@ from fwapp.widgets.screens import (
     ToolsetScreen,
 )
 from fwapp.widgets.status import StatusBar
-from fwapp.widgets.transcript import MessageWidget, NoticeWidget, ToolWidget
+from fwapp.widgets.transcript import (
+    MessageWidget,
+    NoticeWidget,
+    ThinkingBlock,
+    ToolWidget,
+    TranscriptView,
+)
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.models import Reply, ScriptedAdapter
@@ -733,6 +739,37 @@ def test_model_error_does_not_block_next_submit(tmp_path):
             assert app.sess.busy is False
             assert calls["n"] >= 2
             assert any("已恢复" in getattr(w, "_text", "") for w in app.query(MessageWidget))
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_thinking_block_is_visible_and_toggles(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.3)
+            tv = app.query_one(TranscriptView)
+            msg = MessageWidget("assistant", "回答正文", {"reasoning": "第一步\n第二步"})
+            tv.mount(msg)
+            await pilot.pause(0.2)
+            tb = msg._thinking_widget
+            assert isinstance(tb, ThinkingBlock)
+            assert tb.body.display is True
+            assert "第一步" in str(tb.body.render())
+            assert "思考过程" in str(tb.header.render())
+            await pilot.click(tb.header)
+            await pilot.pause(0.1)
+            assert tb.body.display is False
+            await pilot.click(tb.header)
+            await pilot.pause(0.1)
+            assert tb.body.display is True
             await pilot.press("ctrl+q")
 
     try:

@@ -10,7 +10,9 @@ import json
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
+from textual import events
 from textual.containers import Vertical, VerticalScroll
+from textual.widget import Widget
 from textual.widgets import Static
 
 STATUS_ICON = {
@@ -54,6 +56,42 @@ class TranscriptView(VerticalScroll):
             self.scroll_end(animate=False)
 
 
+
+
+class ThinkingBlock(Vertical):
+    """可点击折叠的 thinking 链；默认展开，点击标题/正文切换。"""
+
+    can_focus = False
+
+    def __init__(self, text: str = "", **kw):
+        self._text = text or ""
+        self._expanded = True
+        self.header = Static(classes="thinking-head")
+        self.body = Static(classes="thinking-body")
+        super().__init__(self.header, self.body, classes="thinking-block", **kw)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        n = len(self._text)
+        action = "折叠" if self._expanded else "展开"
+        self.header.update(Text(f"思考过程 · {n} 字 · 点击{action}", style="dim italic"))
+        self.body.update(Text(self._text, style="dim italic"))
+        self.body.display = self._expanded
+
+    def append_text(self, delta: str) -> None:
+        if not delta:
+            return
+        self._text += delta
+        self._refresh()
+
+    def toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._refresh()
+
+    def on_click(self, event: events.Click) -> None:
+        self.toggle()
+        event.stop()
+
 class MessageWidget(Vertical):
     def __init__(self, role: str, text: str, meta: dict | None = None):
         meta = meta or {}
@@ -62,23 +100,24 @@ class MessageWidget(Vertical):
         body: Static
         if role == "assistant" and text:
             body = Static(RichMarkdown(text), classes="msg-body")
+        elif role == "assistant":
+            body = Static(Text(""), classes="msg-body")
         elif role == "user":
             body = Static(Text(text, style="bold"), classes="msg-body")
         else:
             body = Static(Text(text or "(empty)"), classes="msg-body")
-        children = [head, body]
         self.role = role
         self.body = body
         self._text = text or ""
         self._reasoning = ""
-        self._thinking_widget = None
+        self._thinking_widget: ThinkingBlock | None = None
+        children: list[Widget] = [head]
         reasoning = (meta.get("reasoning") or "").strip()
         if reasoning:
-            # thinking 默认折叠;绝不作为普通 assistant 正文展示
             self._reasoning = reasoning
-            self._thinking_widget = Static(Text(reasoning, style="dim italic"),
-                                           classes="thinking hidden")
+            self._thinking_widget = ThinkingBlock(reasoning)
             children.append(self._thinking_widget)
+        children.append(body)
         super().__init__(*children, classes=f"msg {role}")
 
     def append_text(self, delta: str) -> None:
@@ -92,10 +131,10 @@ class MessageWidget(Vertical):
             return
         self._reasoning += delta
         if self._thinking_widget is None:
-            self._thinking_widget = Static(Text("", style="dim italic"),
-                                           classes="thinking hidden")
-            self.mount(self._thinking_widget)
-        self._thinking_widget.update(Text(self._reasoning, style="dim italic"))
+            self._thinking_widget = ThinkingBlock(self._reasoning)
+            self.mount(self._thinking_widget, before=self.body)
+        else:
+            self._thinking_widget.append_text(delta)
 
     def finalize(self, text: str | None = None) -> None:
         if text is not None:

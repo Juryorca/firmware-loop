@@ -588,10 +588,20 @@ class AgentSession:
         if not self.run_id:
             return []
         con = self.services.con
-        tools = {r["call_key"] or r["id"]: dict(r) for r in con.execute(
+        tool_rows = [dict(r) for r in con.execute(
             "SELECT id,call_key,tool,args,status,note,exit_code,duration_ms,stdout_path,"
             "result_path,created_at FROM tool_calls WHERE run_id=? ORDER BY created_at,id",
-            (self.run_id,)).fetchall()}
+            (self.run_id,)).fetchall()]
+        # 同一工具调用可能按 call_key 或数据库 id 被引用；对话记录里的
+        # tool_call_id 对“未授权/未执行”调用可能只有模型 call id，而 tool_calls
+        # 行的 call_key 为空。只按 (call_key or id) 查会漏配，最后又把真实
+        # tool_calls 补到末尾，造成“工具全跑最后”。
+        tools: dict[str, dict] = {}
+        for row in tool_rows:
+            if row.get("call_key"):
+                tools[str(row["call_key"])] = row
+            tools[str(row["id"])] = row
+        used_tool_ids: set[str] = set()
         entries = self.services.domain.conversation(self.run_id, limit=limit)
         ck = con.execute(
             "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC, rowid DESC LIMIT 1",
@@ -600,10 +610,54 @@ class AgentSession:
         if not entries:
             return self._transcript_from_checkpoint(ck, tools, limit)
 
+        # conversation 的 assistant 只保存 reasoning_len；正文/思维链正文在
+        # checkpoint。按 (content, tool_call ids) 找回，重开会话时才能显示
+        # 完整的 thinking 块，而不是只剩“推理过”的长度线索。
+        msgs = _json(ck["messages"], []) if ck else []
+        reasoning_by_key: dict[tuple[str, tuple[str, ...]], str] = {}
+        for m in msgs[-limit:]:
+            if m.get("role") != "assistant":
+                continue
+            reasoning = (m.get("reasoning_content") or "").strip()
+            if not reasoning:
+                continue
+            key = ((m.get("content") or "").strip(),
+                   tuple(c.get("id") or "" for c in (m.get("tool_calls") or [])))
+            reasoning_by_key[key] = reasoning
+
+        def _same_tool_status(a, b) -> bool:
+            return a == b or (a == "error" and b in ("error", "timeout")) or (
+                b == "error" and a in ("error", "timeout"))
+
+        def _tool_row_for_entry(e, meta: dict) -> dict | None:
+            tid = e.get("tool_call_id") or ""
+            row = tools.get(tid)
+            if row is not None and row["id"] not in used_tool_ids:
+                return row
+            # 旧记录/未执行工具可能没有 call_key；用 tool/status/时间秒做一次
+            # 有界的同批匹配，避免把真实行再追加到末尾。
+            wanted_tool = meta.get("tool")
+            wanted_status = e.get("status") or "ok"
+            wanted_sec = (e.get("created_at") or "")[:19]
+            for cand in tool_rows:
+                if cand["id"] in used_tool_ids:
+                    continue
+                if wanted_tool and cand.get("tool") != wanted_tool:
+                    continue
+                if not _same_tool_status(wanted_status, cand.get("status") or "ok"):
+                    continue
+                cand_sec = (cand.get("created_at") or "")[:19]
+                if wanted_sec and cand_sec and wanted_sec != cand_sec:
+                    continue
+                return cand
+            return None
+
         conv: list[dict] = []
         for e in entries:
             role = e.get("role")
             content = e.get("content") or ""
+            meta = _json(e.get("meta"), {})
+            tool_ids = tuple(meta.get("tool_calls") or [])
             item = None
             if role == "user" and content.strip():
                 suffix = ""
@@ -612,23 +666,24 @@ class AgentSession:
                 elif e.get("status") == "cancelled":
                     suffix = "  （已取消）"
                 item = TranscriptItem("user", content + suffix)
-            elif role == "assistant" and content.strip():
-                item = TranscriptItem("assistant", content)
+            elif role == "assistant":
+                reasoning = reasoning_by_key.get((content.strip(), tool_ids), "")
+                if content.strip() or reasoning:
+                    item = TranscriptItem("assistant", content, {"reasoning": reasoning})
             elif role == "tool":
-                row = tools.get(e.get("tool_call_id") or "")
-                if row is None:
-                    meta = _json(e.get("meta"), {})
+                row = _tool_row_for_entry(e, meta)
+                if row is not None:
+                    used_tool_ids.add(row["id"])
+                else:
                     row = {"id": e.get("id"), "tool": meta.get("tool") or "tool",
                            "args": "{}", "status": e.get("status") or "ok",
                            "note": content, "created_at": e.get("created_at")}
                 item = TranscriptItem("tool", "", {"call": row})
-            meta = _json(e.get("meta"), {})
             conv.append({"item": item, "role": role, "content": content,
                          "tool_id": e.get("tool_call_id") or "",
-                         "tool_ids": tuple(meta.get("tool_calls") or []),
+                         "tool_ids": tool_ids,
                          "status": e.get("status")})
 
-        msgs = _json(ck["messages"], []) if ck else []
         execs = []
         for m in msgs[-limit:]:
             if m.get("role") != "assistant":
@@ -690,16 +745,19 @@ class AgentSession:
                     last_anchor = max(last_anchor, tool_index[cid])
                     used_tools.add(cid)
                     continue
-                row = tools.get(cid)
-                if row is not None:
+                row = tools.get(cid) or tools.get(str(cid))
+                if row is not None and row["id"] not in used_tool_ids:
                     add_after(last_anchor, TranscriptItem("tool", "", {"call": row}))
+                    used_tool_ids.add(row["id"])
                     used_tools.add(cid)
 
         # 已执行但既不在 conversation、也不在 checkpoint 里的工具:补在末尾
         for key, row in tools.items():
-            if key not in used_tools:
-                add_after(last_anchor, TranscriptItem("tool", "", {"call": row}))
-                used_tools.add(key)
+            if row["id"] in used_tool_ids or key in used_tools:
+                continue
+            add_after(last_anchor, TranscriptItem("tool", "", {"call": row}))
+            used_tool_ids.add(row["id"])
+            used_tools.add(key)
 
         items: list[TranscriptItem] = list(after.get(-1, []))
         for i, c in enumerate(conv):
