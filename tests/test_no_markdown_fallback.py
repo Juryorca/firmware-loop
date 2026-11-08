@@ -82,3 +82,15 @@ def test_legacy_markdown_runtime_files_absent():
     assert not Path("knowledge/misreports.md").exists()
     assert not Path("knowledge/research-knowledge.md").exists()
     assert not Path("tools/kb.py").exists()
+
+
+def test_derived_check_closure_reads_db_not_notes(tmp_path):
+    """收尾检查也必须读 DB；空状态应报 DB 收口阻塞，而不是缺 notes。"""
+    root = str(tmp_path)
+    _make_target(root)
+    r = subprocess.run(["bash", "tools/derived_check.sh", "t1", "--closure"], cwd=ROOT,
+                       env=dict(os.environ, FW_ROOT=root), capture_output=True,
+                       text=True, timeout=180)
+    assert "=== derived_check: FAIL" in r.stdout
+    assert "没有任何假设" in r.stdout
+    assert "notes.md" not in r.stdout
