@@ -108,7 +108,7 @@ VR 编号仅存在于内部 INDEX/notes;跨 finding 引用写 "documented in a s
   (含 command / script-sha256 / png-sha256 / 时间);advisory 里 markdown 引用 `attachments/<名称>/<shot-id>.png`。
   **拒收条件**: 缺 `why`、脚本越出包目录、不可执行、sha256 不符、argv 含元字符 —— 一律不拍。
   - **附件包必须自含**:**禁符号链接** ✗(指向包外/工作副本的链接,提交或转移后必坏);PoC 需要 rootfs 这类大件 ⇒
-  参数化路径(默认 `./rootfs`)+ 在 README 写明"怎么准备"(从 `SOURCE_URL.txt` 重下并按其说明解包)✓。
+  参数化路径(默认 `./rootfs`)+ 在 README 写明"怎么准备"(公开获取厂商原始镜像并解包;重下凭据与内部重建配方留在 notes，不写进对外 README)✓。
 - **README 必须能独立跑通**:依赖准备 / 一条命令 / 预期输出 / 清理 ✓;不确定就自己按 README 从零跑一遍再交 ✓。
 ## Impact
   <只写**已证实的后果**:攻击者实际能做到什么(1–2 句)+ 边界/未证实项。**不要**用 Confidentiality / Integrity / Availability 分类模板 ✗>

@@ -13,8 +13,8 @@ description: 报告、CVE 备料与厂商提交的操作流程：报告定位、
 ## 报告
 
 1. 复制 `tools/templates/report.md`，按材料完成判据填；
-2. 对外文件（advisory/CVE）禁内部路径、工具名、`HIT:/MISS:`；内部归档要带证据引用；
-3. 复现包自含：脚本、依赖、benign/payload、预期结果、证据；
+2. 对外文件（advisory/CVE/attachments README）禁内部路径、工具名、`HIT:/MISS:`；内部归档要带证据引用；
+3. 复现包自含：脚本、依赖、benign/payload、预期结果、证据；大件通过公开获取/参数化路径准备，内部重建配方写目标 `notes.md`；
 4. 跑 `tools/derived_check.sh`，覆盖度/包完整性以脚本输出为准。
 
 ## 提交（仅用户明确要求）

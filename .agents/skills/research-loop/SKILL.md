@@ -35,6 +35,7 @@ description: 固件研究主循环的操作细则：一轮一假设、假设池�
 6. **三镜**：面/格收口时用 `state_record_mirror` 记机制/作者/状态/新面。
 7. **停止**：只有本轮新 finding、队列清空、具体外部阻塞、目标级裁决才停；成本/耗时不构成理由。
 8. **收尾**：Gate/derived_check 清零，导出报告与 CLOSURE；清理按 `references/LOOP.md`。
+   归档释放时，运行载体重建配方写目标内部 `notes.md`（或 `CLOSURE`）；对外 attachments README 不写 `state/`、`notes.md`、`artifacts/` 内部路径。
 
 ## 输入/输出
 
