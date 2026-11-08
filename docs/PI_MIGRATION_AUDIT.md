@@ -1,6 +1,8 @@
 > **历史审计**:本文件记录 `c0fc820` 时的盘点与缺口;之后的内容架构重构见 `docs/AGENT_ARCHITECTURE.md`。
 > 文中“当前/现在”状态可能已被后续实现更新,不要把本文件当最新运行时契约。
 
+> **当前状态更新（2026-11-08）**：Chrome Live MCP 已真实连接并注册 32 个工具；Chrome/IDA 的真实 smoke 见 `state/_scratch` 之外的交付记录；旧 `tool-quirks`/`vuln-patterns`/`misreports` Markdown 与 `tools/kb.py` 已移出当前树；知识运行时只走 SQLite `knowledge_entries`。历史表格保留其审计时点结论，不代表当前事实。
+
 # Pi → firmware-loop 迁移完整性审计
 
 > 审计基线: `feat/agent-framework` @ `35473d6`(2026-11-07)

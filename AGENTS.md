@@ -38,7 +38,7 @@
     **新面/新假设先找齐 → 全部入池(偏差陈述 + 可证伪判据)→ 继续取队首**(默认自动继续;误判回溯不受此限);
     只有给出"无新面 + 判据"才允许收尾。
 9. **收尾**: 按「Exit Criteria」判定 → **假设池每项有结论或显式降级**(不许留无解释的"未处理")→ **论点—证据表无"缺口"**(每条断言补到 L2/L3 或降级措辞)→ 清理 + 复核 →
-   advisory / INDEX / attack-surface / CLOSURE;必查模板 + `derived_check.sh`
+   advisory / INDEX / attack-surface / CLOSURE;必查模板 + `bash tools/derived_check.sh <目标> --closure`
 
 **态度**: 默认把"打不了"理解为**我还没把条件造出来**(没凭据就造凭据、没对照就造对照、没数据就造数据),而不是"这面没洞"。
 所以每轮收尾要能回答一句: **我把什么从"打不了"变成了"能打"、证据是什么**。
@@ -68,7 +68,7 @@
 ⇒ **不必问的(自己拍板做,别包装成 A/B)**:起容器(含 `--privileged` 做挂载/权限)、构建镜像、容器化 rootfs、装依赖、跑扫描/导入、重跑实验 —— 这些是**工程步骤** ✓(照容器与清理纪律做即可;成本/耗时不是理由,见上表)。
 ⇒ 合法停**只有四种**:本轮新成立 finding / 需工作区外**具体外部事物**(账号·样本·凭据·宿主环境 —— **不含真机**) / 队列清空 / 目标级裁决。
 
-**停止声明**: 每次真正停下时用 `state_add_log(kind=stop)` 写 SQLite；`notes.md` 可选、仅人工摘要;**「有 finding」这条必须写明是本轮新成立的哪一条**(带本轮判定/证据);只引历史 finding ⇒ 视为**继续**,不得停。**理由必须附证据**(判据满足 ⇒ 引 `derived_check --closure` 输出;需用户输入 ⇒ 写四要素;工具/环境故障 ⇒ 附错误原文;「上下文余量」⇒ 引 harness 原句)。**格式与本条细则见 `research-loop` Skill(`references/LOOP.md`)「停止声明」**。
+**停止声明**: 每次真正停下时用 `state_add_log(kind=stop)` 写 SQLite；`notes.md` 可选、仅人工摘要;**「有 finding」这条必须写明是本轮新成立的哪一条**(带本轮判定/证据);只引历史 finding ⇒ 视为**继续**,不得停。**理由必须附证据**(判据满足 ⇒ 引 `bash tools/derived_check.sh <目标> --closure` 输出;需用户输入 ⇒ 写四要素;工具/环境故障 ⇒ 附错误原文;「上下文余量」⇒ 引 harness 原句)。**格式与本条细则见 `research-loop` Skill(`references/LOOP.md`)「停止声明」**。
 - ⚠️ 本工作区没有真机 ⇒ 真机需求**不是**停的理由(见下条);只有"产品自身在容器/仿真里无法造出的外部事物"才算情况②。
 ⚠️ **本工作区没有真机/硬件**(用户明确声明): 硬件验证**不在可得资源内** ⇒ **容器/仿真/提取镜像的验证即为准绳**,
    不得因"需真机确认"而停工、降级 finding 或把它写成 Blocked;真机最多是"再加强"的可选项(报告里如实注明"physical-device
@@ -249,7 +249,7 @@
   **非发现不进 report/**;禁止临时自造板块(要新增类别,先在 `AGENTS.md` 定路径与归属)。
 - **交付物规范一律在模板**(骨架 / 格式 / shots.json / CVE 编号线 / 通用原则 / 材料完成判据):
   产出时**复制** `tools/templates/report.md` 再填值 —— 不在提示词里重复。
-- **自检**: 产出后跑 `bash tools/derived_check.sh`(图链 / 骨架 / 包完整 / 覆盖度),覆盖度与材料完成的**断言用它输出**(不手写)。
+- **自检**: 产出后跑 `bash tools/derived_check.sh <目标>`(图链 / 骨架 / 包完整 / 覆盖度),覆盖度与材料完成的**断言用它输出**(不手写)。
 
 ### 提交红线(硬性)
 
@@ -281,7 +281,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
   ⚠️ **差分单独不改变 disposition**: 差分只覆盖厂商改过的点;一个面的结论若**全部来自差分**,该面**仍是未判定**
   —— 判“面干净”必须做与差分无关的审计(入口→sink 遍历 / 解析器边界 / 鉴权覆盖)。见 `knowledge/methodology.md`「差分的正确定位」。
   ⚠️ **派生量“算”不“写”**: 覆盖度 / knowledge 条数 / 材料完成 这类**能从权威处算出来**的值,
-  一律**用 `bash tools/derived_check.sh` 的输出**(或只写指针),**散文里不写总结性断言**
+  一律**用 `bash tools/derived_check.sh <目标>` 的输出**(或只写指针),**散文里不写总结性断言**
   ("均已判定 / 全部覆盖 / 无一遗漏"之类)—— 手写派生量必漂(历史: §13 "C3 ✓"、§13 "修复完整"、§16 "均已判定")。
 - A3 Same-family sampling: 同一框架/同一代码谱系的同类 handler,验证至少一个代表;其余标注 same-family,low priority。
     **"同类"必须给证据**(同一函数体 / 同一分派表 / 同一导入符号集合 / 同一模板生成 ✓),并写明"代表性覆盖了 N 个中的哪几个" ✓;
@@ -376,8 +376,8 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
   编号由**接收方身份**决定(是 CNA / 平台开了该功能 ⇒ 自动有;都不是 ⇒ 自己申请),**不是**"提交时顺手请求" ✗ —— 细则见 KB「提交前先判「收不收」」✓。
 - **流程**:用户说"提交某份报告" ⇒ ①`python3 tools/chrome-live-probe.py` 探活 ②`ON` 才继续填 ③`OFF` **就地提醒用户**开
   `chrome://inspect/#remote-debugging`(唯一需要用户动手的一步),不要自己去点 ✗ ④填完贴待确认清单,**不点提交** ✗。
-- `chrome-live` **默认常开(`enabled:true`)**:改 `enabled` 要 `/reload`,而 `/reload`/`/mcp` 只有**用户**能执行 ✗ ⇒ 不要让 agent 靠改配置开工 ✓。
-  会话开始后才打开 Chrome 或服务连不上 ⇒ 让用户在 `/mcp` 里 **reconnect 一次** ✓。
+- `chrome-live` **默认常开(`enabled:true`)**:改 `enabled` 后由用户重启/重连 MCP；`/reload` 是旧 Pi 指令，当前 fw-core 不依赖 ✗ ⇒ 不要让 agent 靠改配置开工 ✓。
+  会话开始后才打开 Chrome 或服务连不上 ⇒ 让用户在当前 TUI 的 `/mcp` 重连（或重启 fw-core）一次 ✓。
 - ⚠️ **WSL 必带 `--userDataDir`**:`--autoConnect` 默认找**本机(Linux)** profile(`~/.config/google-chrome/`)⇒ 指向 Windows 的
   `C:\Users\<u>\AppData\Local\Google\Chrome\User Data` 才认(实测:不带 ⇒ `Could not find DevToolsActivePort at /home/…` ✗)。
 - **探活判据(已在 2026-10-30 验证走通 ✓)**:开关打开后 Chrome 在该 profile 写 `DevToolsActivePort`(首行=端口,本机 9222)⇒
@@ -439,7 +439,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **JS 页面取件**: `mcp__chrome_devtools__navigate_page` → `take_snapshot` / `list_network_requests` ⇒ 真实下载 URL(curl 拿不到时);见「环境清单 → 取件 / JS 页面」
 - **提交(用户要求时)**: 先 `python3 tools/chrome-live-probe.py`(OFF ⇒ 提醒用户开 `chrome://inspect/#remote-debugging`)→ `mcp__chrome_live__*` 填表 → **不点提交** → 贴待确认清单;见「环境清单 → 提交」
 - **netlink 面解锁**: `qemu-aarch64-patched`(已装,直接用)→ 判读探针 `tools/qemu-nl-probe/`
-- **派生量重算**: `bash tools/derived_check.sh [目标]` —— 一次算出 knowledge 条数 / A2 覆盖度 /
+- **派生量重算**: `bash tools/derived_check.sh <目标>` —— 一次算出 A2 覆盖度 /
   每个 finding 的包完整性;覆盖度与材料完成的**断言直接粘它的输出**(有 FAIL 非零退出)
 - IDA(headless 多库并行): tools/ida_start.sh 启动 supervisor → 原生 MCP 工具
   idb_open 开库(二进制先 cp 到 /mnt/d/ida_test/<名>,idb_open 传 "D:\ida_test\<名>")

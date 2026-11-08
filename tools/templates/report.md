@@ -18,7 +18,7 @@
 |---|---|
 | 索引(目标元数据 + 发现表 + 复现材料 + 复现前提 + 关联公开漏洞) | `report/INDEX.md` |
 | 入口点枚举与逐点处置(A1/A2/A3) | `report/attack-surface.md`(**收尾时从 DB 导出**) |
-| 收尾声明 | `report/CLOSURE.md`(收尾时产出) |
+| 收尾声明（内部归档，不随对外提交） | `report/CLOSURE.md`(收尾时产出；可含内部路径/重建配方) |
 | **每个 finding 的 advisory** | `report/<描述性名称>.md`(**顶层**,与 attachments/ 同级) |
 | 该 finding 的自含提交包 | `report/attachments/<描述性名称>/`{PoC 脚本, README(怎么跑), 截图} |
 | advisory 内引用的图片 | markdown 链接写 `attachments/<描述性名称>/xxx.png` |

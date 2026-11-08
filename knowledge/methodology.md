@@ -4,6 +4,8 @@
 
 > **来源标注**:条目里的 `<目标>/…` 仅为来源标注(该目标的证据随目标清理,**不要求长期存在**);复用依据是条目自身的判据/反例/现象。
 
+> 当前运行语义：研究事实、决策、停止理由、下一步在 SQLite；`notes.md` 是可选历史，不要求当前 Agent 维护。本文中的 `notes` 引用是历史证据来源。
+
 ## 情报锚定的假设轮次会整轮白做 —— 教训与判据 | (2026-09-18)
 - **教训(代价实证)**: 规则已写“公开情报=排除清单,不是假设来源”,但实践中注意力会被 changelog 牵着
   (任务 §0 一句“7.24.2 是安全修复版”→ 去查 7.24.3 → 一池“修复不完整”类假设)。结果: 8 条假设,
@@ -390,7 +392,7 @@ PoC `report/attachments/btest-related-connection-unauthenticated-access/btest-re
 - 工具日志: **先设级别**(debug 级能涨到数百 MB —— 实测某次 316 MB);
 - 搜索/语料: 队列去重 + 上限 + 迭代化,必要时落磁盘;
 - fuzz: 设内存上限(`afl-fuzz -m`)、语料限额、并行度按 RAM(7 GB ⇒ 建议 ≤8 实例 × 512 MB);
-- 每次实验记录**峰值 RSS 与耗时**进 notes,使复跑可比。
+- 每次实验把**峰值 RSS 与耗时**写进 tool_call/observation（SQLite），使复跑可比；不要求写 notes。
 
 ## 托管运行时(Go / Node)面的"补格"法 —— ①内存错误 oracle 不适用时怎么办 | (2026-09-21/工作区级)
 **触发**: 按守则 11 给某个面补"强方法"格子时,发现目标**不是 C/C++**。
@@ -842,9 +844,9 @@ A = pristine(setup 态) / B = 预设版(已配置 + 多主体 + 自签 CA);同�
 ## 厂商下载页是 JS 壳时:用无头浏览器 MCP 抓真实下载 API(拿到直链再回 curl + md5)
 - **判据**: `curl` / webfetch 只拿到 HTML 骨架、**取不到版本号或直链** ⇒ 该页由前端渲染 ⇒ 换"能执行 JS"的手段(无头浏览器),而不是继续猜 URL 或放弃取件 ✗。
 - **步骤**: ①`navigate_page` 打开产品下载页 ②`take_snapshot`(拿渲染后的 DOM 与链接)③`list_network_requests`(筛 `api|ajax|download|firmware|json` 找真实下载 API/直链)④拿到直链后**回到 `curl`** 下载并做 md5 校验,写 `SOURCE_URL.txt`(不要用浏览器下大文件:易中断、无校验)✓。
-- **坑**: 必须 `--headless`(无显示宿主)与 `--proxyServer`(**页面与子资源都要过代理**,否则 JS 加载不全 ⇒ 快照是空的 ✗);`--isolated` 避免脏 profile;MCP 配置改完要 `/reload` 才进会话 ✓。
+- **坑**: 必须 `--headless`(无显示宿主)与 `--proxyServer`(**页面与子资源都要过代理**,否则 JS 加载不全 ⇒ 快照是空的 ✗);`--isolated` 避免脏 profile。当前 fw-core 改 MCP 配置后由用户重连/重启会话；`/reload` 是旧 Pi 指令，不是当前操作步骤。
 - **边界**: 跑的是**真浏览器** ⇒ 只碰公开下载页,**不代填密码** ✓。
-- 证据/产物: 2026-10-27 装 `chrome-devtools`(`pi mcp list` ⇒ `connected, 32 tools` ✓),用它解决"厂商下载页 JS 壳"这类取件阻塞。
+- 证据/产物: 2026-10-27 历史实测（旧 Pi 环境 `pi mcp list`）；当前 fw-core 用 `fw-core mcp list`/`state/mcp.json` 管理 MCP，真实 Chrome 实测已另记。
 
 ## 跨 WSL 用 --autoConnect 连 Windows 上的已登录 Chrome(必须带 --userDataDir,且要真调工具才知通不通)
 - **判据**: 需要**用户已登录的浏览器**做自动化(填厂商表单/取登录后页面)而 agent 跑在 **WSL** 里 ⇒ 目标浏览器在 Windows ⇒ 只有两条语义不同的路:①`--autoConnect`(连**本机同 OS** 的 Chrome,靠 user-data-dir 里的 `DevToolsActivePort`)②`--browserUrl`(连一个**已开调试端口**的浏览器)✓。
@@ -854,7 +856,7 @@ A = pristine(setup 态) / B = 预设版(已配置 + 多主体 + 自签 CA);同�
 
 ## 提交前先判「收不收」:读 scope 原文 + 上报渠道(security.txt→PSIRT→平台)+ CVE 走 CNA/CNA-LR 而非猜邮箱
 - **原则:不凭印象判"收不收"** ✗ —— 每个项目在提交页/政策页都写明 scope 与排除项,**必须读原文并引用**;KB 不预存"某类一定不收"的结论 ✓。
-- **做法**:①找到该项目 scope / policy 原文(记 URL + 摘句)②逐条核对我们的 finding 是否落在排除项里 ③把**项目原文**与**我们的对应事实**并列写进 notes(判据 = 原文)④**读完原文就分流,别一律去撞一次** ✗:原文**明确排除**(写明不收 DoS / 第三方组件 / 需非默认配置等)⇒ **不提交赏金**(只会拿拒信),把排除原文记进 notes,**直接走 CVE 路由**(按该 CNA 的指定联系方法请求 CVE ID,或走 CNA-LR)✓ —— 漏洞成立性不因项目不收而改变 ✓;原文**没写到 / 有歧义** ⇒ 记「未知」、**照常提交**(别用"我猜不收"当理由 ✗);**明确在 scope** ⇒ 照常提交 ✓。⚠️ 读原文时区分两件事:**「不受理」(report rejected)** 与 **「受理但不给奖励」(not eligible for reward)** —— 后者(常见于 DoS / 资源耗尽)厂商仍可能修、仍可请求 CVE ⇒ 先记清是哪一种,别一律当"不收"处理 ✗。
+- **做法**:①找到该项目 scope / policy 原文(记 URL + 摘句)②逐条核对我们的 finding 是否落在排除项里 ③把**项目原文**与**我们的对应事实**并列写进 SQLite log/evidence（判据 = 原文；notes 可选）④**读完原文就分流,别一律去撞一次** ✗:原文**明确排除**(写明不收 DoS / 第三方组件 / 需非默认配置等)⇒ **不提交赏金**(只会拿拒信),把排除原文记进 SQLite log/evidence,**直接走 CVE 路由**(按该 CNA 的指定联系方法请求 CVE ID,或走 CNA-LR)✓ —— 漏洞成立性不因项目不收而改变 ✓;原文**没写到 / 有歧义** ⇒ 记「未知」、**照常提交**(别用"我猜不收"当理由 ✗);**明确在 scope** ⇒ 照常提交 ✓。⚠️ 读原文时区分两件事:**「不受理」(report rejected)** 与 **「受理但不给奖励」(not eligible for reward)** —— 后者(常见于 DoS / 资源耗尽)厂商仍可能修、仍可请求 CVE ⇒ 先记清是哪一种,别一律当"不收"处理 ✗。
 - **上报渠道:先查厂商"公开指定的"入口,不硬编码邮箱** ✗ —— ①`https://<厂商>/.well-known/security.txt`(RFC 9116:写明渠道/表单/邮件 + PGP 键,如 QNAP 实测为 `mailto:security@qnap.com` + PGP)②厂商安全响应 / PSIRT / 漏洞报告页 ③赏金平台项目页。**是平台就提平台、是表单就填表单、是邮箱才发邮件** ✓。
 - **厂商联系不上 / 该产品没有 CNA 时的官方兜底 = CNA of Last Resort(不是猜 `security@`** ✗):cve.org「Report/Request for Non-CNAs」给出的三步 —— ①在 CNA 名单(List of Partners)里找 scope 覆盖该产品的 CNA ②**按其披露政策、用它指定的联系方法**报告并请求 CVE ID ③判断不出 ⇒ 找 CNA-LR:**CISA ICS CNA-LR**(`us-cert.cisa.gov/report`,ICS 与医疗设备)或 **MITRE CNA-LR**(`cveform.mitre.org`,其余全部、以及未被任何 CNA 覆盖的开源)✓。MITRE CNA-LR 自述适用场景 = 供应商**没有指定 CNA**,或分配**存在争议** ✓。
 - **CVE 请求的最小字段**(MITRE 表单):problem types / vendor 或 project / product name / version / vulnerability description / references URL(+CVSS 可选)✓ —— 与赏金报告要的"在 scope 内 + 严重性 + 可复现"**不是一回事** ✓;表单可匿名、**不要求先有赏金** ✓。

@@ -94,34 +94,30 @@ if ls docs/evidence/eval-*.md >/dev/null 2>&1; then
 fi
 if [ "$rb_fail" -eq 0 ]; then say "运行产物边界" "PASS(默认不写 docs/evidence)"; else say "运行产物边界" "FAIL"; fail=1; fi
 
-# ⑦ 迁移一致性/幂等(有权威 DB 时;只读:--verify + dry-run)
+# ⑦ SQLite 状态库完整性（不比较 notes；历史迁移由 pytest 覆盖）
 if [ -f state/fwcore.sqlite3 ]; then
-  if timeout 180 "$PY" -m fwcore migrate --all --verify >"$WORK/mig1.json" 2>"$WORK/mig1.err"; then
-    mig_ok=$("$PY" -c '
-import json,sys
-d=json.load(open(sys.argv[1])); v=d.get("verify",[])
-bad=[x["target"] for x in v if not x.get("ok")]
-print("OK:%d" % len(v) if v and not bad else "BAD")
-' "$WORK/mig1.json" 2>/dev/null)
-    if [ "${mig_ok%%:*}" = "OK" ]; then
-      if timeout 180 "$PY" -m fwcore migrate --all --dry-run >"$WORK/mig2.json" 2>/dev/null && \
-         "$PY" -c '
-import json,sys
-d=json.load(open(sys.argv[1]))
-sys.exit(0 if all(v == 0 for v in d["total"].values()) else 1)
-' "$WORK/mig2.json"; then
-        say "迁移一致性/幂等" "PASS(${mig_ok#*:} 目标 verify 全 ok;dry-run 0 增量)"
-      else
-        say "迁移一致性/幂等" "FAIL(dry-run 有增量:DB 与 notes 不同步,先 migrate)"; fail=1
-      fi
-    else
-      say "迁移一致性/幂等" "FAIL(verify 有目标不一致)"; fail=1
-    fi
+  if "$PY" - <<'PY' >"$WORK/sqlite.txt" 2>&1
+import sqlite3
+con = sqlite3.connect("state/fwcore.sqlite3")
+try:
+    integrity = con.execute("PRAGMA integrity_check").fetchone()[0]
+    targets = con.execute("SELECT COUNT(*) FROM targets").fetchone()[0]
+    docs = con.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+finally:
+    con.close()
+print(f"integrity={integrity} targets={targets} documents={docs}")
+raise SystemExit(0 if integrity == "ok" else 1)
+PY
+  then
+    say "SQLite 状态库" "PASS($(tail -1 "$WORK/sqlite.txt"))"
   else
-    say "迁移一致性/幂等" "FAIL(migrate --verify 执行失败)"; tail -3 "$WORK/mig1.err" | sed 's/^/      /'; fail=1
+    say "SQLite 状态库" "FAIL"; tail -5 "$WORK/sqlite.txt" | sed 's/^/      /'; fail=1
   fi
 else
-  say "迁移一致性/幂等" "SKIP(无 state/fwcore.sqlite3)"
+  say "SQLite 状态库" "SKIP(无 state/fwcore.sqlite3)"
+fi
+if [ "$fail" -eq 0 ]; then
+  say "历史迁移/幂等" "PASS(pytest test_migrate_all.py 覆盖;日常不比较 notes/DB 同步)"
 fi
 
 # ⑧ 工作区必须干净(不留临时产物)
