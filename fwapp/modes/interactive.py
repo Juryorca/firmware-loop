@@ -64,7 +64,7 @@ class FwApp(App):
                  scrollbar-size: 1 1; scrollbar-background: #10151C;
                  scrollbar-color: #2C3643; scrollbar-color-hover: #8995A5;
                  scrollbar-color-active: #83A9D5; }
-    .msg { margin: 0 0 1 0; padding: 0; }
+    .msg { height: auto; margin: 0 0 1 0; padding: 0; }
     .msg-role { color: #8995A5; text-style: bold; }
     .msg.user .msg-role { color: #83A9D5; }
     .msg.assistant .msg-role { color: #89B99D; }
@@ -133,6 +133,8 @@ class FwApp(App):
         self._signal_exit = False
         self._last_title: str | None = None
         self._last_pending: tuple[str, ...] | None = None
+        self._last_busy: bool | None = None
+        self._assistant_rendered = False
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -215,6 +217,7 @@ class FwApp(App):
             self.query_one(StatusBar).update_snapshot(s)
             self.query_one(PendingBar).update_pending(s.pending)
             self._last_pending = tuple(s.pending)
+            self._last_busy = s.busy
             self._update_title()
         except NoMatches:
             # interval 可能在 App 退出/卸载后仍触发一次；不能把退出变成异常。
@@ -263,11 +266,16 @@ class FwApp(App):
         if pending != self._last_pending:
             self._last_pending = pending
             changed = True
+        busy = self.sess.busy
+        if busy != self._last_busy:
+            self._last_busy = busy
+            changed = True
         # 仿 Pi：只有事件/状态真的变化才刷新状态组件；空闲时不做 DB 快照和重绘。
         if changed:
             self._update_status()
 
     def _reset_stream(self) -> None:
+        self._assistant_rendered = False
         self._stream_msg = None
         self._stream_tools.clear()
         self._stream_tool_by_index.clear()
@@ -328,7 +336,10 @@ class FwApp(App):
             if self._stream_msg is None:
                 self._stream_msg = MessageWidget("assistant", "")
                 self._append(self._stream_msg)
-            self._stream_msg.append_text(ev.data.get("text") or ev.text)
+            text = ev.data.get("text") or ev.text
+            self._stream_msg.append_text(text)
+            if text:
+                self._assistant_rendered = True
         elif ev.kind == "reasoning_delta":
             if self._stream_msg is None:
                 self._stream_msg = MessageWidget("assistant", "")
@@ -340,6 +351,8 @@ class FwApp(App):
                 self._stream_msg = MessageWidget("assistant", text)
                 self._append(self._stream_msg)
             self._stream_msg.finalize(text)
+            if text:
+                self._assistant_rendered = True
             status = ev.data.get("status") or "ok"
             if status != "ok":
                 self._notice(f"回复未完整生成：{response_status_label(status)}", "warning")
@@ -352,13 +365,28 @@ class FwApp(App):
         elif ev.kind in ("toolcall_start", "toolcall_delta"):
             self._stream_tool_event(ev.data)
         elif ev.kind == "turn_done":
-            # assistant 内容已由流式 assistant_done 渲染,不再重复 append final
+            # 流式 adapter 走 assistant_done；非流式 adapter 只有 RunResult.final。
+            # 后者不补渲染的话，用户会看到“已完成”但没有任何回答。
+            final = (ev.data.get("final") or "").strip()
+            if final and not self._assistant_rendered:
+                self._stream_msg = MessageWidget("assistant", final)
+                self._append(self._stream_msg)
+                self._stream_msg = None
+                self._assistant_rendered = True
             state = ev.data.get("state")
             hb = ev.data.get("handback")
             blockers = ev.data.get("blockers") or []
             if state and state != "finished":
                 reason = f"：{handback_label(hb)}" if hb else ""
-                self._notice(f"本轮已{state_label(state)}{reason}", "warning")
+                # handback 通常带 "model_error: <细节>"；只显示“模型调用失败”
+                # 会让用户不知道发生了什么，保留可操作的错误尾巴。
+                if hb and ":" in str(hb):
+                    detail = str(hb).split(":", 1)[1].strip()
+                    if detail and detail != handback_label(hb):
+                        reason += f"（{detail[:300]}）"
+                label = state_label(state)
+                prefix = "本轮" if label.startswith("已") else "本轮已"
+                self._notice(f"{prefix}{label}{reason}", "warning")
             elif hb in ("awaiting_user_close", "closed"):
                 self._notice("收尾条件已满足，等待你确认收尾" if hb == "awaiting_user_close"
                              else "已确认收尾", "success")
@@ -392,6 +420,7 @@ class FwApp(App):
                 self._notice("演示模式：本地脚本，不会调用真实模型。", "info")
             self._update_status()
         elif ev.kind == "busy":
+            self._assistant_rendered = False
             self._update_status()
 
     # ---------------- 输入 ----------------

@@ -23,10 +23,11 @@ from fwapp.widgets.screens import (
     ToolsetScreen,
 )
 from fwapp.widgets.status import StatusBar
-from fwapp.widgets.transcript import ToolWidget
+from fwapp.widgets.transcript import MessageWidget, NoticeWidget, ToolWidget
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.models import Reply, ScriptedAdapter
+from fwcore.streaming import StreamError
 
 
 def make_ws(tmp_path, name="t1"):
@@ -615,6 +616,93 @@ def test_tick_skips_status_refresh_when_nothing_changed(tmp_path):
             app._update_status = lambda: calls.append(1)  # type: ignore[method-assign]
             app._tick()
             assert calls == []
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_model_error_clears_busy_status(tmp_path):
+    cfg = make_ws(tmp_path)
+
+    class Failing:
+        name = "scripted"
+
+        def chat(self, messages, tools):
+            raise StreamError("HTTP 0: 连接失败: cannot read from timed out object")
+
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: Failing(),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.3)
+            ed = app.query_one(PromptEditor)
+            ed.text = "你好"
+            await pilot.press("enter")
+            for _ in range(60):
+                await pilot.pause(0.05)
+                if not app.sess.busy:
+                    break
+            await pilot.pause(0.5)
+            assert app.sess.busy is False
+            status = str(app.query_one(StatusBar).render())
+            assert "正在处理" not in status
+            assert "已暂停" in status or "paused" in status
+            users = [w for w in app.query(MessageWidget) if getattr(w, "role", "") == "user"]
+            assert users and all(w.size.height <= 3 for w in users)
+            notices = [str(w.render()) for w in app.query(NoticeWidget)]
+            assert not any("已已" in n for n in notices)
+            assert any("cannot read from timed out object" in n for n in notices)
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_model_error_does_not_block_next_submit(tmp_path):
+    cfg = make_ws(tmp_path)
+    calls = {"n": 0}
+
+    class Flaky:
+        name = "scripted"
+
+        def chat(self, messages, tools):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise StreamError("HTTP 0: 连接失败: cannot read from timed out object")
+            return Reply(content="FINAL: 已恢复", tool_calls=[])
+
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: Flaky(),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.3)
+            ed = app.query_one(PromptEditor)
+            ed.text = "你好"
+            await pilot.press("enter")
+            for _ in range(60):
+                await pilot.pause(0.05)
+                if not app.sess.busy:
+                    break
+            assert app.sess.busy is False
+            ed.text = "继续"
+            await pilot.press("enter")
+            for _ in range(100):
+                await pilot.pause(0.05)
+                if calls["n"] >= 2 and not app.sess.busy:
+                    break
+            await pilot.pause(0.5)
+            assert app.sess.busy is False
+            assert calls["n"] >= 2
+            assert any("已恢复" in getattr(w, "_text", "") for w in app.query(MessageWidget))
             await pilot.press("ctrl+q")
 
     try:
