@@ -6,6 +6,7 @@ import os
 
 from fwcore.output import (
     DEFAULT_MAX_BYTES,
+    truncate_middle,
     DEFAULT_MAX_LINES,
     OutputAccumulator,
     truncate_head,
@@ -101,3 +102,13 @@ def test_head_flags_first_line_over_byte_limit():
     assert r["truncated"] is True
     assert r["first_line_exceeds_limit"] is True
     assert r["content"] == ""
+
+
+def test_middle_truncation_keeps_head_and_tail():
+    text = "H" * 20_000 + "M" * 20_000 + "T" * 20_000
+    r = truncate_middle(text, max_bytes=20 * 1024)
+    assert r["truncated"] is True
+    assert r["content"].startswith("H")
+    assert r["content"].endswith("T")
+    assert "bytes truncated" in r["content"]
+    assert len(r["content"].encode("utf-8")) <= 20 * 1024 + 80

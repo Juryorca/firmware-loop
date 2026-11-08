@@ -5,18 +5,22 @@
   不可达/未启用的服务器**如实记录状态**,不注册、不影响其它工具。
 - **命名规范**:OpenAI 兼容端点要求 `^[A-Za-z0-9_-]+$` ⇒ 工具名 = `mcp_<server>_<tool>`(非法字符转 `_`)。
 - **Schema 映射**:MCP 的 `inputSchema` 直接作为 ToolSpec.input_schema(Shape 相同)。
-- **执行语义**:成功 → `ok` + 文本内容;工具内错误 → `error`(带 isError 原文);
+- **执行语义**:成功 → `ok` + Pi MCP 20 KiB 中间截断文本 + structuredContent;工具内错误 → `error`(带 isError 原文);
   连接断/非法响应 → `error`;超时 → `timeout`;并记录 provider = `mcp:<server>`。
 - **生命周期**:Runner 结束时统一 `close()`(杀进程组);取消/异常路径也必须关。
 """
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 
 from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers
-from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, OutputAccumulator
+from .output import truncate_middle
+
+MCP_OUTPUT_MAX_BYTES = 20 * 1024
 from .tools import Registry, ToolSpec
 
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
@@ -144,30 +148,46 @@ class MCPBridge:
                 return {"status": status, "error": msg[:500], "meta": meta}
             except (OSError, ValueError) as e:
                 return {"status": "error", "error": f"{type(e).__name__}: {e}"[:500], "meta": meta}
+            raw_text = out.get("text") or ""
             if out.get("is_error"):
-                return {"status": "error", "error": (out.get("text") or "MCP tool error")[:500],
-                        "meta": meta, "observation": {"status": "error", "text": out.get("text", "")[:2000]}}
-            text = out.get("text") or ""
-            # MCP 结果同样保留 Pi 尾部；截断时把完整文本落到系统临时文件，
-            # 不写 workspace artifact。没有截断就不会有文件。
-            acc = OutputAccumulator(max_lines=DEFAULT_MAX_LINES,
-                                    max_bytes=DEFAULT_MAX_BYTES,
-                                    temp_file_prefix="fwcore-mcp")
-            acc.append(text.encode("utf-8"))
-            acc.finish()
-            snap = acc.snapshot(persist_if_truncated=True)
-            acc.close()
-            bounded = snap["truncation"]
-            result = {"status": "ok", "text": snap["content"],
-                      "truncated": bounded["truncated"],
-                      "truncated_by": bounded["truncated_by"],
-                      "total_lines": bounded["total_lines"],
-                      "total_bytes": bounded["total_bytes"],
+                result = {"status": "error",
+                          "error": (raw_text or "MCP tool error")[:500],
+                          "meta": meta,
+                          "observation": {"status": "error", "text": raw_text[:2000]}}
+                if out.get("structured") is not None:
+                    result["structured"] = out["structured"]
+                if out.get("content"):
+                    result["content_items"] = len(out["content"])
+                return result
+            # Pi MCP 的模型可见文本是 head/tail 各一半的 20 KiB middle truncation；
+            # 完整文本写系统临时文件，图片/结构化结果不在文本层丢弃。
+            mid = truncate_middle(raw_text, max_bytes=MCP_OUTPUT_MAX_BYTES)
+            text = mid["content"]
+            full_path = None
+            if mid["truncated"]:
+                try:
+                    fd, full_path = tempfile.mkstemp(prefix="fwcore-mcp-", suffix=".txt")
+                    with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as f:
+                        f.write(raw_text)
+                    where = f"[Full output: {full_path}]"
+                except OSError as e:
+                    where = f"[Could not save full MCP output: {e}]"
+                text = (f"Warning: truncated output (original bytes: {mid['total_bytes']})\n"
+                        f"Total output lines: {mid['total_lines']}\n\n{text}\n\n{where}")
+            result = {"status": "ok", "text": text,
+                      "truncated": mid["truncated"],
+                      "removed_bytes": mid["removed_chars"],
+                      "total_lines": mid["total_lines"],
+                      "total_bytes": mid["total_bytes"],
                       "meta": meta,
-                      "observation": {"status": "ok", "text": text[:2000],
+                      "observation": {"status": "ok", "text": raw_text[:2000],
                                       "content_items": len(out.get("content") or [])}}
-            if snap.get("full_output_path"):
-                result["full_output_path"] = snap["full_output_path"]
+            if full_path:
+                result["full_output_path"] = full_path
+            if out.get("structured") is not None:
+                result["structured"] = out["structured"]
+            if out.get("content"):
+                result["content_items"] = len(out["content"])
             return result
         return _handler
 

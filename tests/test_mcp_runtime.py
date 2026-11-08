@@ -28,6 +28,7 @@ TOOLS = [
      "properties": {"text": {"type": "string"}}, "required": ["text"]}},
     {"name": "boom", "description": "总是报错", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "slow", "description": "慢", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "big", "description": "大输出", "inputSchema": {"type": "object", "properties": {}}},
 ]
 
 for line in sys.stdin:
@@ -53,6 +54,10 @@ for line in sys.stdin:
         elif name == "slow":
             time.sleep(5)
             send({"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": "late"}]}})
+        elif name == "big":
+            send({"jsonrpc": "2.0", "id": rid, "result": {
+                "content": [{"type": "text", "text": "HEAD" + ("x" * 30000) + "TAIL"}],
+                "structuredContent": {"answer": 42}}})
         else:
             send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "no such tool"}})
     elif rid is not None:
@@ -161,3 +166,29 @@ def test_mcp_tool_error_and_timeout_are_distinct(tmp_path):
         b.close()
     time.sleep(0.2)
     assert b.clients == {}
+
+
+def test_mcp_large_result_uses_pi_middle_truncation_and_structured(tmp_path):
+    spec, _ = _spec(tmp_path)
+    con, dom, root = _setup(tmp_path)
+    reg = Registry()
+    b = MCPBridge(root=root, registry=reg, specs=[spec])
+    b.start()
+    try:
+        from fwcore.tools import ToolContext
+        ctx = ToolContext(domain=dom, root=root,
+                          policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
+        out = reg.call(ctx, "mcp_fake_big", {})
+        assert out["status"] == "ok" and out["structured"] == {"answer": 42}
+        assert out["truncated"] is True
+        assert out["text"].startswith("Warning: truncated output")
+        assert "HEAD" in out["text"] and "TAIL" in out["text"]
+        assert "bytes truncated" in out["text"]
+        path = out["full_output_path"]
+        assert path and os.path.isfile(path)
+        try:
+            assert "TAIL" in open(path, encoding="utf-8").read()
+        finally:
+            os.unlink(path)
+    finally:
+        b.close()

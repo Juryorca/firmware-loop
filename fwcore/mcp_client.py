@@ -320,7 +320,8 @@ class MCPClient:
         result = self.request("tools/call", {"name": name, "arguments": args or {}}, timeout=timeout)
         content = result.get("content") or []
         text = "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
-        return {"is_error": bool(result.get("isError")), "content": content, "text": text}
+        return {"is_error": bool(result.get("isError")), "content": content,
+                "text": text, "structured": result.get("structuredContent")}
 
 
 def probe(spec: ServerSpec, *, timeout: float = 15.0) -> dict:

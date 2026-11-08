@@ -210,6 +210,29 @@ def combined_output_text(out: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def truncate_middle(content: str, *, max_bytes: int = DEFAULT_MAX_BYTES) -> dict[str, Any]:
+    """Pi MCP 的中间截断：保留头/尾各一半，中间替换为省略标记。"""
+    buf = content.encode("utf-8")
+    total_lines = len(_split_lines_for_counting(content))
+    if len(buf) <= max_bytes:
+        return {"content": content, "truncated": False, "removed_chars": 0,
+                "total_bytes": len(buf), "total_lines": total_lines}
+    head_bytes = max_bytes // 2
+    tail_bytes = max_bytes - head_bytes
+    head = buf[:head_bytes]
+    tail = buf[-tail_bytes:]
+    # head 末尾/ tail 开头都可能落在 UTF-8 字符中间；只裁到合法边界。
+    head_text = head.decode("utf-8", errors="replace")
+    tail_start = 0
+    while tail_start < len(tail) and (tail[tail_start] & 0xC0) == 0x80:
+        tail_start += 1
+    tail_text = tail[tail_start:].decode("utf-8", errors="replace")
+    removed = len(buf) - head_bytes - tail_bytes
+    return {"content": f"{head_text}…{removed} bytes truncated…{tail_text}",
+            "truncated": True, "removed_chars": removed,
+            "total_bytes": len(buf), "total_lines": total_lines}
+
+
 class OutputAccumulator:
     """流式累积工具输出，内存只保留尾部；完整输出按需写临时文件。"""
 

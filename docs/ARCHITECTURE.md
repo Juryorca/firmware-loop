@@ -126,7 +126,10 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **进程输出**（`shell_exec` / `run_process`）：模型看尾部 `2000` 行或 `50 KiB`，先到者生效；
   截断时临时完整输出由 `full_output_path` 给出，**不自动写 workspace artifact**。
 - **文件读取**（`fs_read`）：保留头部 `2000` 行或 `50 KiB`；文件路径本身是可回读的完整来源。
-- **manifest / toolkit / MCP**：`output_tail` / `text` 走同一 `truncate_tail`；不得各自拍字符数。
+- **manifest / toolkit**：`output_tail` / `text` 走 `truncate_tail`（2000 行/50 KiB）。
+- **MCP**：单独按 Pi MCP 策略：模型可见文本 `20 KiB` **中间截断**（保留头/尾），
+  完整文本写临时 `full_output_path`；`structuredContent` 不丢。当前 JSON tool result
+  只能记录图片块数量，尚未渲染图片。
 - **conversation/checkpoint**：conversation 的 live tool payload 与 Pi 边界一致；
   checkpoint 的磁盘保护另有 `CHECKPOINT_TOOL_TAIL_CHARS=2000`，不混同 live 输出。
 - **错误/探针摘要**（如 160/600 字符）只用于状态说明，不承载完整工具输出。
@@ -134,9 +137,10 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 
 ### 常量来源（不要把本地经验当成 Pi 规范）
 
-- **Pi 原值**（有来源可核）：live tool output `2000` 行 / `50 KiB` 尾部；
+- **Pi 原值**（有来源可核）：bash live output `2000` 行 / `50 KiB` 尾部；
+  read `2000` 行 / `50 KiB` 头部；MCP 模型可见文本 `20 KiB` 中间截断；
   structured/full read `1 MiB`；compaction 单条 tool result `2000` 字符。
-- **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP 单条消息 `8 MiB`、
+- **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP transport 单条消息 `8 MiB`、
   Skill 文件 `512 KiB`、错误摘要 `160/600` 字符、legacy 修复 excerpt `1500`、
   MCP observation `2000`。这些应保持命名常量/局部理由，不能反过来冒充 Pi。
 
