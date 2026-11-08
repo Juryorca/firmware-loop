@@ -135,6 +135,7 @@ class FwApp(App):
         self._last_pending: tuple[str, ...] | None = None
         self._last_busy: bool | None = None
         self._assistant_rendered = False
+        self._stream_error_notified = False
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -276,6 +277,7 @@ class FwApp(App):
 
     def _reset_stream(self) -> None:
         self._assistant_rendered = False
+        self._stream_error_notified = False
         self._stream_msg = None
         self._stream_tools.clear()
         self._stream_tool_by_index.clear()
@@ -329,17 +331,18 @@ class FwApp(App):
 
     def _handle_event(self, ev) -> None:
         if ev.kind == "assistant_start":
-            if self._stream_msg is None:
-                self._stream_msg = MessageWidget("assistant", "")
-                self._append(self._stream_msg)
+            # 不在这里创建空 assistant 组件:模型失败时 start 已到、内容没到，
+            # 会留下一个空的 “fw-core” 块。首个 delta/done 到达时再挂载。
+            pass
         elif ev.kind == "assistant_delta":
+            text = ev.data.get("text") or ev.text
+            if not text:
+                return
             if self._stream_msg is None:
                 self._stream_msg = MessageWidget("assistant", "")
                 self._append(self._stream_msg)
-            text = ev.data.get("text") or ev.text
             self._stream_msg.append_text(text)
-            if text:
-                self._assistant_rendered = True
+            self._assistant_rendered = True
         elif ev.kind == "reasoning_delta":
             if self._stream_msg is None:
                 self._stream_msg = MessageWidget("assistant", "")
@@ -347,10 +350,11 @@ class FwApp(App):
             self._stream_msg.append_reasoning(ev.data.get("text") or ev.text)
         elif ev.kind == "assistant_done":
             text = ev.data.get("text") or ev.text or ""
-            if self._stream_msg is None:
+            if self._stream_msg is None and text:
                 self._stream_msg = MessageWidget("assistant", text)
                 self._append(self._stream_msg)
-            self._stream_msg.finalize(text)
+            if self._stream_msg is not None:
+                self._stream_msg.finalize(text)
             if text:
                 self._assistant_rendered = True
             status = ev.data.get("status") or "ok"
@@ -358,9 +362,15 @@ class FwApp(App):
                 self._notice(f"回复未完整生成：{response_status_label(status)}", "warning")
             self._stream_msg = None
         elif ev.kind == "assistant_error":
+            partial = ev.data.get("text") or ""
             if self._stream_msg is not None:
-                self._stream_msg.finalize(ev.data.get("text") or "")
+                if partial or getattr(self._stream_msg, "_text", "").strip():
+                    self._stream_msg.finalize(partial)
+                    self._assistant_rendered = True
+                else:
+                    self._stream_msg.remove()
             self._notice("模型输出中断：" + str(ev.data.get("error") or "")[:300], "error")
+            self._stream_error_notified = True
             self._stream_msg = None
         elif ev.kind in ("toolcall_start", "toolcall_delta"):
             self._stream_tool_event(ev.data)
@@ -386,7 +396,9 @@ class FwApp(App):
                         reason += f"（{detail[:300]}）"
                 label = state_label(state)
                 prefix = "本轮" if label.startswith("已") else "本轮已"
-                self._notice(f"{prefix}{label}{reason}", "warning")
+                # assistant_error 已经显示过同一条流错误时，不再重复一条泛化通知。
+                if not (self._stream_error_notified and str(hb or "").startswith("model_error")):
+                    self._notice(f"{prefix}{label}{reason}", "warning")
             elif hb in ("awaiting_user_close", "closed"):
                 self._notice("收尾条件已满足，等待你确认收尾" if hb == "awaiting_user_close"
                              else "已确认收尾", "success")
@@ -421,6 +433,7 @@ class FwApp(App):
             self._update_status()
         elif ev.kind == "busy":
             self._assistant_rendered = False
+            self._stream_error_notified = False
             self._update_status()
 
     # ---------------- 输入 ----------------

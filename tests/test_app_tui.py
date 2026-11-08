@@ -654,6 +654,8 @@ def test_model_error_clears_busy_status(tmp_path):
             assert "已暂停" in status or "paused" in status
             users = [w for w in app.query(MessageWidget) if getattr(w, "role", "") == "user"]
             assert users and all(w.size.height <= 3 for w in users)
+            assistants = [w for w in app.query(MessageWidget) if getattr(w, "role", "") == "assistant"]
+            assert all(getattr(w, "_text", "").strip() for w in assistants)
             notices = [str(w.render()) for w in app.query(NoticeWidget)]
             assert not any("已已" in n for n in notices)
             assert any("cannot read from timed out object" in n for n in notices)

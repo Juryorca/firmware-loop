@@ -20,7 +20,7 @@ from fwcore.model_client import OpenAICompatModel
 from fwcore.models import OpenAICompatAdapter, ScriptedAdapter
 from fwcore.policy import Policy
 from fwcore.runtime import Runner
-from fwcore.streaming import StreamError, StreamEvent
+from fwcore.streaming import StreamControl, StreamError, StreamEvent
 
 
 def make_ws(tmp_path):
@@ -684,3 +684,49 @@ def test_content_filter_partial_pauses(tmp_path):
     res = r.run(rid, "t1")
     assert res.state == "paused" and "model_incomplete" in (res.handback or "")
     con.close()
+
+
+def test_real_http_sse_slow_chunks_are_not_a_timeout():
+    """Slow reasoning/content gaps (>0.5s) must not poison HTTPResponse.
+
+    Regression for the TUI's "HTTP 0: 连接失败: cannot read from timed out object":
+    the stream socket used to have a 0.5s read timeout for cancellation polling.
+    After a timeout, HTTPResponse cannot be read again, so a normal slow SSE
+    chunk was reported as a connection failure.
+    """
+    class SlowHandler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, format, *args):
+            return
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            for text in ("A", "B"):
+                payload = json.dumps({"choices": [{"delta": {"content": text}}]})
+                self.wfile.write(f"data: {payload}\n\n".encode())
+                self.wfile.flush()
+                time.sleep(0.7)
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        model = OpenAICompatModel(
+            model="m", api_key="k",
+            base_url=f"http://127.0.0.1:{srv.server_port}")
+        events = list(model.stream(
+            [{"role": "user", "content": "hi"}], [], control=StreamControl()))
+        assert [e.type for e in events] == ["start", "text_delta", "text_delta", "done"]
+        assert "".join(e.text for e in events if e.type == "text_delta") == "AB"
+    finally:
+        srv.shutdown()
+        srv.server_close()

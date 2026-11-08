@@ -14,10 +14,10 @@ import http.client
 import json
 import os
 import socket
-from urllib.parse import urlsplit
-from dataclasses import dataclass, field
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from typing import Protocol
+from urllib.parse import urlsplit
 
 from .mcp_content import image_data_uri
 from .streaming import StreamCancelled, StreamControl, StreamError, StreamEvent
@@ -373,9 +373,11 @@ class OpenAICompatModel:
                 if sock is None:
                     raw = getattr(getattr(resp, "fp", None), "raw", None)
                     sock = getattr(raw, "_sock", None)
-                if sock is not None:
-                    # 阻塞 read 也每 0.5s 醒来检查取消;shutdown 再负责立即打断
-                    sock.settimeout(0.5)
+                # 不要给流式 socket 设 0.5s 读超时:HTTPResponse 在超时后
+                # 会进入不可恢复状态,下一次 readline 会抛
+                # OSError("cannot read from timed out object"),把正常的
+                # 慢 SSE(例如 reasoning 间隔 >0.5s)误判成断网。
+                # 取消由 shutdown 打断阻塞 read;正常读取沿用连接超时。
 
                 def _abort() -> None:
                     # 只 shutdown,不在这里 close:readline 持有 file 锁时
