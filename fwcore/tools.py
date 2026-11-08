@@ -27,7 +27,8 @@ if TYPE_CHECKING:  # 只用于类型,避免循环导入
 
 from . import db as _db
 from .domain import Domain, new_id
-from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, OutputAccumulator
+from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, OutputAccumulator,
+                     truncate_head)
 from .policy import Policy
 
 
@@ -455,17 +456,26 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
                          "stdout_tail;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
-    limit = int(args.get("limit", 64_000))
+    limit = int(args.get("limit", DEFAULT_MAX_BYTES))
     try:
         with open(p, "rb") as f:
             data = f.read(limit + 1)
     except OSError as e:
         return {"status": "error", "error": f"读文件失败: {e}"}
-    truncated = len(data) > limit
+    head = truncate_head(data[:limit].decode("utf-8", errors="replace"),
+                         max_lines=DEFAULT_MAX_LINES, max_bytes=limit)
+    truncated = bool(len(data) > limit or head["truncated"])
+    truncated_by = head["truncated_by"] or ("bytes" if len(data) > limit else None)
+    text = head["content"]
+    if head["first_line_exceeds_limit"]:
+        text = (f"[first line exceeds {limit} bytes; use shell_exec with "
+                f"`head -c {limit} {p}` / `sed` if you need a slice]")
     return {
         "status": "ok", "path": args["path"], "bytes": os.path.getsize(p),
-        "truncated": truncated, "sha256": _sha256(p),
-        "text": data[:limit].decode("utf-8", errors="replace"),
+        "truncated": truncated,
+        "truncated_by": truncated_by,
+        "sha256": _sha256(p),
+        "text": text,
     }
 
 
@@ -679,23 +689,6 @@ def _caps(ctx: ToolContext, args: dict) -> dict:
 TAIL_CHARS = DEFAULT_MAX_BYTES
 
 
-def _tail_info(path: str, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]:
-    """返回 (尾部文本, 是否截断, 是否二进制)。只读文件尾部,不把大输出塞进上下文。"""
-    try:
-        size = os.path.getsize(path)
-        with open(path, "rb") as f:
-            f.seek(max(0, size - max_chars * 4))     # 多读一点以处理多字节字符
-            data = f.read()
-    except OSError:
-        return "", False, False
-    binary = b"\x00" in data
-    if binary:
-        # 二进制不塞进上下文:只给占位,让模型用路径/xxd/strings 处理
-        return (f"[binary output: {size} bytes; use stdout_tail / redirect to a file / xxd/strings]",
-                size > max_chars, True)
-    text = data.decode("utf-8", errors="replace")
-    return text[-max_chars:], (len(text) > max_chars or size > max_chars * 4), False
-
 
 def _sha256(path: str) -> str:
     """算文件哈希;读不了就返回空串(**不**让哈希失败变成工具失败),调用方据此判"无产物"。"""
@@ -724,9 +717,12 @@ def default_registry() -> Registry:
             "timeout": {"type": "number"}}, "required": ["command"]},
         shell_exec, risk="high"))
     r.register(ToolSpec(
-        "fs_read", "读文件(默认最多 64KB,返回 sha256 与是否截断)",
+        "fs_read", "读文件(默认 Pi 风格头部：2000 行/50 KiB，先到者生效;返回 sha256 与截断信息)",
         {"type": "object", "properties": {
-            "path": {"type": "string"}, "limit": {"type": "number"}}, "required": ["path"]},
+            "path": {"type": "string"},
+            "limit": {"type": "number",
+                      "description": "最多读取字节数(默认 50 KiB;仍受 2000 行上限)"}},
+         "required": ["path"]},
         fs_read))
     r.register(ToolSpec(
         "fs_hash", "算文件 sha256",

@@ -69,3 +69,16 @@ def test_default_payload_keeps_pi_sized_tail_without_arbitrary_16k_cut():
     assert len(d["stdout_tail"]) == 30_000
     assert d["full_output_path"] == "/tmp/fwcore-output-test.log"
     assert "_truncated" not in d
+
+
+def test_payload_drops_raw_stdout_when_tail_exists():
+    out = {"status": "ok", "stdout": "raw-internal", "stdout_tail": "tail"}
+    d = json.loads(_bounded_tool_result(out))
+    assert "stdout" not in d and d["stdout_tail"] == "tail"
+
+
+def test_large_text_is_capped_to_pi_tail():
+    out = {"status": "ok", "text": "x" * (2 * 1024 * 1024)}
+    d = json.loads(_bounded_tool_result(out))
+    assert len(d["text"].encode("utf-8")) <= 50 * 1024
+    assert d["text_truncated"] is True

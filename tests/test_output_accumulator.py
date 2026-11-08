@@ -8,6 +8,7 @@ from fwcore.output import (
     DEFAULT_MAX_BYTES,
     DEFAULT_MAX_LINES,
     OutputAccumulator,
+    truncate_head,
     truncate_tail,
 )
 
@@ -82,3 +83,21 @@ def test_read_full_output_keeps_head_and_tail(tmp_path):
     finally:
         acc.close()
         os.unlink(path)
+
+
+def test_head_keeps_first_lines_and_marks_line_limit():
+    text = "".join(f"{i}\n" for i in range(1, 5001))
+    r = truncate_head(text)
+    assert r["total_lines"] == 5000
+    assert r["output_lines"] == DEFAULT_MAX_LINES
+    assert r["truncated"] is True
+    assert r["truncated_by"] == "lines"
+    assert r["content"].startswith("1\n")
+    assert r["content"].endswith("2000")
+
+
+def test_head_flags_first_line_over_byte_limit():
+    r = truncate_head("x" * (DEFAULT_MAX_BYTES + 1))
+    assert r["truncated"] is True
+    assert r["first_line_exceeds_limit"] is True
+    assert r["content"] == ""

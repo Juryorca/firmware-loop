@@ -32,7 +32,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .output import DEFAULT_MAX_BYTES
+from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,
+                     combined_output_text, truncate_tail)
 from .tools import Registry, ToolContext, ToolSpec, _capture_process
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -189,25 +190,6 @@ def _register_pgid(ctx: ToolContext, art: str, pgid: int, pid: int) -> None:
             continue                              # 登记失败不影响工具本身,但看护会少一条线索
 
 
-def _cap_output(path: str, max_bytes: int) -> bool:
-    """把超大输出截成"尾部 max_bytes"(带一行标记);返回是否截断。"""
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return False
-    if max_bytes <= 0 or size <= max_bytes:
-        return False
-    try:
-        with open(path, "rb") as f:
-            f.seek(size - max_bytes)
-            tail = f.read()
-        with open(path, "wb") as f:
-            f.write(f"[fwcore] 输出超过 {max_bytes} 字节,已截断,仅保留尾部\n".encode())
-            f.write(tail)
-    except OSError:
-        return False
-    return True
-
 
 def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str | None = None,
                 env: dict[str, str] | None = None, cancel_check: Callable[[], bool] | None = None,
@@ -216,11 +198,13 @@ def run_process(ctx: ToolContext, argv: list[str], *, timeout: float, cwd: str |
     """跑一个外部程序(统一执行语义):进程组 + 取消/超时整组杀 + 有界输出。
 
     输出留在内存，不自动写 workspace artifact；需要长期保存由 Agent 自己重定向。
-    完整 `stdout`/`stderr` 保留到 max_output_bytes（供适配器解析），模型侧仍有 tail。
+    `max_output_bytes` 是原始 stdout/stderr 的解析前缀上限；模型尾部再受 Pi
+    的 2000 行/50 KiB 约束（调用方显式设更小值时取更小值）。
     """
     art = ctx.artifacts_dir or os.path.join(ctx.root, "state", "artifacts", ctx.run_id or "local")
     out = _capture_process(argv, cwd=cwd or ctx.root, env=env, timeout=timeout,
                            cancel_check=cancel_check, max_bytes=max_output_bytes,
+                           max_output_bytes=min(max_output_bytes, DEFAULT_MAX_BYTES),
                            pgid_dir=art)
     code = out.get("exit_code")
     status = str(out.get("status") or "")
@@ -260,41 +244,6 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-TAIL_CHARS = DEFAULT_MAX_BYTES
-
-
-def _tail_info(path: str | None, max_chars: int = TAIL_CHARS) -> tuple[str, bool, bool]:
-    """(尾部文本, 是否截断, 是否二进制);只读尾部,避免把大输出塞进上下文。"""
-    if not path:
-        return "", False, False
-    try:
-        size = os.path.getsize(path)
-        with open(path, "rb") as f:
-            f.seek(max(0, size - max_chars * 4))
-            data = f.read()
-    except OSError:
-        return "", False, False
-    binary = b"\x00" in data
-    if binary:
-        # 二进制不塞进上下文:只给占位,让模型用路径/xxd/strings 处理
-        return (f"[binary output: {size} bytes; use stdout_tail / redirect to a file / xxd/strings]",
-                size > max_chars, True)
-    text = data.decode("utf-8", errors="replace")
-    return text[-max_chars:], (len(text) > max_chars or size > max_chars * 4), False
-
-
-def _tail(paths: list[str | None], keep: int = DEFAULT_MAX_BYTES) -> str:
-    text = ""
-    for p in paths:
-        if not (p and os.path.isfile(p)):
-            continue
-        try:
-            with open(p, "rb") as f:
-                f.seek(max(0, os.path.getsize(p) - keep))
-                text += f.read().decode("utf-8", errors="replace")
-        except OSError:
-            continue
-    return text[-keep:]
 
 
 # ---------------------------------------------------------------- 适配器
@@ -504,10 +453,13 @@ def build_spec(reg: Registry, root: str, m: Manifest) -> ToolSpec:
                         "meta": {"capability": m.capability_required, "provider": None}}
         out = adapter.call(ctx, m, args) or {}
         out.setdefault("status", "ok")
-        text = (out.get("text") or out.get("stdout") or out.get("stderr")
-                or out.get("stdout_tail") or out.get("stderr_tail") or "")
+        text = combined_output_text(out)
         if text:
-            out["output_tail"] = text[-DEFAULT_MAX_BYTES:]
+            tail = truncate_tail(text, max_lines=DEFAULT_MAX_LINES,
+                                 max_bytes=DEFAULT_MAX_BYTES)
+            out["output_tail"] = tail["content"]
+            out.setdefault("output_truncated", tail["truncated"])
+            out.setdefault("output_truncated_by", tail["truncated_by"])
             if observer_fn is not None:
                 try:
                     out["observation"] = observer_fn(text)

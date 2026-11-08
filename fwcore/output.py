@@ -57,6 +57,74 @@ def _truncate_by_bytes_from_end(text: str, max_bytes: int) -> str:
     return _truncate_string_to_bytes_from_end(text, max_bytes)
 
 
+def truncate_head(content: str, *, max_lines: int = DEFAULT_MAX_LINES,
+                  max_bytes: int = DEFAULT_MAX_BYTES) -> dict[str, Any]:
+    """返回 Pi `truncateHead` 的结果字典（用于文件读取，保留开头）。"""
+    total_bytes = _byte_length(content)
+    lines = _split_lines_for_counting(content)
+    total_lines = len(lines)
+
+    if total_lines <= max_lines and total_bytes <= max_bytes:
+        return {
+            "content": content,
+            "truncated": False,
+            "truncated_by": None,
+            "total_lines": total_lines,
+            "total_bytes": total_bytes,
+            "output_lines": total_lines,
+            "output_bytes": total_bytes,
+            "last_line_partial": False,
+            "first_line_exceeds_limit": False,
+            "max_lines": max_lines,
+            "max_bytes": max_bytes,
+        }
+
+    if lines and _byte_length(lines[0]) > max_bytes:
+        return {
+            "content": "",
+            "truncated": True,
+            "truncated_by": "bytes",
+            "total_lines": total_lines,
+            "total_bytes": total_bytes,
+            "output_lines": 0,
+            "output_bytes": 0,
+            "last_line_partial": False,
+            "first_line_exceeds_limit": True,
+            "max_lines": max_lines,
+            "max_bytes": max_bytes,
+        }
+
+    out: list[str] = []
+    output_bytes = 0
+    truncated_by = "lines"
+    for i, line in enumerate(lines):
+        if i >= max_lines:
+            break
+        line_bytes = _byte_length(line) + (1 if i else 0)
+        if output_bytes + line_bytes > max_bytes:
+            truncated_by = "bytes"
+            break
+        out.append(line)
+        output_bytes += line_bytes
+    if len(out) >= max_lines and output_bytes <= max_bytes:
+        truncated_by = "lines"
+
+    output_content = "\n".join(out)
+    return {
+        "content": output_content,
+        "truncated": True,
+        "truncated_by": truncated_by,
+        "total_lines": total_lines,
+        "total_bytes": total_bytes,
+        "output_lines": len(out),
+        "output_bytes": _byte_length(output_content),
+        "last_line_partial": False,
+        "first_line_exceeds_limit": False,
+        "max_lines": max_lines,
+        "max_bytes": max_bytes,
+    }
+
+
 def truncate_tail(content: str, *, max_lines: int = DEFAULT_MAX_LINES,
                   max_bytes: int = DEFAULT_MAX_BYTES) -> dict[str, Any]:
     """返回 Pi `truncateTail` 的结果字典。
@@ -121,6 +189,25 @@ def truncate_tail(content: str, *, max_lines: int = DEFAULT_MAX_LINES,
         "max_lines": max_lines,
         "max_bytes": max_bytes,
     }
+
+
+def combined_output_text(out: dict[str, Any]) -> str:
+    """按 Pi 的“单一输出”语义拼接 stdout/stderr，避免只取第一个字段。
+
+    有 tail 时优先 tail；没有 tail 时回退原始字段；最后追加显式的 text 字段。
+    """
+    parts: list[str] = []
+    for stream in ("stdout", "stderr"):
+        tail = out.get(f"{stream}_tail")
+        raw = out.get(stream)
+        if isinstance(tail, str) and tail:
+            parts.append(tail)
+        elif isinstance(raw, str) and raw:
+            parts.append(raw)
+    text = out.get("text")
+    if isinstance(text, str) and text:
+        parts.append(text)
+    return "\n".join(parts)
 
 
 class OutputAccumulator:

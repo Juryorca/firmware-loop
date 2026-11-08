@@ -12,7 +12,8 @@ import json
 import os
 import re
 
-from .output import DEFAULT_MAX_BYTES
+from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,
+                     combined_output_text, truncate_tail)
 from .tools import Registry, ToolContext, shell_exec
 
 
@@ -38,12 +39,11 @@ def observer(name: str):
 def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = DEFAULT_MAX_BYTES,
          tool: str | None = None, meta: dict | None = None) -> dict:
     out = shell_exec(ctx, {"command": cmd, "timeout": timeout})
-    text = ""
-    for key in ("stdout", "stderr", "stdout_tail", "stderr_tail"):
-        value = out.get(key)
-        if isinstance(value, str):
-            text += value
-    out["output_tail"] = text[-keep:]
+    text = combined_output_text(out)
+    tail = truncate_tail(text, max_lines=DEFAULT_MAX_LINES, max_bytes=keep)
+    out["output_tail"] = tail["content"]
+    out.setdefault("output_truncated", tail["truncated"])
+    out.setdefault("output_truncated_by", tail["truncated_by"])
     if tool:
         fn = OBSERVERS.get(tool)
         if fn:

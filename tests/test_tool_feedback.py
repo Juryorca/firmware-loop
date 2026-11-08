@@ -119,3 +119,14 @@ def test_link_command_write_is_weak(tmp_path):
     ev = dom.add_evidence("t1", "note", path=path, attempt_id=aid, hypothesis_id=hid)
     res = dom.link_evidence_source(ev, call["tool_call_id"])
     assert res["relation"] == "command-write" and res["direct"] is False
+
+
+def test_fs_read_uses_pi_head_limits(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    with open(os.path.join(root, "many.txt"), "w", encoding="utf-8") as f:
+        f.write("".join(f"{i}\n" for i in range(1, 5001)))
+    out = default_registry().call(_ctx(dom, root), "fs_read", {"path": "many.txt"})
+    assert out["status"] == "ok"
+    assert out["truncated"] is True and out["truncated_by"] == "lines"
+    assert out["text"].startswith("1\n")
+    assert len(out["text"].splitlines()) == 2000

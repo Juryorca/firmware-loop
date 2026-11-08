@@ -29,7 +29,7 @@ from .contextinfo import build_status
 from .domain import ConversationPersistError, Domain, new_id
 from .limits import Limits
 from .models import Adapter, ModelHTTPError, Reply, ScriptedAdapter, assistant_message  # noqa: F401
-from .output import DEFAULT_MAX_BYTES
+from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail
 from .policy import Policy
 from .streaming import StreamCancelled, StreamControl, StreamError, as_event
 from .research import Research
@@ -785,7 +785,7 @@ class Runner:
                    "cancelled": "cancelled"}.get(status, "error")
         payload = {k: out.get(k) for k in (
                        "status", "error", "note", "exit_code",
-                       "stdout_tail", "stderr_tail", "text",
+                       "stdout_tail", "stderr_tail", "text", "output_tail",
                        "stdout_truncated", "stderr_truncated",
                        "stdout_truncated_by", "stderr_truncated_by",
                        "stdout_total_lines", "stderr_total_lines",
@@ -793,7 +793,7 @@ class Runner:
                        "stdout_full_output_path", "stderr_full_output_path",
                        "full_output_path")
                    if out.get(k) not in (None, "")}
-        for key in ("stdout_tail", "stderr_tail", "text"):
+        for key in ("stdout_tail", "stderr_tail", "text", "output_tail"):
             value = payload.get(key)
             if isinstance(value, str):
                 # Pi 的 live tool output 是 2000 行/50 KiB；持久化也沿用这个
@@ -1702,12 +1702,26 @@ def _bounded_tool_result(out: dict, limit: int | None = None) -> str:
         # 数据库 TC-… 与协议 tool_call_id(模型给的 call_…)不是一回事:
         # 内容里只保留 db_tool_call_id,协议 id 留在消息层,避免模型拿错
         out["db_tool_call_id"] = out.pop("tool_call_id")
-    # 原始 stdout/stderr 是解析用前缀，不是模型输出；超过 Pi 上限时只留元数据。
+    # 原始 stdout/stderr 是解析用前缀，不是模型输出；有 tail 时不再重复给模型。
     for key in ("stdout", "stderr"):
         value = out.get(key)
-        if isinstance(value, str) and len(value.encode("utf-8")) > DEFAULT_MAX_BYTES:
+        if not isinstance(value, str):
+            continue
+        if out.get(f"{key}_tail"):
+            out.pop(key, None)
+        elif len(value.encode("utf-8")) > DEFAULT_MAX_BYTES:
             out[f"{key}_omitted_bytes"] = len(value.encode("utf-8"))
             out.pop(key, None)
+    # 所有模型可见文本字段统一走 Pi 尾部边界（适配器也不能绕过）。
+    for key in ("stdout_tail", "stderr_tail", "text", "output_tail"):
+        value = out.get(key)
+        if not isinstance(value, str) or len(value.encode("utf-8")) <= DEFAULT_MAX_BYTES:
+            continue
+        bounded = truncate_tail(value, max_lines=DEFAULT_MAX_LINES,
+                                max_bytes=DEFAULT_MAX_BYTES)
+        out[key] = bounded["content"]
+        out[f"{key}_truncated"] = True
+        out[f"{key}_truncated_by"] = bounded["truncated_by"]
     full = json.dumps(out, ensure_ascii=False, default=str)
     if limit is None or len(full) <= limit:
         return full
@@ -1775,11 +1789,15 @@ def _sanitize_history(history: list[dict], lookup=None) -> list[dict]:
     return history
 
 
+CHECKPOINT_TOOL_TAIL_CHARS = 2000
+
+
 def _shrink_history(history: list[dict], keep_full: int = 20, artifact_of=None) -> list[dict]:
     """把历史里较老的 tool 输出截断(保留结构),避免检查点持有全量原文。
 
-    这是**磁盘保护**(不是请求裁剪):截断时保留 tool_call_id 与原产物路径,
-    恢复后仍能回到全文继续验证。artifact_of(tool_call_id) 返回可追溯路径。
+    这是**磁盘保护**(不是 live tool result 裁剪):保留 Pi compaction 的 2000
+    字符边界;截断时保留 tool_call_id 与原产物路径,恢复后仍能回到全文继续验证。
+    `artifact_of(tool_call_id)` 返回可追溯路径。
     """
     tool_idx = [i for i, m in enumerate(history) if m.get("role") == "tool"]
     # keep_full=0 表示"全压"(--0 会变成 [:0] 什么都不压,是个真 bug)
@@ -1788,13 +1806,14 @@ def _shrink_history(history: list[dict], keep_full: int = 20, artifact_of=None) 
     for i, m in enumerate(history):
         if i in cutoff:
             c = m.get("content")
-            if isinstance(c, str) and len(c) > 200:
+            if isinstance(c, str) and len(c) > CHECKPOINT_TOOL_TAIL_CHARS:
                 note = f"…(检查点截断,原 {len(c)} 字符"
                 if artifact_of:
                     p = artifact_of(m.get("tool_call_id"))
                     if p:
                         note += f",全文: {p}"
-                out.append({**m, "content": c[:200] + note + ")"})
+                out.append({**m,
+                            "content": c[:CHECKPOINT_TOOL_TAIL_CHARS] + note + ")"})
                 continue
         out.append(m)
     return out

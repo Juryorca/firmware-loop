@@ -61,7 +61,7 @@ tools/registry/*.json  仓库工具 manifest(8 个); .agents/skills/*/SKILL.md
 conclusions runs checkpoints tool_calls events mirror_checks research_logs documents meta`。
 知识表:`knowledge_entries knowledge_entry_versions knowledge_entry_tags knowledge_entry_fts`(FTS5)。
 
-保留机制:`checkpoints_keep=120`/run(写时裁剪)→ `_shrink_history`(老工具输出 200 字符 +
+保留机制:`checkpoints_keep=120`/run(写时裁剪)→ `_shrink_history`(老工具输出 2000 字符 +
 保留路径/`tool_call_id`)→ 库超 `max_db_bytes=256MB` 删最老 checkpoint 仍超则暂停。
 清理:两档(**使用中/收尾未归档=提交中** 只清垃圾;**归档/不要了** 才释放载体/派生物/原件,需用户明说)。
 
@@ -114,11 +114,23 @@ feature 适配器(ida)、MCP(`mcp_<server>_<tool>`)。
 ```
 
 执行链:`Registry.call`(call_key 幂等 + risk/Authz + capability)→ 适配器 → `run_process`
-(独立 PGID、取消杀组、输出上限、ok_exit_codes)→ 产物落 `state/artifacts/<run>/` →
-`tool_calls` 行(status/exit/sha/provider/arch/observation)→ `db_tool_call_id`(TC-…) →
-`_bounded_tool_result`(Pi 2000 行/50 KiB 尾部、始终合法 JSON、保留路径/哈希/错误/`full_output_path`)→ 模型。
+(独立 PGID、取消杀组、输出上限、ok_exit_codes)→ **输出留在 tool result/session**(Pi 2000 行/50 KiB 尾部;
+截断时才写系统临时 `full_output_path`；只有工具显式产物才落 `state/artifacts/<run>/`)
+→ `tool_calls` 行(status/exit/sha/provider/arch/observation)→ `db_tool_call_id`(TC-…) →
+`_bounded_tool_result`(Pi 尾部、始终合法 JSON、保留路径/哈希/错误/`full_output_path`)→ 模型。
 能力层:`fw-core capabilities` 探针(`ready/partial/deps_missing/arch_mismatch/missing`);
 manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失。
+
+## 4b. 工具输出边界(单一来源: `fwcore/output.py`)
+
+- **进程输出**（`shell_exec` / `run_process`）：模型看尾部 `2000` 行或 `50 KiB`，先到者生效；
+  截断时临时完整输出由 `full_output_path` 给出，**不自动写 workspace artifact**。
+- **文件读取**（`fs_read`）：保留头部 `2000` 行或 `50 KiB`；文件路径本身是可回读的完整来源。
+- **manifest / toolkit / MCP**：`output_tail` / `text` 走同一 `truncate_tail`；不得各自拍字符数。
+- **conversation/checkpoint**：conversation 的 live tool payload 与 Pi 边界一致；
+  checkpoint 的磁盘保护另有 `CHECKPOINT_TOOL_TAIL_CHARS=2000`，不混同 live 输出。
+- **错误/探针摘要**（如 160/600 字符）只用于状态说明，不承载完整工具输出。
+- 需要长期保存时由 Agent 自己用 bash 重定向；临时 `full_output_path` 不能当 evidence 路径。
 
 ## 5. 上下文生命周期(静态前缀 + 尾部状态 + 阈值压缩)
 

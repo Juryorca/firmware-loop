@@ -102,7 +102,7 @@ def test_checkpoint_shrink_keeps_stdout_path(tmp_path):
                 " VALUES(?,?,?,?,?,'ok',?,?)",
                 ("TC-1", "k1", rid, "shell_exec", "{}", stdout, "2026-11-06T00:00:01Z"))
     r = Runner(con, root, _Chatty(0), limits=Limits(max_model_calls=1))
-    history = [{"role": "tool", "tool_call_id": "TC-1", "content": "y" * 400}]
+    history = [{"role": "tool", "tool_call_id": "TC-1", "content": "y" * 3000}]
     out = _shrink_history(history, keep_full=0, artifact_of=r._artifact_of)
     assert "state/artifacts/TC-1.stdout.txt" in out[0]["content"]
     assert out[0]["tool_call_id"] == "TC-1"
