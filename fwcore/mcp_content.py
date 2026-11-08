@@ -39,7 +39,28 @@ TEMP_IMAGE_PREFIX = "fwcore-mcp-image"
 TEMP_RESOURCE_PREFIX = "fwcore-mcp-resource"
 
 
-def save_temp_bytes(data: bytes, *, prefix: str, suffix: str) -> str:
+def _save_bytes(data: bytes, *, prefix: str, suffix: str,
+                store_dir: str | None = None) -> str:
+    """保存图片/二进制；有持久目录时用内容哈希，跨进程/checkpoint 可读。"""
+    if store_dir:
+        try:
+            os.makedirs(store_dir, exist_ok=True)
+        except OSError as e:
+            raise OSError(f"无法创建 MCP 内容目录 {store_dir}: {e}") from e
+        name = hashlib.sha256(data).hexdigest() + suffix
+        path = os.path.join(store_dir, name)
+        if os.path.isfile(path):
+            return path
+        fd, tmp = tempfile.mkstemp(prefix=".mcp-", suffix=suffix, dir=store_dir)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
+        return path
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
     try:
         with os.fdopen(fd, "wb") as f:
@@ -49,6 +70,10 @@ def save_temp_bytes(data: bytes, *, prefix: str, suffix: str) -> str:
             os.unlink(path)
         raise
     return path
+
+
+def save_temp_bytes(data: bytes, *, prefix: str, suffix: str) -> str:
+    return _save_bytes(data, prefix=prefix, suffix=suffix)
 
 
 def _base_mime(mime: str | None) -> str:
@@ -70,7 +95,8 @@ def _decode_base64(data: Any) -> bytes | None:
         return None
 
 
-def image_part(data_b64: Any, mime: Any, *, label: str = "image") -> dict:
+def image_part(data_b64: Any, mime: Any, *, label: str = "image",
+               store_dir: str | None = None) -> dict:
     """MCP image block -> 内部 image part；任何非法输入降级为 text。"""
     mime_s = _base_mime(str(mime or ""))
     if mime_s not in IMAGE_MIME_EXT:
@@ -84,14 +110,16 @@ def image_part(data_b64: Any, mime: Any, *, label: str = "image") -> dict:
         return {"type": "text",
                 "text": f"[{label} omitted: {len(raw)} bytes exceeds {MAX_IMAGE_BYTES} byte limit]"}
     try:
-        path = save_temp_bytes(raw, prefix=TEMP_IMAGE_PREFIX, suffix=IMAGE_MIME_EXT[mime_s])
+        path = _save_bytes(raw, prefix=TEMP_IMAGE_PREFIX, suffix=IMAGE_MIME_EXT[mime_s],
+                           store_dir=store_dir)
     except OSError as e:
         return {"type": "text", "text": f"[{label} could not be saved: {type(e).__name__}: {e}]"}
     return {"type": "image", "mimeType": mime_s, "path": path,
             "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def binary_part(data_b64: Any, mime: Any, uri: str, *, label: str = "binary resource") -> dict:
+def binary_part(data_b64: Any, mime: Any, uri: str, *, label: str = "binary resource",
+                store_dir: str | None = None) -> dict:
     raw = _decode_base64(data_b64)
     if raw is None:
         return {"type": "text", "text": f"[{label} {uri} omitted: invalid base64]"}
@@ -104,7 +132,8 @@ def binary_part(data_b64: Any, mime: Any, uri: str, *, label: str = "binary reso
     audio = mime_s.startswith("audio/")
     suffix = mimetypes.guess_extension(mime_s) or ".bin"
     try:
-        path = save_temp_bytes(raw, prefix=TEMP_RESOURCE_PREFIX, suffix=suffix)
+        path = _save_bytes(raw, prefix=TEMP_RESOURCE_PREFIX, suffix=suffix,
+                           store_dir=store_dir)
     except OSError as e:
         return {"type": "text", "text": f"[{label} {uri} could not be saved: {type(e).__name__}: {e}]"}
     note = ("; the configured model has no audio input support" if audio else "")
@@ -113,7 +142,7 @@ def binary_part(data_b64: Any, mime: Any, uri: str, *, label: str = "binary reso
 
 
 def resource_parts(contents: list[dict] | None, *, server: str, uri: str = "",
-                   labels: bool = False) -> list[dict]:
+                   labels: bool = False, store_dir: str | None = None) -> list[dict]:
     """resources/read contents -> ordered text/image parts."""
     out: list[dict] = []
     image_count = 0
@@ -134,9 +163,10 @@ def resource_parts(contents: list[dict] | None, *, server: str, uri: str = "",
                             "text": f"[image {cur_uri} omitted: more than {MAX_IMAGES_PER_RESULT} images]"}
                 else:
                     image_count += 1
-                    part = image_part(item.get("blob"), mime, label=f"image {cur_uri}")
+                    part = image_part(item.get("blob"), mime, label=f"image {cur_uri}",
+                                      store_dir=store_dir)
             else:
-                part = binary_part(item.get("blob"), mime, cur_uri)
+                part = binary_part(item.get("blob"), mime, cur_uri, store_dir=store_dir)
             out.append(part)
         else:
             out.append({"type": "text", "text": f"[unsupported resource content {cur_uri}]"})
@@ -156,7 +186,8 @@ def _resource_link_text(block: dict, server: str) -> str:
             f"read it with read_mcp_resource (server \"{server}\", uri \"{uri}\")]")
 
 
-def content_parts(content: list[dict] | None, *, server: str) -> list[dict]:
+def content_parts(content: list[dict] | None, *, server: str,
+                  store_dir: str | None = None) -> list[dict]:
     """MCP CallToolResult.content -> ordered internal parts."""
     out: list[dict] = []
     image_count = 0
@@ -174,14 +205,16 @@ def content_parts(content: list[dict] | None, *, server: str) -> list[dict]:
                             "text": f"[image omitted: more than {MAX_IMAGES_PER_RESULT} images]"})
             else:
                 image_count += 1
-                out.append(image_part(block.get("data"), block.get("mimeType")))
+                out.append(image_part(block.get("data"), block.get("mimeType"),
+                                      store_dir=store_dir))
         elif kind == "audio":
             raw = _decode_base64(block.get("data"))
             if raw is None:
                 out.append({"type": "text", "text": "[audio omitted: invalid base64]"})
             else:
                 try:
-                    path = save_temp_bytes(raw, prefix=TEMP_RESOURCE_PREFIX, suffix=".audio")
+                    path = _save_bytes(raw, prefix=TEMP_RESOURCE_PREFIX, suffix=".audio",
+                                       store_dir=store_dir)
                     out.append({"type": "text",
                                 "text": f"[audio {block.get('mimeType') or 'unknown'} saved to {path}; "
                                         "the configured model has no audio input support]"})
@@ -193,7 +226,7 @@ def content_parts(content: list[dict] | None, *, server: str) -> list[dict]:
             res = block.get("resource")
             if isinstance(res, dict):
                 rp = resource_parts([res], server=server,
-                                    uri=str(res.get("uri") or ""))
+                                    uri=str(res.get("uri") or ""), store_dir=store_dir)
                 out.extend(rp)
             else:
                 out.append({"type": "text", "text": "[unsupported embedded resource]"})

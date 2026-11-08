@@ -160,6 +160,10 @@ class MCPBridge:
         self._register_resource_tools()
         return self.status
 
+    def _content_dir(self) -> str:
+        """图片/二进制资源的持久化目录（跨 checkpoint/process 可读，不写 DB）。"""
+        return os.path.join(self.root, "state", "artifacts", "mcp-content")
+
     def _resource_servers(self) -> list[tuple[str, MCPClient]]:
         return [(name, c) for name, c in sorted(self.clients.items())
                 if c.supports_resources]
@@ -289,7 +293,8 @@ class MCPBridge:
             result = client.read_resource(uri)
             contents = result.get("contents") if isinstance(result, dict) else []
             parts = resource_parts(contents, server=server, uri=uri,
-                                   labels=len(contents or []) > 1)
+                                   labels=len(contents or []) > 1,
+                                   store_dir=self._content_dir())
             if not parts:
                 parts = [{"type": "text", "text": f"Resource {uri} is empty."}]
         except (MCPError, OSError, ValueError) as e:
@@ -337,7 +342,8 @@ class MCPBridge:
             except (OSError, ValueError) as e:
                 return {"status": "error", "error": f"{type(e).__name__}: {e}"[:500], "meta": meta}
             content = out.get("content") or []
-            parts = content_parts(content, server=server)
+            parts = content_parts(content, server=server,
+                                  store_dir=self._content_dir())
             if not parts and out.get("structured") is not None:
                 # Pi 的 fallback：没有 content blocks 时把 structuredContent 当文本。
                 parts = [{"type": "text", "text": json.dumps(

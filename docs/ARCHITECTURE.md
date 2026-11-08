@@ -132,7 +132,7 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   完整文本写临时 `full_output_path`；`isError` 也走同一路径。完整
   `structuredContent` 写临时 `structured_full_output_path`，模型只保留小摘要。
   MCP `content` 的 text/image 转成有序 `parts`：图片按 MIME/base64/大小/数量校验后
-  保存临时文件，历史只存路径/哈希，不把 base64 放进 JSON/DB；模型适配层再把
+  保存到 `state/artifacts/mcp-content/`（内容哈希，跨 checkpoint/进程可读；不是系统临时文件），历史只存路径/哈希，不把 base64 放进 JSON/DB；模型适配层再把
   image part 读成 data URI。Chat Completions 可在显式 `image_mode="tool_parts"`
   时走 image content part；标准 OpenAI Responses 走合法的 `function_call_output`
   text/image 数组；纯文本模型只收到路径和明确限制。HTTP SSE 按行增量读取，
