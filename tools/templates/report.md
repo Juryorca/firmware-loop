@@ -9,7 +9,7 @@
 输出: state/<target>/report/ 下**每个漏洞候选一份报告** + report/INDEX.md 索引。
 
 **产出时机**: `report/` 只在 ①**有 finding**(advisory + attachments)或 ②**收尾**(INDEX/attack-surface/CLOSURE)时建立。
-**跑循环期间不要预建 `report/`** —— A1/A2 维护在 `state/<目标>/notes.md` 的 surface map(**结构化表**),
+**跑循环期间不要预建 `report/`** —— A1/A2 维护在 SQLite `surfaces`（权威状态），收尾导出;
 > surface map 的收尾处理(移动而非复制)见 `AGENTS.md`「报告产出(硬性要求)」。
 
 **落点(report/ 是*对外*目录,只放下表这几类;非发现不进 report/)**:
@@ -17,7 +17,7 @@
 | 内容 | 落点 |
 |---|---|
 | 索引(目标元数据 + 发现表 + 复现材料 + 复现前提 + 关联公开漏洞) | `report/INDEX.md` |
-| 入口点枚举与逐点处置(A1/A2/A3) | `report/attack-surface.md`(**收尾时从 notes 移入**) |
+| 入口点枚举与逐点处置(A1/A2/A3) | `report/attack-surface.md`(**收尾时从 DB 导出**) |
 | 收尾声明 | `report/CLOSURE.md`(收尾时产出) |
 | **每个 finding 的 advisory** | `report/<描述性名称>.md`(**顶层**,与 attachments/ 同级) |
 | 该 finding 的自含提交包 | `report/attachments/<描述性名称>/`{PoC 脚本, README(怎么跑), 截图} |
@@ -32,7 +32,7 @@
 3. **截图必须被 advisory 用 markdown 链接引用**(`attachments/<描述性名称>/<shot-id>.png`)
    —— **有动态验证却无图链 = 材料未完成**;无动态验证的 finding 要在 Evidence 里写明为什么没有“结果时刻”;
 4. `shots.json` + `<shot-id>.png.provenance` 齐(截图可审计);
-5. **本轮的经验已按 `AGENTS.md`「文件准入与归属」归位 `knowledge/`** —— **确无可沉淀要在 notes 里明说**,
+5. **本轮的经验已按 `AGENTS.md`「文件准入与归属」归位 SQLite Knowledge** —— **确无可沉淀在 CLOSURE/DB log 明说**,
    沉默不提 = 漏做(先沉淀再写报告)。
 6. **「设备侧执行」类结论的证据要求(硬)**: 凡声称"设备**执行了**命令 / 改了设备文件 / 读到设备文件" ⇒ 证据必须来自
    **容器/chroot**(镜像根 = 该目标 rootfs),且是**设备文件系统内的可观测变化**(绝对路径落盘 / 配置改动 / 命令副作用);
@@ -51,13 +51,13 @@
 > 无证据则降级措辞;禁止"只在写作轮内找证据"。
 
 受众纪律: 对外文件的写法红线**只认「### 报告格式与 CVE 编号线(细则)」的「通用原则」**(避免两处维护)。
-过程性材料(notes/日志)留内部归档(INDEX/attack-surface/CLOSURE),不进对外文件;
+过程性事实留在 SQLite；`notes.md` 只是可选历史，不再作为研究过程存储；对外只用 `report/` 交付物;
 内部归档反向要求必须带证据引用(命令/输出/文件路径/判定记号),保证可追溯可续跑。
 证据形态: 机制证据用文本原文(命令+原样输出,自包含);结果时刻用真实终端截图
 依赖一句带过)+ 自有证据截图),单份提交时材料自含 —— 一个 finding 的对照/证据**不得依赖
 另一个 finding 的脚本或数据**。对外材料的命名与内容一律不出现内部 VR-n 编号 ——
 advisory 标题/文件名、文件夹、PoC 脚本、截图全部用漏洞描述性命名;
-VR 编号仅存在于内部 INDEX/notes;跨 finding 引用写 "documented in a separate advisory"。
+VR 编号仅存在于内部 INDEX；`notes.md` 可选;跨 finding 引用写 "documented in a separate advisory"。
 截图须完整呈现终端内容(满幅,无黑边无裁切)。
 红线: **默认不提交**;用户明确要求提交时「**可填不可提交**」(只填表单/草稿、不点提交、贴待确认清单)—— 细则见「### 提交红线(硬性)」。
 报告格式与 CVE 编号线规则见下方「### 报告格式与 CVE 编号线(细则)」—— **该小节为唯一权威版本**,
@@ -108,7 +108,7 @@ VR 编号仅存在于内部 INDEX/notes;跨 finding 引用写 "documented in a s
   (含 command / script-sha256 / png-sha256 / 时间);advisory 里 markdown 引用 `attachments/<名称>/<shot-id>.png`。
   **拒收条件**: 缺 `why`、脚本越出包目录、不可执行、sha256 不符、argv 含元字符 —— 一律不拍。
   - **附件包必须自含**:**禁符号链接** ✗(指向包外/工作副本的链接,提交或转移后必坏);PoC 需要 rootfs 这类大件 ⇒
-  参数化路径(默认 `./rootfs`)+ 在 README 写明"怎么准备"(公开获取厂商原始镜像并解包;重下凭据与内部重建配方留在 notes，不写进对外 README)✓。
+  参数化路径(默认 `./rootfs`)+ 在 README 写明"怎么准备"(公开获取厂商原始镜像并解包;内部重建配方写 `report/CLOSURE.md`，不写进对外 README)✓。
 - **README 必须能独立跑通**:依赖准备 / 一条命令 / 预期输出 / 清理 ✓;不确定就自己按 README 从零跑一遍再交 ✓。
 ## Impact
   <只写**已证实的后果**:攻击者实际能做到什么(1–2 句)+ 边界/未证实项。**不要**用 Confidentiality / Integrity / Availability 分类模板 ✗>
@@ -150,7 +150,7 @@ VR 编号仅存在于内部 INDEX/notes;跨 finding 引用写 "documented in a s
   工作区路径(state/…、artifacts/…)、内部工具名(tools/、parse_signal.py、IDA、tmux)、
   信号记号(HIT:/MISS:)与内部文件名(AGENTS.md、notes.md、knowledge/);
   文本证据不写操作者环境信息,截图用提交人本人真实终端(原生提示符,不匿名化)
-- 内部归档(INDEX/attack-surface/CLOSURE/notes.md)反向要求: **必须带证据引用** ——
+- 内部归档(INDEX/attack-surface/CLOSURE)反向要求: **必须带证据引用** ——
   每条结论附 命令/输出/文件路径/判定记号,保证可追溯、可续跑、可复核
 - 证据自包含: 每条证据 = 可独立执行的命令 + 原样输出摘录;复现步骤不依赖本仓库文件,
   列附件只写附件名
@@ -180,7 +180,7 @@ VR 编号仅存在于内部 INDEX/notes;跨 finding 引用写 "documented in a s
   跨 finding 引用写 "documented in a separate advisory";
   截图满幅呈现终端内容,无黑边无裁切;
 - 报告语言: 英文(国际厂商) / 厂商官方语言(区域厂商)
-- 内容来自 state/<target>/notes.md 与 artifacts/,不凭空编造
+- 内容来自 SQLite 权威状态与 artifacts/,不凭空编造；`notes.md` 只作可选历史
 
 > **CLOSURE 必填:覆盖层声明** —— 写明本次覆盖判定到了哪几层:①监听端口 ②反向代理 location / 运行时生成路由表 ③应用内路由(含认证后)。
 > 任何一层未做,必须写成"**已知遗漏**"并给出具体项(例:`/proxy/network/*` → 后端 REST 未枚举),**不得用 `coverage complete` 掩盖**。

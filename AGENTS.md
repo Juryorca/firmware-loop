@@ -13,7 +13,7 @@
 **分层**: 本文件 = 唯一常驻 System Prompt 项目指令(行为与边界);`.agents/skills/` = 按需操作知识;`tools/templates/` = 交付物形态;SQLite `knowledge_entries` = 跨目标研究知识;`state/<目标>/` = 本轮事实。
 
 **循环(状态机)—— 每步: 产出什么 / 落在哪 / 此处必查**
-1. **立项**: 目标(路径或型号名)→ 固件获取 + 指纹(`来源 URL + MD5` 记 `intel/firmware/<目标>/`)→ notes §0/§1;
+1. **立项**: 目标(路径或型号名)→ 固件获取 + 指纹(`来源 URL + MD5` 记 `intel/firmware/<目标>/`)→ 来源指纹写 SQLite target/observation（`state_*`）；`notes.md` 可选。
    同时记**厂商政策(含对认证后漏洞的态度)**(见守则 10「厂商口径门」)
    **目标取舍因子(立项时看一次)**: **厂商自研/改写代码的量** —— 自研守护进程 / 插件 / 胶水层 / 被改过的上游 vs **纯上游拼装**。
    自研改写多 ⇒ 厂商特有缺陷概率高,**优先**;纯上游拼装 ⇒ 期望值低,注意力放到**厂商接线处**(配置/权限映射/插件);
@@ -68,7 +68,7 @@
 ⇒ **不必问的(自己拍板做,别包装成 A/B)**:起容器(含 `--privileged` 做挂载/权限)、构建镜像、容器化 rootfs、装依赖、跑扫描/导入、重跑实验 —— 这些是**工程步骤** ✓(照容器与清理纪律做即可;成本/耗时不是理由,见上表)。
 ⇒ 合法停**只有四种**:本轮新成立 finding / 需工作区外**具体外部事物**(账号·样本·凭据·宿主环境 —— **不含真机**) / 队列清空 / 目标级裁决。
 
-**停止声明**: 每次真正停下时写进 notes;**「有 finding」这条必须写明是本轮新成立的哪一条**(带本轮判定/证据);只引历史 finding ⇒ 视为**继续**,不得停。**理由必须附证据**(判据满足 ⇒ 引 `derived_check --closure` 输出;需用户输入 ⇒ 写四要素;工具/环境故障 ⇒ 附错误原文;「上下文余量」⇒ 引 harness 原句)。**格式与本条细则见 `research-loop` Skill(`references/LOOP.md`)「停止声明」**。
+**停止声明**: 每次真正停下时用 `state_add_log(kind=stop)` 写 SQLite；`notes.md` 可选、仅人工摘要;**「有 finding」这条必须写明是本轮新成立的哪一条**(带本轮判定/证据);只引历史 finding ⇒ 视为**继续**,不得停。**理由必须附证据**(判据满足 ⇒ 引 `derived_check --closure` 输出;需用户输入 ⇒ 写四要素;工具/环境故障 ⇒ 附错误原文;「上下文余量」⇒ 引 harness 原句)。**格式与本条细则见 `research-loop` Skill(`references/LOOP.md`)「停止声明」**。
 - ⚠️ 本工作区没有真机 ⇒ 真机需求**不是**停的理由(见下条);只有"产品自身在容器/仿真里无法造出的外部事物"才算情况②。
 ⚠️ **本工作区没有真机/硬件**(用户明确声明): 硬件验证**不在可得资源内** ⇒ **容器/仿真/提取镜像的验证即为准绳**,
    不得因"需真机确认"而停工、降级 finding 或把它写成 Blocked;真机最多是"再加强"的可选项(报告里如实注明"physical-device
@@ -78,7 +78,7 @@
 判据一条 —— **这一步产出的东西,是不是「缺陷本身」的直接事实?**
 1. **事实 > 同原理补充**: 缺陷由能直接证明它的事实钉死(一次实测 / 一段反编译 / 一条重启后仍在的记录);同原理再次佐证 = 废话;
    判据 = **删掉它,读者对"缺陷成立"的把握会不会下降**。
-2. **探测边界 = 缺陷本身 + 攻击链**: 不评估缺陷之外的后续影响链、不顺手审相邻组件;越界唯一理由 = **能串成攻击链**,且必须在 notes 写明这条链。
+2. **探测边界 = 缺陷本身 + 攻击链**: 不评估缺陷之外的后续影响链、不顺手审相邻组件;越界唯一理由 = **能串成攻击链**,且必须写进假设/尝试或 observation（SQLite）。
 3. **同原理证据不重复给数据**: 一次运行 ⇄ 一张截图 ⇄ 一段文字,三者一致且不重复。
 
 ## 指针表(我需要 X → 去哪)
@@ -92,7 +92,7 @@
 | 工具经验/怪癖 / SDK 特征 / 已验证利用链 / 情报与实证 | 工具经验用 `knowledge_search(kind="guideline")`；SDK/利用链/情报为 `knowledge/{sdk-bloodlines,exploits-validated,intel-log}.md` 静态参考 |
 | 知识库入口 | `knowledge_search` / `knowledge_get` / `knowledge_propose` / `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`;静态参考 `knowledge/INDEX.md`;准入见本文件「Knowledge Base」 |
 | 权威研究事实(假设/尝试/观察/证据/结论/面) | `state/<目标>/state/fwcore.sqlite3`(用 `state_*` 工具写) |
-| 叙述/理由/下一步指针 | `state/<目标>/notes.md` |
+| 可选人工叙述/历史摘要（非自动维护） | `state/<目标>/notes.md`；下一步从 DB 读 |
 | 环境 / 工具入口 | 本文件「资源解析…」「环境清单」「工具速查」 |
 
 ## 资源解析与 Python 环境登记表(违反即返工)
@@ -128,7 +128,7 @@
 ## 循环守则
 
 1. 信号判定: `tools/parse_signal.py` 覆盖的类别以其输出为准;不覆盖的类别(DoS/信息泄露/逻辑缺陷/权限等)用**自定义差分·对比实验**验证,同样构成发现 —— 禁止无证据宣称成功。
-2. 每完成一个阶段 → 用 `state_*` 工具写**权威状态**(假设/证据/结论);`notes.md` 只写叙述、判断理由与下一步指针(不再抄假设池/面表)。
+2. 每完成一个阶段 → 用 `state_*` 工具写**权威状态**(假设/证据/结论/下一步);`notes.md` 可选，仅历史叙述，不再是研究过程的必需记录。
 3. 失败先分诊(**假设 / 环境 / 信号**三层),修正后重跑,禁止盲目重试(判据见 `research-loop` Skill(`references/LOOP.md`)「失败分诊」)。
 4. Windows IDA: `tools/ida_start.sh`(幂等)→ `tools/ida_call.sh` 查询 → `tools/ida_stop.sh` 停止。
 5. 范围门控: 仅 PoC 级验证、仅授权目标;不做武器化、不做沙箱逃逸(探测/交付边界见下方「交付原则」)。
@@ -148,15 +148,15 @@
     **排序**: 预认证 > 认证后/配置后;报文级输入 > 配置级;未理解 > 部分理解;复杂解析器/状态机 > 简单函数。
     **倾向(排序因子,不是禁令)**: 优先"**在常规(已配置/在用)状态下就能打完整链**"的面;做不到就把**窗口/影响当排序因子尽量扩大**。
     **上游 vs 自研(排序因子)**: 厂商自研/改写/胶水/权限映射层 ⇒ 优先;上游本体(vanilla/stripped/无源码)⇒ 只做版本-CVE 排除 + 审厂商接线,本体深挖=高成本备选。
-    **厂商口径门(立项时查一次,结论记 notes §0 + `intel-log`)**: ①查厂商对**认证后**漏洞的态度(政策排除项 + 自家 CVE 先例);
+    **厂商口径门(立项时查一次,结论写 SQLite log/observation；`intel-log` 仅静态历史参考)**: ①查厂商对**认证后**漏洞的态度(政策排除项 + 自家 CVE 先例);
     ②接受认证后 ⇒ 认证后面并入倾向但低一级;③明确排除 ⇒ 降为备查。
     **选面后先问"这个面最像哪一类缺陷"**(对照 `knowledge_search`(pattern + misreport)),直接构造那一类形态去试;"changelog 说它变了"/"半成品"不是工作项。
-11. **强方法 = 静态打底 + 按输入结构选格 × 有方向地探索输入空间**: **静态必做**(给位置与理解);**格由这一面解析的输入决定**——该面**解析外来数据**(参数/JSON/XML/二进制/协议)⇒ 默认格 = **变异/畸形输入**(`fuzz` 或等价的有界输入矩阵);无解析器(纯配置/授权位/启动门)⇒ 差分;密码学门 ⇒ 静态即可;**"等价 oracle"(直接跑目标自带工具)只在它真能覆盖该面的输入空间时才算一格** ✗;并在 notes 写明"静态做了什么 + 叠加了哪几格 + 主判据是谁";**"有界"的量级见 `research-loop` Skill(`references/LOOP.md`)「机械化 oracle 的选择」** ✓ —— **跑完无异常也是证据**,不是白做 ✓;
+11. **强方法 = 静态打底 + 按输入结构选格 × 有方向地探索输入空间**: **静态必做**(给位置与理解);**格由这一面解析的输入决定**——该面**解析外来数据**(参数/JSON/XML/二进制/协议)⇒ 默认格 = **变异/畸形输入**(`fuzz` 或等价的有界输入矩阵);无解析器(纯配置/授权位/启动门)⇒ 差分;密码学门 ⇒ 静态即可;**"等价 oracle"(直接跑目标自带工具)只在它真能覆盖该面的输入空间时才算一格** ✗;并把"静态做了什么 + 叠加了哪几格 + 主判据是谁"写进 attempt/observation（SQLite）;**"有界"的量级见 `research-loop` Skill(`references/LOOP.md`)「机械化 oracle 的选择」** ✓ —— **跑完无异常也是证据**,不是白做 ✓;
     **读码 / 逐个手工试 = 弱方法**(可做,但不得作为唯一手段,也不得据此把面判"干净");失败记录写"用过哪些格、还没试过哪些";下一轮**换格**——但**若失败只是环境/信号层(格本身没问题)⇒ 修因重跑同一格,不算换格**。
     **选格要论证(硬)**: 每个面写明"选了哪格 + **依据**(面的哪些属性)+ **为什么不选别的格**";理由要**可反驳**(具体到卡在哪 / 代价从哪来),不能只写结论;**跳过任何一格都要留痕**(写理由或作为候选进池)—— 细则见 `research-loop` Skill(`references/LOOP.md`)「机械化 oracle 的选择」。
     **判 No finding 前的三行(硬)**: 本面用的格 / 该格的最小证据 / 为什么这个组合够(含"没用其它格"的理由);缺任一行不许判 No finding。
     **对照能做就做,没有也继续挖**(缺对照只降结论强度);**否证要留门**: 被否证的形态写下"还能从哪条路到同一后果"并列下一工作项。两轴清单见 methodology「强方法两轴」。
-12. **资源纪律**: 大规模/复杂算法(状态搜索、语料遍历、插桩与 fuzz、大文件)先定**内存/时间上限**,**流式优先**(禁整份读入),峰值 RSS 记进 notes。
+12. **资源纪律**: 大规模/复杂算法(状态搜索、语料遍历、插桩与 fuzz、大文件)先定**内存/时间上限**,**流式优先**(禁整份读入),峰值 RSS 写进 tool_call/observation（SQLite）。
 12b. **扫描边界(硬)**: **禁**以 `/` 或 `/mnt/*` 为根的递归遍历(`find /`、`grep -R /`、`rg /`、`du /`、`tree /`、`ls -R /`)✗;
    搜索限定已知路径;工具/文件发现先走**低成本阶梯**(`command -v` → `dpkg -L` → `ls /usr/bin/<tool>*` → `find <已知目录> -maxdepth 4`);
    确需从根搜必须**先征得用户许可** + `-xdev` + 排除 `/mnt /proc /sys /dev /run`,**禁扫 Windows 盘**。**细则见 `research-loop` Skill(`references/LOOP.md`)「文件搜索 / 扫描边界」**;harness 层由 `scan-guard` 扩展拦截。
@@ -174,7 +174,7 @@
 - `intel/firmware/<目标>/` — **原始固件归档 = 可重下的缓存**(长期保留的是 `SOURCE_URL.txt`:URL+size+MD5);
   差分/旁证用的历史版本原始件也放这里。任何分析结论必须可从此处重新推导
 - `intel/gpl_src/` · `intel/advisories/` · `intel/writeups/` — 参考资料库,长期保留
-- `state/<目标>/` — 工作现场: rootfs 工作副本、artifacts/(**内部证据 = agent 自查用,不进对外材料**;**大体积派生物统一放 `artifacts/work/`** ⇒ 释放时整目录删 ✓)、notes.md、report/(advisory + INDEX + 复现包 + 截图);
+- `state/<目标>/` — 工作现场: rootfs 工作副本、artifacts/(**内部证据 = agent 自查用,不进对外材料**;**大体积派生物统一放 `artifacts/work/`** ⇒ 释放时整目录删 ✓)、notes.md（可选历史，不自动维护）、report/(advisory + INDEX + 复现包 + 截图);
   目标收尾按守则 7 清理
 - `.agents/skills/` — 按需加载的专项操作知识(标准 `SKILL.md`)
 - `knowledge/` — 静态参考与旧案例原始来源;可查询研究知识在 SQLite `knowledge_entries`
@@ -237,7 +237,6 @@
 
 **旧 Markdown 归属**:
 - `knowledge/methodology.md`、`sdk-bloodlines.md`、`exploits-validated.md`、`intel-log.md` = 静态参考,按需 fs_read;
-- `knowledge/research-knowledge.md` = 一次性迁移种子(DB 导入源,不常驻);
 - `knowledge/INDEX.md` = 静态参考索引/来源说明,不是运行时 Prompt;
 - 旧 raw source（`vuln-patterns.md`、`misreports.md`、`tool-quirks.md`）已移出当前树，Git 历史保留。
 
@@ -372,7 +371,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 
 ### 提交(仅当用户要求时;2026-10-30)
 - 两条浏览器 MCP:①`chrome-devtools`(headless,自起 Chromium — 抓取)②`chrome-live`(`--autoConnect`,连**用户日常 Chrome**,带其登录态)。
-- **先判收不收(读原文,不凭印象)**:读该项目 scope / policy 原文,把**原文摘句 ↔ 我们的事实**并列写进 notes;
+- **先判收不收(读原文,不凭印象)**:读该项目 scope / policy 原文,把**原文摘句 ↔ 我们的事实**并列写进 SQLite log/evidence（`notes.md` 可选）;
   原文明确排除 ⇒ **不提交赏金**,记录原文、走 CVE;原文没写 ⇒ 记「未知」**照常提交**(禁凭类别臆断 ✗)。
   编号由**接收方身份**决定(是 CNA / 平台开了该功能 ⇒ 自动有;都不是 ⇒ 自己申请),**不是**"提交时顺手请求" ✗ —— 细则见 KB「提交前先判「收不收」」✓。
 - **流程**:用户说"提交某份报告" ⇒ ①`python3 tools/chrome-live-probe.py` 探活 ②`ON` 才继续填 ③`OFF` **就地提醒用户**开
@@ -434,7 +433,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 
 ## 工具速查
 - 环境预检: bash tools/check.sh(开工必跑,有 FAIL 先报告)
-- **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|migrate|revise|deprecate`;模型用 `knowledge_search/get/propose/stats/revise/deprecate`。旧 `tools/kb.py` 已移除；静态来源文件只作历史/原始来源，不是知识权威。
+- **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|revise|deprecate`;模型用 `knowledge_search/get/propose/stats/revise/deprecate`。旧 `tools/kb.py` 已移除；静态来源文件只作历史/原始来源，不是知识权威。
 - **默认工具集完整性**: `python3 -m fwcore toolset`(区分仓库资产/外部依赖/能力/服务);只读探针,不启动有副作用的服务。
 - **批量静态/动态工具**: `tools/ghidra_scripts/{ProfileFuncs,DumpFuncsWithStr,DumpDecomp}.java`(函数画像/反编译批处理;Ghidra base = IDA base + 0x100000) + `tools/cgi_fuzz.sh`(对厂商 CGI 有界变异 fuzz,判据 = qemu `uncaught signal`/SIGSEGV;用法见文件头)→ 用法与坑见 `knowledge/methodology.md`「函数画像 × 动作表 join」
 - **JS 页面取件**: `mcp__chrome_devtools__navigate_page` → `take_snapshot` / `list_network_requests` ⇒ 真实下载 URL(curl 拿不到时);见「环境清单 → 取件 / JS 页面」

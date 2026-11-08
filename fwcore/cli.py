@@ -153,10 +153,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("capabilities", help="能力/Provider 探针清单(不重装,只发现)")
     p = sub.add_parser("toolset", help="默认工具集完整性(仓库资产/外部依赖/能力;只读探针)")
     p.add_argument("--json", action="store_true", help="输出 JSON")
-    p = sub.add_parser("knowledge", help="Research Knowledge(检索/迁移/版本/审核)")
+    p = sub.add_parser("knowledge", help="Research Knowledge(检索/版本/审核/经验)")
     sp = p.add_subparsers(dest="knowledge_cmd", required=True)
-    q = sp.add_parser("migrate")
-    q.add_argument("--dry-run", action="store_true")
     q = sp.add_parser("search")
     q.add_argument("query")
     q.add_argument("--kind", choices=["pattern", "misreport", "guideline"])
@@ -398,13 +396,10 @@ def main(argv: list[str] | None = None) -> int:
             ok = rep["ok"] and not rep["dangling_refs"]
             return 0 if ok else 1
         elif args.cmd == "knowledge":
-            from .knowledge import (get as _kb_get, migrate_seed, revise as _kb_revise,
+            from .knowledge import (get as _kb_get, revise as _kb_revise,
                                     search as _kb_search, set_status as _kb_set_status,
                                     stats as _kb_stats)
-            if args.knowledge_cmd == "migrate":
-                print(json.dumps(migrate_seed(args.root, con, dry_run=args.dry_run),
-                                 ensure_ascii=False, indent=2))
-            elif args.knowledge_cmd == "search":
+            if args.knowledge_cmd == "search":
                 print(json.dumps(_kb_search(con, args.query, kind=args.kind,
                                             status=args.status, limit=args.limit),
                                  ensure_ascii=False, indent=2))

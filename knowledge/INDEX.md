@@ -9,7 +9,6 @@
 | 位置 | 内容 | 运行时 |
 |---|---|---|
 | SQLite `knowledge_entries` | 研究知识 + 工具经验（`kind`/`status`/`tags`/`source`） | `knowledge_search` / `knowledge_get` |
-| `research-knowledge.md` | 一次性迁移种子（14 条） | 仅 `knowledge.migrate` 导入；不常驻 |
 | `methodology.md` | 方法论/强方法/建场等静态参考 | 按需 `fs_read` |
 | `sdk-bloodlines.md` | SDK/格式识别静态参考 | 按需 `fs_read` |
 | `exploits-validated.md` | 已验证利用链静态参考 | 按需 `fs_read` |
@@ -25,7 +24,6 @@
 python3 -m fwcore knowledge stats
 python3 -m fwcore knowledge search "认证" --kind pattern
 python3 -m fwcore knowledge get KN-...
-python3 -m fwcore knowledge migrate
 ```
 
 不再通过 Markdown 行数/INDEX 计数校验知识；权威统计用 `python3 -m fwcore knowledge stats`。

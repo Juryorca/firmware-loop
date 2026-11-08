@@ -11,7 +11,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import sqlite3
 import sys
 from datetime import UTC, datetime
@@ -21,17 +20,6 @@ from .db import Tx
 
 KINDS = ("pattern", "misreport", "guideline")
 STATUSES = ("approved", "deprecated", "superseded")  # Agent 直接记录；不设中间审核态
-SEED_FILE = "knowledge/research-knowledge.md"
-HEADING = re.compile(r"(?m)^## (.+)$")
-TAG_WORDS = {
-    "authz": ("认证", "授权", "owner", "权限", "IDOR", "对象"),
-    "proxy": ("代理", "转发", "Host", "XFF", "拓扑", "中继"),
-    "injection": ("注入", "shell", "命令", "参数", "转义"),
-    "memory": ("内存", "溢出", "解析", "长度", "边界", "memcpy", "XML"),
-    "url": ("URL", "路径", "重定向", "Host"),
-    "dos": ("速率", "限流", "拒绝服务", "DoS", "锁定", "资源"),
-    "false-positive": ("误报", "反例", "判据", "排除", "设计内"),
-}
 
 
 def _now() -> str:
@@ -45,35 +33,6 @@ def _sha(text: str) -> str:
 def _stable_id(kind: str, title: str) -> str:
     h = hashlib.sha256(f"{kind}|{title}".encode("utf-8", "replace")).hexdigest()[:14]
     return f"KN-{h}"
-
-
-def parse_seed(path: str) -> list[dict]:
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except OSError:
-        return []
-    marks = list(HEADING.finditer(text))
-    out: list[dict] = []
-    for i, m in enumerate(marks):
-        title = m.group(1).strip()
-        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
-        body = text[m.start():end].strip()
-        if not title or not body:
-            continue
-        kind = "misreport" if ("误报" in title or "反例" in title) else "pattern"
-        if "研究" in title and "知识" in title:
-            kind = "guideline"
-        if title.startswith(("工具判据", "环境判据")):
-            kind = "guideline"
-        tags = {"curated", kind}
-        for tag, words in TAG_WORDS.items():
-            if any(w.lower() in (title + "\n" + body).lower() for w in words):
-                tags.add(tag)
-        out.append({"kind": kind, "title": title, "body_md": body,
-                    "source": path.replace(os.sep, "/"), "source_hash": _sha(body),
-                    "tags": sorted(tags)})
-    return out
 
 
 def _fts_upsert(con: sqlite3.Connection, entry_id: str, title: str, body: str,
@@ -93,62 +52,6 @@ def _insert_version(con: sqlite3.Connection, entry_id: str, version: int, title:
         (f"KNV-{hashlib.sha256(f'{entry_id}|{version}'.encode()).hexdigest()[:16]}",
          entry_id, version, title, body, note, _now()),
     )
-
-
-def migrate_seed(root: str, con: sqlite3.Connection, *, dry_run: bool = False) -> dict:
-    """把 curated seed 导入知识库;幂等,内容变化才产生新版本。
-
-    seed 由 Agent 在提炼时判断为可复用知识,直接是 approved;不设人工/中间审核态。
-    """
-    path = os.path.join(root, SEED_FILE)
-    entries = parse_seed(path)
-    stats = {"seed": SEED_FILE, "parsed": len(entries), "inserted": 0,
-             "updated": 0, "skipped": 0, "versions": 0,
-             "dry_run": bool(dry_run), "entries": []}
-    for e in entries:
-        eid = _stable_id(e["kind"], e["title"])
-        e["id"] = eid
-        e["source"] = SEED_FILE
-        stats["entries"].append({"id": eid, "title": e["title"], "kind": e["kind"]})
-    if dry_run:
-        return stats
-    for e in entries:
-        old = con.execute("SELECT * FROM knowledge_entries WHERE id=?", (e["id"],)).fetchone()
-        if old and old["source_hash"] == e["source_hash"]:
-            # 旧库若还是 needs_review/draft,迁移时按 Agent 直接记录语义收敛到 approved
-            if old["status"] != "approved":
-                with Tx(con) as tx:
-                    tx.execute("UPDATE knowledge_entries SET status='approved',updated_at=?"
-                               " WHERE id=?", (_now(), e["id"]))
-            stats["skipped"] += 1
-            continue
-        with Tx(con) as tx:
-            now = _now()
-            if old:
-                ver = (tx.execute("SELECT COALESCE(MAX(version),0) v FROM knowledge_entry_versions"
-                                  " WHERE entry_id=?", (e["id"],)).fetchone()["v"] + 1)
-                tx.execute("UPDATE knowledge_entries SET title=?,body_md=?,source=?,source_hash=?,"
-                           "updated_at=? WHERE id=?",
-                           (e["title"], e["body_md"], e["source"], e["source_hash"], now, e["id"]))
-                stats["updated"] += 1
-            else:
-                ver = 1
-                tx.execute(
-                    "INSERT INTO knowledge_entries(id,title,body_md,kind,status,source,source_hash,"
-                    "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                    (e["id"], e["title"], e["body_md"], e["kind"], "approved",
-                     e["source"], e["source_hash"], now, now),
-                )
-                stats["inserted"] += 1
-            _insert_version(tx, e["id"], ver, e["title"], e["body_md"],
-                            "curated seed import (agent-approved)")
-            stats["versions"] += 1
-            tx.execute("DELETE FROM knowledge_entry_tags WHERE entry_id=?", (e["id"],))
-            for tag in e["tags"]:
-                tx.execute("INSERT OR IGNORE INTO knowledge_entry_tags(entry_id,tag) VALUES(?,?)",
-                           (e["id"], tag[:80]))
-            _fts_upsert(tx, e["id"], e["title"], e["body_md"], e["tags"])
-    return stats
 
 
 def _row(con: sqlite3.Connection, entry_id: str) -> dict | None:
@@ -292,8 +195,6 @@ def _main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m fwcore.knowledge")
     ap.add_argument("--root", default=os.environ.get("FW_ROOT", os.getcwd()))
     sub = ap.add_subparsers(dest="cmd", required=True)
-    p = sub.add_parser("migrate")
-    p.add_argument("--dry-run", action="store_true")
     p = sub.add_parser("search")
     p.add_argument("query")
     p.add_argument("--kind", choices=KINDS)
@@ -312,10 +213,7 @@ def _main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     con = _db.connect(os.path.join(a.root, "state", "fwcore.sqlite3"))
     try:
-        if a.cmd == "migrate":
-            print(json.dumps(migrate_seed(a.root, con, dry_run=a.dry_run),
-                             ensure_ascii=False, indent=2))
-        elif a.cmd == "search":
+        if a.cmd == "search":
             print(json.dumps(search(con, a.query, kind=a.kind, status=a.status,
                                     limit=a.limit), ensure_ascii=False, indent=2))
         elif a.cmd == "get":

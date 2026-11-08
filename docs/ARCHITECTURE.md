@@ -43,17 +43,17 @@ tools/registry/*.json  仓库工具 manifest(8 个); .agents/skills/*/SKILL.md
 |---|---|---|---|
 | **SQLite**(`state/fwcore.sqlite3`) | 目标/面/假设/尝试/观察/证据/结论;runs/tool_calls/events/usage/checkpoints;**conversation_entries**(面向用户的 append-only 对话) | 程序判定(`gates`/`derive`/`context`/`derived_check`);TUI transcript | 否 |
 | **Artifacts**(`artifacts/`) | 固件/反汇编/原始工具输出/截图/PoC 等原始材料;DB 用 `tool_calls.output_path` 关联回查 | 人复核 + 复现包引用 | 否 |
-| **Markdown**(`notes.md`/`report/`) | `notes.md`=叙述/理由/下一步指针;`report/`=最终交付(advisory/INDEX/attack-surface/CLOSURE/复现包) | 人 | 只有 `report/` 里经过筛选的材料进 `state/`(不进库) |
+| **Markdown**(`notes.md`/`report/`) | `notes.md`=可选历史/人工摘要，不自动维护；`report/`=最终交付(advisory/INDEX/attack-surface/CLOSURE/复现包) | 人 | `report/` 是对外材料；`notes.md` 不承担研究状态 |
 | **临时**(`state/_scratch/`) | 演练/E2E/评测输出、一次性报告 | 当次会话 | 否(有保留期,结束可删) |
 
 | 谁写 | 写什么 | 参与判定 |
 |---|---|---|
 | 模型的 `state_*` 工具 | 假设/尝试/观察/证据/复核/结论/面处置 | ✅ |
 | runtime | `runs`(预算)、`checkpoints`(恢复)、`tool_calls`(产物/来源)、`events`(审计) | ✅ |
-| 模型/人 | `notes.md`(叙述、理由、下一步指针) | ❌ |
+| 模型/人 | `notes.md`(可选历史/人工摘要；不自动维护) | ❌ |
 | finding/收尾时 | `report/`(advisory/INDEX/attack-surface/CLOSURE/复现包) | 材料门读 |
 
-**唯一权威**:研究事实只认 SQLite;`notes.md`/`attack-surface.md` 是叙述与导出视图。
+**唯一权威**:研究事实、决策、下一步只认 SQLite；`notes.md` 是可选历史，`attack-surface.md` 是收尾导出视图。
 运行路径**不读 Markdown**:缺库/缺目标 ⇒ `derived_check`/`gates` 直接 FAIL(没有 legacy 回退);
 旧目标由 `fw-core migrate --all` 一次性导入(`documents` 保原文,结构化内容进各表,模糊内容标 `needs_review`)。
 
