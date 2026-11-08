@@ -271,17 +271,39 @@ def limits_config(root: str | None = None) -> dict:
     return out
 
 
+def load_model_options(root: str | None = None) -> dict:
+    """读取模型的多模态/API 选项（env 覆盖 state/model.json）。
+
+    任何错误都抛 ValueError，由调用方显示诊断；不猜模型能力。
+    """
+    path = os.environ.get("FW_MODEL_CONFIG") or (
+        os.path.join(root, "state", "model.json") if root else "")
+    out = {"api": "", "supports_vision": False, "image_mode": "none"}
+    if path and os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"读不到模型配置 {path}: {e}") from e
+        if not isinstance(data, dict):
+            raise ValueError(f"模型配置顶层必须是 object: {path}")
+        out["api"] = str(data.get("api") or "")
+        out["supports_vision"] = bool(data.get("supports_vision", False))
+        out["image_mode"] = str(data.get("image_mode") or "none")
+    out["api"] = os.environ.get("FW_MODEL_API") or out["api"]
+    if os.environ.get("FW_MODEL_VISION") is not None:
+        out["supports_vision"] = (os.environ.get("FW_MODEL_VISION") or "").lower() in (
+            "1", "true", "yes")
+    out["image_mode"] = os.environ.get("FW_MODEL_IMAGE_MODE") or out["image_mode"]
+    return out
+
+
 def build_adapter(kind: str = "scripted", **kw) -> Adapter:
     if kind in ("scripted", "fake"):
         return ScriptedAdapter(script=kw.get("script") or [])
-    api = (os.environ.get("FW_MODEL_API") or "").lower()
-    if kind == "openai-responses":
-        return OpenAIResponsesAdapter(
-            model=kw.get("model") or os.environ.get("FW_MODEL", "gpt-4o"),
-            base_url=kw.get("base_url") or os.environ.get("FW_BASE_URL", "https://api.openai.com/v1"),
-            api_key=kw.get("api_key", ""),
-            supports_vision=bool(kw.get("supports_vision", True)))
-    if kind in ("openai", "deepseek", "openai-compat") and api == "responses":
+    api = str(kw.get("api") or os.environ.get("FW_MODEL_API") or "").lower()
+    if kind == "openai-responses" or (kind in ("openai", "deepseek", "openai-compat")
+                                      and api == "responses"):
         return OpenAIResponsesAdapter(
             model=kw.get("model") or os.environ.get("FW_MODEL", "gpt-4o"),
             base_url=kw.get("base_url") or os.environ.get("FW_BASE_URL", "https://api.openai.com/v1"),

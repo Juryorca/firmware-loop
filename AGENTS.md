@@ -395,6 +395,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - 被截断时结果带 `full_output_path`（系统临时文件，不是 workspace artifact）；完整输出用它查看（`fs_read` 支持 `offset/limit` 分段读），不在 `artifacts/` 自动建 stdout/stderr 文件。
 - MCP 的大 `structuredContent` 只给模型小摘要，完整 JSON 在 `structured_full_output_path`；不要把它重新整包塞回上下文。
 - MCP 图片走内部 `parts`（路径/哈希，不含 base64），模型适配层再编码；纯文本模型只拿路径和限制。MCP `resources` 的 list/templates/read 工具只在服务器声明 resources 时出现，仍受 MCP 授权门约束。
+- 视觉模型配置：`state/model.json` 或环境变量 `supports_vision`/`image_mode`；标准 OpenAI Responses 用 `api=responses` 走合法的 tool-result 图片，Chat Completions 的 `tool_parts` 只在端点明确支持时启用。
 - 需要长期保存时，Agent 自己用 bash 重定向到 `state/<target>/artifacts/` 或 `state/_scratch/`。
 - `observation` 记录研究事实；`evidence` 必须显式给 `path` 或 `capture`，并复核后才能支撑结论。工具跑过 ≠ 证据。
 

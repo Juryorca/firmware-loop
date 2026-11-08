@@ -36,7 +36,8 @@ def test_env_wins_over_state_file(tmp_path, monkeypatch):
 
 
 def test_state_file_used_when_env_absent(tmp_path, monkeypatch):
-    for k in ("FW_MODEL_API_KEY", "FW_MODEL_BASE_URL", "FW_MODEL_NAME", "FW_API_KEY", "FW_BASE_URL"):
+    for k in ("FW_MODEL_API_KEY", "FW_MODEL_BASE_URL", "FW_MODEL_NAME", "FW_API_KEY",
+              "FW_BASE_URL", "FW_MODEL_API", "FW_MODEL_VISION", "FW_MODEL_IMAGE_MODE"):
         monkeypatch.delenv(k, raising=False)
     state = tmp_path / "state"
     state.mkdir()
@@ -45,7 +46,8 @@ def test_state_file_used_when_env_absent(tmp_path, monkeypatch):
     seen = _capture(monkeypatch)
     _model("openai", str(tmp_path))
     assert seen == {"kind": "openai", "api_key": "file-key",
-                    "base_url": "https://file.example", "model": "file-model"}
+                    "base_url": "https://file.example", "model": "file-model",
+                    "api": "", "supports_vision": False, "image_mode": "none"}
 
 
 def test_missing_config_is_reported(tmp_path, monkeypatch):

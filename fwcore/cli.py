@@ -26,7 +26,7 @@ import sys
 
 from . import db as _db
 from .domain import Domain, DomainError
-from .models import build_adapter, load_model_config
+from .models import build_adapter, load_model_config, load_model_options
 from .runtime import Runner
 
 
@@ -506,7 +506,14 @@ def _model(name: str, root: str, script_path: str | None = None):
                 "模型配置不完整:设置 FW_MODEL_API_KEY/FW_MODEL_BASE_URL/FW_MODEL_NAME,"
                 f"或写 {os.path.join(root, 'state', 'model.json')}"
                 "(字段 api_key/base_url/model)")
-        return build_adapter("openai", api_key=key, base_url=base, model=model)
+        try:
+            extra = load_model_options(root)
+        except ValueError as e:
+            raise SystemExit(f"模型多模态配置错误: {e}") from e
+        return build_adapter("openai", api_key=key, base_url=base, model=model,
+                             api=extra.get("api", ""),
+                             supports_vision=extra.get("supports_vision", False),
+                             image_mode=extra.get("image_mode", "none"))
     # scripted:默认脚本 = 登记一条假设后收束(便于本地冒烟,不产生外部调用);
     # 给了 --script 就用文件里的脚本(测试/复现"模型决定了什么"时唯一确定的手段)
     if script_path:

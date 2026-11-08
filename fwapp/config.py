@@ -12,7 +12,8 @@ from dataclasses import dataclass, field
 
 from fwcore import db as _db
 from fwcore.limits import Limits
-from fwcore.models import build_adapter, limits_config, load_model_config
+from fwcore.models import (build_adapter, limits_config, load_model_config,
+                           load_model_options)
 
 REAL_KINDS = ("openai", "deepseek", "openai-compat")
 
@@ -39,6 +40,9 @@ class AppConfig:
     base_url: str = ""
     model: str = ""
     script: str | None = None
+    api: str = ""
+    supports_vision: bool = False
+    image_mode: str = "none"
 
     @property
     def db_exists(self) -> bool:
@@ -68,6 +72,11 @@ def resolve(opts) -> AppConfig:
         key, base, model = load_model_config(root)
     except Exception as e:
         diags.append(Diagnostic("warning", f"模型配置读取失败: {e}"))
+    model_opts = {"api": "", "supports_vision": False, "image_mode": "none"}
+    try:
+        model_opts = load_model_options(root)
+    except Exception as e:
+        diags.append(Diagnostic("warning", f"模型多模态配置读取失败,使用纯文本: {e}"))
 
     name = (opts.model or os.environ.get("FW_MODEL_NAME") or model or "scripted").strip()
     if name in REAL_KINDS:
@@ -85,7 +94,10 @@ def resolve(opts) -> AppConfig:
         ))
     cfg = AppConfig(root=root, db_path=db_path, model_name=display if kind != "scripted" else "scripted",
                     limits=limits, limits_raw=raw, diagnostics=diags,
-                    api_key=key, base_url=base, model=model, script=opts.script)
+                    api_key=key, base_url=base, model=model, script=opts.script,
+                    api=str(model_opts.get("api") or ""),
+                    supports_vision=bool(model_opts.get("supports_vision", False)),
+                    image_mode=str(model_opts.get("image_mode") or "none"))
     cfg._kind = kind                              # type: ignore[attr-defined]
     return cfg
 
@@ -100,7 +112,9 @@ def adapter_for(cfg: AppConfig, name: str | None = None, script: str | None = No
             raise ModelConfigError(
                 "模型配置不完整:需要 api_key/base_url/model(环境变量或 state/model.json)")
         return build_adapter("openai", api_key=cfg.api_key, base_url=cfg.base_url,
-                             model=cfg.model)
+                             model=cfg.model, api=cfg.api,
+                             supports_vision=cfg.supports_vision,
+                             image_mode=cfg.image_mode)
     # 任意已知 provider 名但没配置 ⇒ 明确失败,不悄悄退回 scripted
     raise ModelConfigError(f"未知模型: {name}(可用: scripted / {cfg.model or 'openai'})")
 

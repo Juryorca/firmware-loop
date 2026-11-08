@@ -136,7 +136,10 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   image part 读成 data URI。Chat Completions 可在显式 `image_mode="tool_parts"`
   时走 image content part；标准 OpenAI Responses 走合法的 `function_call_output`
   text/image 数组；纯文本模型只收到路径和明确限制。HTTP SSE 按行增量读取，
-  只接受与请求 id 匹配的响应。
+  只接受与请求 id 匹配的响应。模型能力来自 `state/model.json` / 环境变量：
+  `api=responses`（合法的 `function_call_output` 图片）、`supports_vision`、
+  `image_mode=tool_parts`（仅在端点确实接受 tool content image parts 时启用）；
+  纯文本模型只得到路径和限制。
 - **MCP Resources**：连接服务器声明 `capabilities.resources` 时才注册
   `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`；
   支持 server 过滤、分页、resource_link、嵌入 text/image/binary/audio；图片按图片处理，
