@@ -132,6 +132,7 @@ class FwApp(App):
         self._last_sigint = 0.0
         self._signal_exit = False
         self._last_title: str | None = None
+        self._last_pending: tuple[str, ...] | None = None
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -163,8 +164,9 @@ class FwApp(App):
                          "warning")
         if self.sess.model_name in ("scripted", "fake"):
             self._notice("演示模式：当前使用本地脚本，不会调用真实模型。", "info")
+        # Pi 的 TUI 只在状态变化/输入后 requestRender；这里保留 250ms 事件泵，
+        # 但不再用 1s 定时器无条件刷新状态栏（那是终端重绘积压的来源）。
         self.set_interval(0.25, self._tick)
-        self.set_interval(1.0, self._update_status)
         # 信号处理函数不能直接依赖 Textual 的消息泵；置标志，由事件循环安全退出。
         self.set_interval(0.1, self._check_signal_exit)
 
@@ -212,6 +214,7 @@ class FwApp(App):
         try:
             self.query_one(StatusBar).update_snapshot(s)
             self.query_one(PendingBar).update_pending(s.pending)
+            self._last_pending = tuple(s.pending)
             self._update_title()
         except NoMatches:
             # interval 可能在 App 退出/卸载后仍触发一次；不能把退出变成异常。
@@ -249,15 +252,20 @@ class FwApp(App):
             w.update_call(call)
 
     def _tick(self) -> None:
-        for ev in self.sess.drain_events():
+        events = self.sess.drain_events()
+        for ev in events:
             self._handle_event(ev)
+        changed = bool(events)
         for call in self.sess.tool_updates():
             self._upsert_tool(call)
-        # 模型调用的内部 usage 不刷进聊天区；状态栏和 /budget 负责展示。
-        try:
-            self.query_one(PendingBar).update_pending(self.sess.pending)
-        except NoMatches:
-            return
+            changed = True
+        pending = tuple(self.sess.pending)
+        if pending != self._last_pending:
+            self._last_pending = pending
+            changed = True
+        # 仿 Pi：只有事件/状态真的变化才刷新状态组件；空闲时不做 DB 快照和重绘。
+        if changed:
+            self._update_status()
 
     def _reset_stream(self) -> None:
         self._stream_msg = None

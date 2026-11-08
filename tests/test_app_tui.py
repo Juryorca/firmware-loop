@@ -601,3 +601,23 @@ def test_idle_tui_does_not_repeat_redraws(tmp_path):
         asyncio.run(scenario())
     finally:
         rt.dispose()
+
+
+def test_tick_skips_status_refresh_when_nothing_changed(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.5)
+            calls: list[int] = []
+            app._update_status = lambda: calls.append(1)  # type: ignore[method-assign]
+            app._tick()
+            assert calls == []
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
