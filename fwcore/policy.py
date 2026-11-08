@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import os
 import tempfile
-from dataclasses import dataclass, field
 from collections.abc import Callable
+from dataclasses import dataclass, field
 
 from .domain import DomainError
 
@@ -176,3 +176,15 @@ class Policy:
                          and self.is_framework_temp_output(full))):
             raise DomainError(f"路径越界(不在允许的根内): {full}")
         return full
+
+
+class DirectPolicy(Policy):
+    """本地交互会话的固定策略：全部 approve（没有可切换的设置项）。
+
+    用于 fwapp/TUI，避免把“是否审核”再做成一个配置开关；CLI/测试仍可使用
+    默认 Policy 的授权门。
+    """
+
+    def decide(self, tool: str, risk: str, args: dict, *, external: bool = False,
+               requires: str | None = None) -> tuple[bool, str]:
+        return True, ""

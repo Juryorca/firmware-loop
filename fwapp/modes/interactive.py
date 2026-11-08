@@ -609,6 +609,24 @@ class FwApp(App):
     def _cmd_tools(self, arg: str) -> None:
         self.push_screen(ToolsetScreen(self.sess.services.cfg.root))
 
+    def _cmd_mcp(self, arg: str) -> None:
+        st = self.sess.mcp_status()
+        lines = [f"MCP: {'启用' if st['enabled'] else '禁用'}",
+                 f"配置: {st['config']}"]
+        if st["config_error"]:
+            lines.append(f"配置错误: {st['config_error']}")
+        elif st["configured"]:
+            lines.append("服务器: " + ", ".join(st["configured"]))
+        else:
+            lines.append("服务器: 未配置")
+        if st["health"]:
+            health = st["health"]
+            lines.append(f"连接: {health.get('servers') or '无'} · "
+                         f"工具数: {health.get('registered') or {}}")
+        if st["skipped"]:
+            lines.append("未启动: " + str(st["skipped"]))
+        self._notice("\n".join(lines))
+
     def _cmd_skills(self, arg: str) -> None:
         from fwcore.skills import catalog
         rows = catalog(self.sess.services.cfg.root)

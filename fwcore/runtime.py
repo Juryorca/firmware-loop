@@ -35,7 +35,7 @@ from .output import (
     limit_structured_for_model,
     truncate_tail,
 )
-from .policy import Policy
+from .policy import DirectPolicy, Policy
 from .research import Research
 from .streaming import StreamCancelled, StreamControl, StreamError, as_event
 from .toolkit import register_repo_tools
@@ -1437,6 +1437,8 @@ class Runner:
         """MCP 能不能启用/启动:**授权**说了算(不是工具名启发式)。"""
         if not self._mcp_enabled:
             return False, "未启用(--no-mcp 或 mcp=False)"
+        if isinstance(self.policy, DirectPolicy):
+            return True, ""
         az = self.policy.authorization
         if az is None:
             return False, ("没有研究授权 ⇒ 不启动 MCP 服务器"

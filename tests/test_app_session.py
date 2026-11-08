@@ -420,3 +420,28 @@ def test_tokens_expose_latest_cache_hit_for_footer(tmp_path):
         assert tok["last_prompt"] == 200 and tok["last_cached"] == 190
     finally:
         rt.dispose()
+
+
+def test_tui_direct_policy_and_mcp_status(tmp_path):
+    """TUI 不再有 authz/allow_all 开关；直接 DirectPolicy，并识别 MCP 配置。"""
+    from fwcore.policy import DirectPolicy
+
+    root, cfg = make_ws(tmp_path)
+    (root / "state").mkdir(exist_ok=True)
+    (root / "state" / "mcp.json").write_text(json.dumps({
+        "mcpServers": {"demo": {"command": "true"}}
+    }), encoding="utf-8")
+    rt = AppRuntime(cfg, target="t1", mcp=False)
+    try:
+        runner = rt.session._make_runner(rt.session.services.con)
+        try:
+            assert isinstance(runner.policy, DirectPolicy)
+            assert runner.policy.decide("shell_exec", "high", {}, requires="mcp")[0]
+        finally:
+            runner.close()
+        status = rt.session.mcp_status()
+        assert status["enabled"] is False
+        assert "demo" in status["configured"]
+        assert status["config_error"] is None
+    finally:
+        rt.dispose()

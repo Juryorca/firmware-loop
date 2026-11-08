@@ -26,6 +26,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("skills", "查看可用技能"),
     Command("knowledge", "检索研究知识库", "<query>"),
     Command("tools", "检查工具就绪状态"),
+    Command("mcp", "查看 MCP 配置与连接状态"),
     Command("tool-setup", "检查并补齐工具"),
     Command("new", "开始新的研究会话（同一目标）"),
     Command("continue", "继续当前研究会话（一轮）"),

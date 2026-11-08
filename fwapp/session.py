@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import queue
 import sqlite3
 import threading
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 from fwcore import db as _db
 from fwcore.compact import estimate_tokens
 from fwcore.models import ScriptedAdapter
+from fwcore.policy import DirectPolicy
 from fwcore.runtime import Runner, RunResult
 
 from .config import AppConfig, adapter_for
@@ -436,12 +438,37 @@ class AgentSession:
         return adapter_for(self.cfg, name)
 
     def _make_runner(self, con: sqlite3.Connection) -> Runner:
+        # 本地交互会话直接全批准（Pi 式），不保留 authz/allow_all 开关。
         return Runner(
             con, self.cfg.root, self._adapter_for(self.model_name),
             limits=self.cfg.limits, watchdog=self._watchdog, mcp=self._mcp,
             watchdog_poll_s=5.0, mcp_call_timeout=120.0,
             on_stream=self._on_stream, stop_event=self._cancel_event,
+            policy=DirectPolicy(),
         )
+
+    def mcp_status(self) -> dict:
+        """给 /mcp 用的只读状态：配置、是否启动、跳过原因。"""
+        cfg_path = os.environ.get("FW_MCP_CONFIG") or os.path.join(
+            self.cfg.root, "state", "mcp.json")
+        names: list[str] = []
+        config_error = None
+        if os.path.isfile(cfg_path):
+            try:
+                from fwcore.mcp_client import load_servers
+                names = sorted(load_servers([cfg_path]))
+            except Exception as e:  # noqa: BLE001 - 状态页必须展示配置错误
+                config_error = str(e)
+        runner = self._runner_ref
+        return {
+            "enabled": self._mcp,
+            "config": os.path.relpath(cfg_path, self.cfg.root)
+            if os.path.isabs(cfg_path) else cfg_path,
+            "configured": names,
+            "config_error": config_error,
+            "health": runner.mcp_health() if runner is not None else None,
+            "skipped": runner.mcp_skipped_reason if runner is not None else None,
+        }
 
     def _on_stream(self, ev: dict) -> None:
         kind = str(ev.get("type") or "stream")
