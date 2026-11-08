@@ -105,10 +105,21 @@ class Manifest:
             raise ManifestError(f"{self.source}: kind 非法 {self.kind!r}(允许 {KINDS})")
         if self.kind == "python" and not self.adapter:
             raise ManifestError(f"{self.source}: python 适配器必须给 adapter(module:func)")
-        if self.kind == "script" and not self.argv:
-            raise ManifestError(f"{self.source}: script 工具必须给 argv")
+        if self.kind == "script":
+            if not self.argv:
+                raise ManifestError(f"{self.source}: script 工具必须给 argv")
+            if not isinstance(self.argv, list) or not all(isinstance(x, str) for x in self.argv):
+                raise ManifestError(f"{self.source}: argv 必须是字符串数组")
         if self.kind == "feature" and not self.adapter:
             raise ManifestError(f"{self.source}: feature 工具必须给 adapter 名")
+        if not isinstance(self.split_args, list) or not all(isinstance(x, str) for x in self.split_args):
+            raise ManifestError(f"{self.source}: split_args 必须是字符串数组")
+        if not isinstance(self.env, dict) or not all(isinstance(k, str) for k in self.env):
+            raise ManifestError(f"{self.source}: env 必须是对象(键为字符串)")
+        if not isinstance(self.timeout, (int, float)) or isinstance(self.timeout, bool):
+            raise ManifestError(f"{self.source}: timeout 必须是数值")
+        if self.cwd is not None and not isinstance(self.cwd, str):
+            raise ManifestError(f"{self.source}: cwd 必须是字符串")
         if not isinstance(self.ok_exit_codes, list) or not all(
                 isinstance(x, int) for x in self.ok_exit_codes):
             raise ManifestError(f"{self.source}: ok_exit_codes 必须是整数数组")

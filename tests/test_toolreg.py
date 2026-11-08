@@ -56,6 +56,12 @@ def test_manifest_validation_rejects_bad_definitions(tmp_path):
                           "kind": "script", "argv": ["true"], "typo_field": 1},
         "bad schema": {"name": "w", "description": "d", "input_schema": {"type": "array"},
                        "kind": "script", "argv": ["true"]},
+        "argv string": {"name": "v", "description": "d", "input_schema": {"type": "object"},
+                        "kind": "script", "argv": "true"},
+        "bad timeout": {"name": "u", "description": "d", "input_schema": {"type": "object"},
+                        "kind": "script", "argv": ["true"], "timeout": "soon"},
+        "bad env": {"name": "s", "description": "d", "input_schema": {"type": "object"},
+                    "kind": "script", "argv": ["true"], "env": []},
     }
     for label, data in cases.items():
         p = _write_manifest(str(tmp_path / "bad"), **{**data, "name": data["name"]})

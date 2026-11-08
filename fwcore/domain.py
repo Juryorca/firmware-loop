@@ -195,11 +195,15 @@ class Domain:
         if disposition == "vulnerable":
             if not evidence_id:
                 raise InvariantViolation("面判 vulnerable 必须给 evidence_id")
-            ev = self.con.execute("SELECT target_id FROM evidence WHERE id=?", (evidence_id,)).fetchone()
+            ev = self.con.execute("SELECT target_id, verified FROM evidence WHERE id=?",
+                                  (evidence_id,)).fetchone()
             if not ev:
                 raise NotFound(f"证据不存在: {evidence_id}")
             if ev["target_id"] != t.id:
                 raise InvariantViolation("证据不属于该目标")
+            if not ev["verified"]:
+                raise InvariantViolation(
+                    "面判 vulnerable 需要已复核证据(工具跑成功/哈希未变不算复核;先 state_verify_evidence)")
         elif disposition in ("no_finding", "out_of_scope"):
             reason_txt = (note or "").strip()
             if len(reason_txt) < 8:

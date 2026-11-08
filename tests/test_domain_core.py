@@ -173,6 +173,10 @@ def test_surface_vulnerable_requires_evidence(dom):
     with pytest.raises(InvariantViolation):
         dom.set_surface_disposition("t1", "12080 /a", "vulnerable")
     ev = dom.add_evidence("t1", "http", capture="200 + admin body")
+    with pytest.raises(InvariantViolation):
+        dom.set_surface_disposition("t1", "12080 /a", "vulnerable", evidence_id=ev)
+    from tests.helpers import verify
+    verify(dom, ev, str(dom.root))
     dom.set_surface_disposition("t1", "12080 /a", "vulnerable", evidence_id=ev)
     row = dom.con.execute("SELECT disposition,judged_by FROM surfaces WHERE key='12080 /a'").fetchone()
     assert row["disposition"] == "vulnerable" and row["judged_by"] == ev
