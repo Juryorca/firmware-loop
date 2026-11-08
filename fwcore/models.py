@@ -212,11 +212,15 @@ def limits_config(root: str | None = None) -> dict:
         try:
             with open(path, encoding="utf-8") as f:
                 d = _json.load(f)
-            for k in keys:
-                if isinstance(d.get(k), int):
-                    out[k] = d[k]
-        except (OSError, ValueError):
-            pass
+        except OSError as e:
+            raise ValueError(f"读不到模型配置 {path}: {e}") from e
+        except _json.JSONDecodeError as e:
+            raise ValueError(f"模型配置 JSON 损坏 {path}: {e}") from e
+        if not isinstance(d, dict):
+            raise ValueError(f"模型配置顶层必须是 object: {path}")
+        for k in keys:
+            if isinstance(d.get(k), int):
+                out[k] = d[k]
     for k in keys:                       # env 覆盖(FW_CONTEXT_TOKENS 等)
         v = _os.environ.get("FW_" + k.upper())
         if v and v.isdigit():
@@ -252,6 +256,8 @@ def load_model_config(root: str | None = None) -> tuple[str, str, str]:
                 cfg = json.load(f)
         except (OSError, json.JSONDecodeError) as e:
             raise ValueError(f"读不到模型配置 {path}: {e}") from e
+        if not isinstance(cfg, dict):
+            raise ValueError(f"模型配置顶层必须是 object: {path}")
         key = key or cfg.get("api_key", "")
         base = base or cfg.get("base_url", "")
         model = model or cfg.get("model", "")

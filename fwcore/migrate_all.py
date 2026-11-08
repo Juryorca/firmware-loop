@@ -687,7 +687,8 @@ def verify_target(con: sqlite3.Connection, root: str, name: str) -> dict:
         real = os.path.realpath(full)
         if real != state_root and not real.startswith(state_root + os.sep):
             escape += 1
+    byte_identical = doc is not None and doc["body"].encode() == raw
     return {"target": name,
-            "ok": doc is not None and doc["body"].encode() == raw and orphan == 0 and escape == 0,
-            "byte_identical": doc is not None, "counts": counts,
+            "ok": byte_identical and orphan == 0 and escape == 0,
+            "byte_identical": byte_identical, "counts": counts,
             "orphan_links": orphan, "path_escapes": escape}

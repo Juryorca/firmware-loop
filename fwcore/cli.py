@@ -489,7 +489,7 @@ def main(argv: list[str] | None = None) -> int:
                 res = runner.resume(args.run_id)
             print(json.dumps({k: v for k, v in res.items() if k != "history"}, ensure_ascii=False, indent=2))
         return 0
-    except DomainError as e:
+    except (DomainError, ValueError) as e:
         print(f"错误: {e}", file=sys.stderr)
         return 2
 

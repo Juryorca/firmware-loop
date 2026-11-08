@@ -106,3 +106,15 @@ def test_limits_config_from_model_json(tmp_path):
         assert limits_config(str(tmp_path))["context_tokens"] == 500_000   # env 覆盖
     finally:
         os.environ.pop("FW_CONTEXT_TOKENS")
+
+
+def test_non_object_model_config_is_rejected(tmp_path, monkeypatch):
+    from fwcore.models import limits_config, load_model_config
+    p = tmp_path / "model.json"
+    p.write_text("[]", encoding="utf-8")
+    monkeypatch.setenv("FW_MODEL_CONFIG", str(p))
+    import pytest
+    with pytest.raises(ValueError):
+        limits_config(str(tmp_path))
+    with pytest.raises(ValueError):
+        load_model_config(str(tmp_path))
