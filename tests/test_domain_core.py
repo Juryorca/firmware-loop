@@ -190,3 +190,31 @@ def test_empty_research_state_blocks_closure(dom):
     b = dom.closure_blockers("t1")
     assert any("没有任何假设" in x for x in b)
     assert any("攻击面" in x for x in b)
+
+
+def test_observation_cannot_use_cross_target_attempt(dom):
+    dom.create_target("t2", version="9")
+    hid = dom.add_hypothesis("t1", "h")
+    aid = dom.start_attempt(hid, "m")
+    with pytest.raises(InvariantViolation):
+        dom.add_observation("t2", "observation", attempt_id=aid)
+
+
+def test_evidence_tool_call_must_belong_to_same_target(dom):
+    dom.create_target("t2", version="9")
+    con = dom.con
+    t2 = dom.target("t2")
+    con.execute("INSERT INTO runs(id,target_id,state,started_at,updated_at) VALUES(?,?,?,?,?)",
+                ("R2", t2.id, "running", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
+    con.execute("INSERT INTO tool_calls(id,run_id,tool,status,created_at) VALUES(?,?,?,?,?)",
+                ("TC-2", "R2", "shell_exec", "ok", "2026-01-01T00:00:00Z"))
+    with pytest.raises(InvariantViolation):
+        dom.add_evidence("t1", "log", capture="x", tool_call_id="TC-2")
+
+
+def test_evidence_attempt_and_hypothesis_must_match(dom):
+    h1 = dom.add_hypothesis("t1", "h1")
+    a1 = dom.start_attempt(h1, "m")
+    h2 = dom.add_hypothesis("t1", "h2")
+    with pytest.raises(InvariantViolation):
+        dom.add_evidence("t1", "log", capture="x", attempt_id=a1, hypothesis_id=h2)

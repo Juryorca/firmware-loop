@@ -104,22 +104,24 @@ def evaluate(con, root: str, target: str) -> GateReport:
             (t.id, rep.version))]
     if rep.evidence_version_mismatch:
         rep.blockers.append(f"{len(rep.evidence_version_mismatch)} 条证据的版本与目标版本({rep.version})不一致")
+    ev_by_hyp = ("e.hypothesis_id=h.id OR e.attempt_id IN "
+                 "(SELECT id FROM attempts WHERE hypothesis_id=h.id)")
     unlinked = [r["id"] for r in con.execute(
         "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'"
-        "   AND (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id)=0", (t.id,))]
+        f"   AND (SELECT COUNT(*) FROM evidence e WHERE {ev_by_hyp})=0", (t.id,))]
     if unlinked:
         rep.blockers.append(f"{len(unlinked)} 条 vulnerable 结论没有挂自己的证据: {unlinked[:3]}")
     # 工具跑成功 ≠ 漏洞成立:证据必须经研究复核(verified=1)才能支撑结论
     unverified = [r["id"] for r in con.execute(
         "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'"
-        "   AND (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1)=0", (t.id,))]
+        f"   AND (SELECT COUNT(*) FROM evidence e WHERE ({ev_by_hyp}) AND e.verified=1)=0",
+        (t.id,))]
     integrity_only = [r["id"] for r in con.execute(
         "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'"
-        "   AND EXISTS (SELECT 1 FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1)"
+        f"   AND EXISTS (SELECT 1 FROM evidence e WHERE ({ev_by_hyp}) AND e.verified=1)"
         "   AND NOT EXISTS (SELECT 1 FROM evidence_checks c JOIN evidence e ON e.id=c.evidence_id"
         "                   WHERE c.method IN ('reproduce-attempt','cross-check') AND e.verified=1"
-        "                     AND (e.hypothesis_id=h.id OR e.attempt_id IN"
-        "                          (SELECT id FROM attempts WHERE hypothesis_id=h.id)))", (t.id,))]
+        f"                     AND ({ev_by_hyp}))", (t.id,))]
     if integrity_only:
         rep.blockers.append(f"{len(integrity_only)} 条 vulnerable 结论只有**产物完整性**复核"
                             f"(哈希没变 ≠ 漏洞成立): {integrity_only[:3]}")
@@ -141,11 +143,10 @@ def evaluate(con, root: str, target: str) -> GateReport:
     # no_finding 允许完整性复核,但如果**只有**完整性复核,报告要标注(不阻断)
     integrity_nf = [r["id"] for r in con.execute(
         "SELECT h.id FROM hypotheses h WHERE h.target_id=? AND h.verdict='no_finding'"
-        "   AND EXISTS (SELECT 1 FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1)"
+        f"   AND EXISTS (SELECT 1 FROM evidence e WHERE ({ev_by_hyp}) AND e.verified=1)"
         "   AND NOT EXISTS (SELECT 1 FROM evidence_checks c JOIN evidence e ON e.id=c.evidence_id"
         "                   WHERE c.method IN ('reproduce-attempt','cross-check') AND e.verified=1"
-        "                     AND (e.hypothesis_id=h.id OR e.attempt_id IN"
-        "                          (SELECT id FROM attempts WHERE hypothesis_id=h.id)))", (t.id,))]
+        f"                     AND ({ev_by_hyp}))", (t.id,))]
     if integrity_nf:
         rep.advisories.append(
             f"{len(integrity_nf)} 条 no_finding 只有**完整性**复核(recheck-sha256):"
@@ -154,8 +155,8 @@ def evaluate(con, root: str, target: str) -> GateReport:
     # ⑤ findings = 判为 vulnerable 且带证据的假设
     for r in con.execute(
         "SELECT h.id, h.title, h.scope_note,"
-        "   (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id) ev,"
-        "   (SELECT COUNT(*) FROM evidence e WHERE e.hypothesis_id=h.id AND e.verified=1) evv"
+        f"   (SELECT COUNT(*) FROM evidence e WHERE {ev_by_hyp}) ev,"
+        f"   (SELECT COUNT(*) FROM evidence e WHERE ({ev_by_hyp}) AND e.verified=1) evv"
         " FROM hypotheses h WHERE h.target_id=? AND h.verdict='vulnerable'", (t.id,)):
         rep.findings.append({"id": r["id"], "title": r["title"],
                              "scope": r["scope_note"], "evidence": r["ev"],

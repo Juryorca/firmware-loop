@@ -106,7 +106,7 @@ class IdaConfig:
         try:
             # 中文 Windows 的 cmd 输出可能是 GBK ⇒ 按字节取、逐编码尝试(不猜死一个编码)
             r = subprocess.run(["cmd.exe", "/c", "echo %APPDATA%"], capture_output=True,
-                               timeout=3)
+                               timeout=3, check=False)
             raw = (getattr(r, "stdout", b"") or b"")
             appdata = ""
             for enc in ("utf-8", "gbk", "cp1252"):
@@ -178,8 +178,13 @@ class IdaConfig:
         stage = self.stage
         if not os.path.isdir(stage):
             out.append(f"暂存目录不存在: {stage}(Windows 路径 {self.win_stage})")
-        elif not os.access(stage, os.W_OK):
-            out.append(f"暂存目录不可写: {stage}")
+        else:
+            try:
+                writable = os.access(stage, os.W_OK)
+            except OSError:
+                writable = False
+            if not writable:
+                out.append(f"暂存目录不可写: {stage}")
         mount = self.drive_mount(self.win_stage[:1] or "D")
         if not os.path.isdir(mount):
             out.append(f"盘符挂载点不存在: {mount}(盘符 {self.win_stage[:1]}:"

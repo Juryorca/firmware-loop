@@ -52,3 +52,11 @@ def test_corrupt_config_is_reported_not_silently_fallback(tmp_path):
         assert "JSON" in str(e)
     else:
         raise AssertionError("corrupt pyenvs.json must raise PyEnvConfigError")
+
+
+def test_module_names_are_validated_before_codegen(tmp_path):
+    import pytest
+    with pytest.raises(ValueError):
+        pyenvs.probe(sys.executable, ("json; import os",))
+    with pytest.raises(ValueError):
+        pyenvs.select(str(tmp_path), ("json", "__import__('os')"))

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
 
 from .domain import DomainError
 

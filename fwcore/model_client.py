@@ -356,7 +356,10 @@ def _parse_sse(lines: Iterable, control: StreamControl | None) -> Iterable[Strea
         if content:
             yield StreamEvent("text_delta", text=content)
         for tc in delta.get("tool_calls") or []:
-            idx = int(tc.get("index") or 0)
+            try:
+                idx = int(tc.get("index") or 0)
+            except (TypeError, ValueError):
+                idx = 0
             fn = tc.get("function") or {}
             if idx not in seen_calls and (tc.get("id") or fn.get("name")):
                 seen_calls.add(idx)

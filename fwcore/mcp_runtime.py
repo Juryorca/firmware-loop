@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers  # noqa: F401
+from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers
 from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, OutputAccumulator
 from .tools import Registry, ToolSpec
 

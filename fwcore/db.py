@@ -344,7 +344,7 @@ def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
     except (TypeError, ValueError):
         ms = 5000
     # 纯整数,没有外部输入(PRAGMA 不能参数化);标注给静态扫描器,避免被误判成注入
-    con.execute(f"PRAGMA busy_timeout={int(max(0, ms))}")  # nosemgrep: python.lang.security.audit.formatted-sql-query
+    con.execute(f"PRAGMA busy_timeout={int(max(0, ms))}")  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     _migrate(con)
     return con
 
@@ -358,9 +358,9 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
         if not _IDENT.match(ident):
             raise ValueError(f"非法标识符: {ident!r}")
     # 标识符已过白名单正则 ⇒ 这两个 f-string 不接受任意输入(DDL 无法参数化)
-    cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}  # nosemgrep: python.lang.security.audit.formatted-sql-query
+    cols = {r[1] for r in con.execute(f"PRAGMA table_info({table})")}  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     if col not in cols:
-        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")  # nosemgrep: python.lang.security.audit.formatted-sql-query
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
 
 # 开发期基线:历史上通过 _stepN 加过的列,一次性列在这里。
@@ -412,7 +412,6 @@ def _migrate(con: sqlite3.Connection) -> None:
                 f"    python3 tools/db_rebaseline.py {con.execute('PRAGMA database_list').fetchone()[2]}\n"
                 f"  该脚本会做一致性快照、补齐基线列、校验完整性与关联。")
     con.executescript(script)
-    row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if row is None or int(row["value"]) == 0:
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",

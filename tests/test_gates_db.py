@@ -105,7 +105,22 @@ def test_vulnerable_without_linked_evidence_is_blocker(tmp_path):
     from tests.helpers import verify
     verify(dom, ev, root)
     dom.conclude(hid, "vulnerable", "仅 /api/x")
-    con.execute("UPDATE evidence SET hypothesis_id=NULL")     # 模拟历史/外部写入导致的失联
+    con.execute("UPDATE evidence SET hypothesis_id=NULL, attempt_id=NULL")  # 模拟彻底失联
     rep = evaluate(con, root, "t1")
     assert any("没有挂自己的证据" in b for b in rep.blockers)
+
+
+def test_attempt_linked_evidence_counts_for_finding(tmp_path):
+    """conclude 允许证据只挂 attempt;gates/findings 必须用同一口径，不能误挡。"""
+    con, dom, root = _mk(tmp_path)
+    hid = dom.add_hypothesis("t1", "越权")
+    aid = dom.start_attempt(hid, "diff")
+    ev = dom.add_evidence("t1", "http", capture="200", attempt_id=aid)
+    dom.finish_attempt(aid, "supported", "ok", obs_outcome="none", obs_reason="与预期一致,无新观察")
+    from tests.helpers import verify
+    verify(dom, ev, root)
+    dom.conclude(hid, "vulnerable", "仅 /api/x")
+    rep = evaluate(con, root, "t1")
+    assert rep.findings and rep.findings[0]["ok"] is True
+    assert not any("没有挂自己的证据" in b for b in rep.blockers)
 

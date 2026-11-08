@@ -100,7 +100,7 @@ def test_http_transport_initialize_list_and_call():
             self.end_headers()
             self.wfile.write(data)
 
-        def log_message(self, *args):
+        def log_message(self, format, *args):
             pass
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -169,7 +169,42 @@ def test_mcp_child_pgid_registered_for_orphan_cleanup(tmp_path):
     try:
         parts = pg.read_text(encoding="utf-8").strip().split()
         assert len(parts) == 2, parts
+        assert c._proc is not None
         assert parts[0] == str(os.getpgid(c._proc.pid))
         assert int(parts[1]) == _proc_starttime(c._proc.pid)
     finally:
         c.close()
+
+
+NOISY = r'''
+import json, sys
+sys.stderr.write("x" * 300000); sys.stderr.flush()
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n"); sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line); rid = msg.get("id"); m = msg.get("method")
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2024-11-05",
+              "serverInfo": {"name": "noisy", "version": "1"}, "capabilities": {}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"tools": []}})
+'''
+
+
+def test_noisy_stderr_does_not_block_stdio(tmp_path):
+    with MCPClient(_server(tmp_path, NOISY), timeout=5) as c:
+        assert c.initialize()["serverInfo"]["name"] == "noisy"
+        assert c.list_tools() == []
+        assert len(c.last_stderr()) <= 8192
+
+
+def test_load_servers_rejects_non_string_url_and_command(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps({"mcpServers": {"x": {"command": "true", "url": 123}}}), encoding="utf-8")
+    with pytest.raises(MCPConfigError):
+        load_servers([str(p)])
+    p.write_text(json.dumps({"mcpServers": {"x": {"command": 123}}}), encoding="utf-8")
+    with pytest.raises(MCPConfigError):
+        load_servers([str(p)])

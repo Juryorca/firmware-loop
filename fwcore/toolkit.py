@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 
 from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,

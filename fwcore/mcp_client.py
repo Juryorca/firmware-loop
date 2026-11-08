@@ -15,6 +15,7 @@ import os
 import select
 import signal
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -79,16 +80,25 @@ def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
                 raise MCPConfigError(f"{path}: {name}.args 必须是字符串数组")
             if not isinstance(env, dict):
                 raise MCPConfigError(f"{path}: {name}.env 必须是 object")
+            url = srv.get("url")
+            if url is not None and not isinstance(url, str):
+                raise MCPConfigError(f"{path}: {name}.url 必须是字符串")
+            command = srv.get("command") or ""
+            if not isinstance(command, str):
+                raise MCPConfigError(f"{path}: {name}.command 必须是字符串")
             out[name] = ServerSpec(
                 name=name,
-                command=srv.get("command") or "",
+                command=command,
                 args=args,
                 env=env,
-                url=srv.get("url"),
+                url=url,
                 enabled=srv.get("enabled", True) is not False,
                 external=(None if srv.get("external") is None else bool(srv.get("external"))),
             )
     return out
+
+
+MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
 
 class MCPClient:
@@ -103,6 +113,8 @@ class MCPClient:
         self._next_id = 0
         self._buf = b""
         self._http_session: str | None = None
+        self._stderr_tail = bytearray()
+        self._stderr_thread: threading.Thread | None = None
 
     # ---------- 生命周期 ----------
     def __enter__(self) -> MCPClient:
@@ -123,6 +135,13 @@ class MCPClient:
             [self.spec.command, *self.spec.args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, env=env, start_new_session=True,
         )
+        # stderr 必须持续读走:服务端日志写满 pipe 会让整个 MCP 调用永久卡住。
+        if self._proc.stderr is not None:
+            err_stream = self._proc.stderr
+            self._stderr_thread = threading.Thread(
+                target=self._drain_stderr, args=(err_stream,), daemon=True,
+                name=f"fwcore-mcp-stderr-{self.spec.name}")
+            self._stderr_thread.start()
         if self.pgids_path:
             # 登记到 run 的 .pgids:硬崩溃后 claim/recover/看护能按 starttime 核验并清掉孤儿 MCP
             try:
@@ -143,6 +162,22 @@ class MCPClient:
             self._proc.wait(timeout=5)
         self._proc = None
 
+    def _drain_stderr(self, stream) -> None:
+        """持续排空 stderr，只保留末尾一小段供诊断（避免 PIPE 写满死锁）。"""
+        try:
+            while True:
+                chunk = stream.read(4096)
+                if not chunk:
+                    break
+                self._stderr_tail.extend(chunk)
+                if len(self._stderr_tail) > 8192:
+                    del self._stderr_tail[:-8192]
+        except (OSError, ValueError):
+            pass
+
+    def last_stderr(self) -> str:
+        return bytes(self._stderr_tail).decode("utf-8", errors="replace")
+
     # ---------- 协议 ----------
     def _send(self, obj: dict) -> None:
         if not self._proc or not self._proc.stdin:
@@ -159,7 +194,8 @@ class MCPClient:
         }
         if self._http_session:
             headers["Mcp-Session-Id"] = self._http_session
-        req = urllib.request.Request(
+        # start() 已把 transport 限定为 http(s);这里仍是用户配置 URL,标注给静态扫描器。
+        req = urllib.request.Request(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             self.spec.url or "", data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers=headers, method="POST")
         try:
@@ -169,12 +205,14 @@ class MCPClient:
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
                 stream = opener.open(req, timeout=timeout)
             else:
-                stream = urllib.request.urlopen(req, timeout=timeout)
+                stream = urllib.request.urlopen(req, timeout=timeout)  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             with stream as resp:
                 session = resp.headers.get("Mcp-Session-Id")
                 if session:
                     self._http_session = session
-                raw = resp.read()
+                raw = resp.read(MAX_MESSAGE_BYTES + 1)
+                if len(raw) > MAX_MESSAGE_BYTES:
+                    raise MCPError(f"{self.spec.name}: HTTP MCP 响应超过 {MAX_MESSAGE_BYTES} 字节上限")
                 content_type = (resp.headers.get("Content-Type") or "").lower()
                 if not raw:
                     return {}
@@ -226,6 +264,8 @@ class MCPClient:
             if not chunk:
                 raise MCPError(f"{self.spec.name}: 服务端已关闭连接")
             self._buf += chunk
+            if len(self._buf) > MAX_MESSAGE_BYTES:
+                raise MCPError(f"{self.spec.name}: 单条 MCP 消息超过 {MAX_MESSAGE_BYTES} 字节上限")
         raise MCPError(f"{self.spec.name}: 等待响应超时({self.timeout}s)")
 
     def request(self, method: str, params: dict | None = None, timeout: float | None = None) -> dict:

@@ -307,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
             r = Runner(con, args.root, ScriptedAdapter(script=[]))
             print(json.dumps(r.progress(args.run_id), ensure_ascii=False, indent=2))
         elif args.cmd == "context":
-            from .compact import estimate_tokens, threshold_tokens
+            from .compact import threshold_tokens
             from .contextinfo import build_status
             from .limits import Limits
             from .models import limits_config, load_model_config
@@ -536,8 +536,8 @@ def render_view(con, root: str, target: str) -> str:
     lines = [f"# {t.name} — 状态视图(由 fw-core 生成,勿手改)", ""]
     lines.append(f"- 版本: {d['version'] or '未知'}")
     lines.append(f"- 面覆盖: {d['surface_coverage']}  (未判定 {d['surfaces'].get('unjudged', 0)})")
-    lines.append(f"- 假设: " + ", ".join(f"{k}={v}" for k, v in d["hypotheses"].items() if v))
-    lines.append(f"- 尝试: " + ", ".join(f"{k}={v}" for k, v in d["attempts"].items() if v))
+    lines.append("- 假设: " + ", ".join(f"{k}={v}" for k, v in d["hypotheses"].items() if v))
+    lines.append("- 尝试: " + ", ".join(f"{k}={v}" for k, v in d["attempts"].items() if v))
     lines.append(f"- 证据: {d['evidence']} 条")
     if d["closure_blockers"]:
         lines += ["", "## 收尾阻塞(程序可核)"] + [f"- {b}" for b in d["closure_blockers"]]

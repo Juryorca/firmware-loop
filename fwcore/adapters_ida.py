@@ -173,7 +173,8 @@ class IdAdapter(Adapter):
         with contextlib_suppress():
             subprocess.run(["bash", script], cwd=self.root, timeout=90,
                            env={**os.environ, **_shell_env(cfg)},
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           check=False)
         self._started = False
 
     def health(self) -> dict:

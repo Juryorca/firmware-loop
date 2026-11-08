@@ -16,7 +16,7 @@ CHARS_PER_TOKEN = 2.0
 
 
 def estimate_tokens(messages: list[dict]) -> int:
-    """粗估 token(字符/3.5)。仅用于"该不该压缩",不用于计费。"""
+    """粗估 token(字符/2.0)。仅用于"该不该压缩",不用于计费。"""
     n = 0
     for m in messages:
         c = m.get("content")

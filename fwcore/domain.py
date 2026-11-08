@@ -350,6 +350,14 @@ class Domain:
         t = self.target(target)
         sha = None
         relation = None
+        if attempt_id:
+            a = self.con.execute(
+                "SELECT h.target_id FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id"
+                " WHERE a.id=?", (attempt_id,)).fetchone()
+            if not a:
+                raise NotFound(f"尝试不存在: {attempt_id}")
+            if a["target_id"] != t.id:
+                raise InvariantViolation("attempt 不属于该目标(观察不能跨目标关联)")
         if tool_call_id:
             tc = self.con.execute(
                 "SELECT t.id, t.status, r.target_id FROM tool_calls t"
@@ -493,28 +501,36 @@ class Domain:
         手工采集(path/capture 由研究自己给出)默认视为已复核(那是研究动作本身),但仍要记来源。
         """
         t = self.target(target)
+        attempt_hid = None
         if attempt_id:
             a = self.con.execute(
-                "SELECT h.target_id FROM attempts a JOIN hypotheses h ON h.id=a.hypothesis_id WHERE a.id=?",
-                (attempt_id,)).fetchone()
+                "SELECT a.hypothesis_id, h.target_id FROM attempts a JOIN hypotheses h"
+                " ON h.id=a.hypothesis_id WHERE a.id=?", (attempt_id,)).fetchone()
             if not a:
                 raise NotFound(f"尝试不存在: {attempt_id}")
             if a["target_id"] != t.id:
                 raise InvariantViolation("attempt 不属于该目标(证据不能跨目标关联)")
+            attempt_hid = a["hypothesis_id"]
         if hypothesis_id:
             h = self.con.execute("SELECT target_id FROM hypotheses WHERE id=?", (hypothesis_id,)).fetchone()
             if not h:
                 raise NotFound(f"假设不存在: {hypothesis_id}")
             if h["target_id"] != t.id:
                 raise InvariantViolation("hypothesis 不属于该目标")
+            if attempt_hid and attempt_hid != hypothesis_id:
+                raise InvariantViolation("attempt 不属于该 hypothesis(证据关联不能跨假设)")
         ver = version if version is not None else (t.version or "unknown")
         # 证据创建时**永远**未复核:复核是另一条独立动作(verify_evidence),要留可检查的记录
         verified = 0
         if tool_call_id:
-            tc = self.con.execute("SELECT status, provider, capability, result_path FROM tool_calls"
-                                  " WHERE id=?", (tool_call_id,)).fetchone()
+            tc = self.con.execute(
+                "SELECT t.status, t.provider, t.capability, t.result_path, r.target_id"
+                " FROM tool_calls t LEFT JOIN runs r ON r.id=t.run_id WHERE t.id=?",
+                (tool_call_id,)).fetchone()
             if not tc:
                 raise NotFound(f"工具调用不存在: {tool_call_id}")
+            if tc["target_id"] and tc["target_id"] != t.id:
+                raise InvariantViolation("证据与工具调用不属于同一个目标")
             if tc["status"] != "ok":
                 raise InvariantViolation(
                     f"工具调用状态是 {tc['status']}(不是 ok)⇒ 不能作为证据来源"
@@ -870,8 +886,9 @@ class Domain:
         missing: list[str] = []
         advisories = []
         if not os.path.isdir(rdir):
-            return {"advisories": [], "missing": [f"report/ 不存在(找过: {', '.join(
-                os.path.relpath(d, self.root) for d in candidates)})"], "ok": False}
+            looked = ", ".join(os.path.relpath(d, self.root) for d in candidates)
+            return {"advisories": [], "missing": [f"report/ 不存在(找过: {looked})"],
+                    "ok": False}
         try:
             entries = sorted(os.listdir(rdir))
         except OSError as e:

@@ -18,9 +18,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
+
+
+MODULE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 
 
 class PyEnvConfigError(RuntimeError):
@@ -87,6 +91,9 @@ class Probe:
 
 
 def probe(path: str, modules: tuple[str, ...] = ()) -> Probe:
+    bad = [m for m in modules if not MODULE_RE.match(m)]
+    if bad:
+        raise ValueError(f"非法 Python 模块名: {bad!r}")
     if not os.path.isfile(path):
         return Probe(path, "missing", "解释器不存在")
     try:
@@ -141,6 +148,9 @@ def _main(argv: list[str] | None = None) -> int:
         return 0
     except PyEnvConfigError as e:
         print(f"PYENV_CONFIG_ERROR: {e}", file=sys.stderr)
+        return 2
+    except ValueError as e:
+        print(f"PYENV_ARG_ERROR: {e}", file=sys.stderr)
         return 2
 
 

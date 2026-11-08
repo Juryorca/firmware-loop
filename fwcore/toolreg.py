@@ -27,7 +27,6 @@ import os
 import re
 import shlex
 import subprocess
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -420,7 +419,7 @@ def _capability_probe_hint(ctx: ToolContext, cap_name: str) -> str | None:
     cap = default_capabilities(ctx.root).get(cap_name)
     if cap is None:
         return None
-    best, probe = cap.best()
+    _best, probe = cap.best()
     if probe is None or probe.status == "missing":
         return f"能力不可用:{cap_name} 没有可用 provider(不会静默成功)"
     return None
