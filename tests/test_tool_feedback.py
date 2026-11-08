@@ -121,6 +121,18 @@ def test_link_command_write_is_weak(tmp_path):
     assert res["relation"] == "command-write" and res["direct"] is False
 
 
+def test_fs_read_clamps_oversized_limit(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    path = os.path.join(root, "huge.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("A" * (2 * 1024 * 1024))
+    out = default_registry().call(_ctx(dom, root), "fs_read",
+                                   {"path": "huge.txt", "limit": 100 * 1024 * 1024})
+    assert out["status"] == "ok" and out["truncated"] is True
+    assert out["truncated"] is True
+    assert len(out["text"].encode("utf-8")) <= 1024 * 1024
+
+
 def test_fs_read_uses_pi_head_limits(tmp_path):
     con, dom, root = _setup(tmp_path)
     with open(os.path.join(root, "many.txt"), "w", encoding="utf-8") as f:

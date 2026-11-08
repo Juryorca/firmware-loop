@@ -6,7 +6,7 @@ audience: development
 
 # fwcore 开发方法
 
-`fwcore` 是独立产品:`fwloop/` + `fwcore/`(runtime/domain/tools/research)、`tools/registry/*.json`、
+`fwcore` 是独立产品:`fwcore/`(runtime/domain/tools/research) + `fwapp/` 应用层、`tools/registry/*.json`、
 `eval/`、`tests/`。Pi/DS 只是外部开发工具,**不在产品依赖里**(`.pi/` 已 gitignore)。
 
 ## 1. 开始前(5 分钟)

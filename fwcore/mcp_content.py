@@ -6,7 +6,8 @@ text/image 部件。图片和二进制只保存临时文件，模型历史里存
 
 这里的安全上限是本地工程边界（不是 Pi 的 MCP 文本 20 KiB）：
 - 单张图片解码后 4 MiB；
-- 单个 MCP 结果最多 8 张图片。
+- 单个 MCP 结果最多 8 张图片（直接 image 和 embedded resource 共用同一预算）；
+- 二进制 resource / audio 单块 8 MiB。
 超限/非法 base64/MIME 一律降级成文本说明，不让工具结果崩溃。
 """
 
@@ -142,10 +143,19 @@ def binary_part(data_b64: Any, mime: Any, uri: str, *, label: str = "binary reso
 
 
 def resource_parts(contents: list[dict] | None, *, server: str, uri: str = "",
-                   labels: bool = False, store_dir: str | None = None) -> list[dict]:
-    """resources/read contents -> ordered text/image parts."""
+                   labels: bool = False, store_dir: str | None = None,
+                   max_images: int = MAX_IMAGES_PER_RESULT) -> list[dict]:
+    """resources/read contents -> ordered text/image parts.
+
+    `max_images` lets a caller with an existing result-level image budget avoid
+    creating more files than the global per-result limit.
+    """
     out: list[dict] = []
     image_count = 0
+    try:
+        max_images = max(0, int(max_images))
+    except (TypeError, ValueError):
+        max_images = MAX_IMAGES_PER_RESULT
     for item in contents or []:
         if not isinstance(item, dict):
             out.append({"type": "text", "text": "[unsupported resource content]"})
@@ -158,9 +168,9 @@ def resource_parts(contents: list[dict] | None, *, server: str, uri: str = "",
         elif "blob" in item:
             mime = item.get("mimeType")
             if _base_mime(mime).startswith("image/"):
-                if image_count >= MAX_IMAGES_PER_RESULT:
+                if image_count >= max_images:
                     part = {"type": "text",
-                            "text": f"[image {cur_uri} omitted: more than {MAX_IMAGES_PER_RESULT} images]"}
+                            "text": f"[image {cur_uri} omitted: more than {max_images} images]"}
                 else:
                     image_count += 1
                     part = image_part(item.get("blob"), mime, label=f"image {cur_uri}",
@@ -190,7 +200,7 @@ def content_parts(content: list[dict] | None, *, server: str,
                   store_dir: str | None = None) -> list[dict]:
     """MCP CallToolResult.content -> ordered internal parts."""
     out: list[dict] = []
-    image_count = 0
+    image_budget = MAX_IMAGES_PER_RESULT
     for block in content or []:
         if not isinstance(block, dict):
             out.append({"type": "text", "text": "[unsupported MCP content]"})
@@ -200,17 +210,21 @@ def content_parts(content: list[dict] | None, *, server: str,
             text = block.get("text")
             out.append({"type": "text", "text": text if isinstance(text, str) else ""})
         elif kind == "image":
-            if image_count >= MAX_IMAGES_PER_RESULT:
+            if image_budget <= 0:
                 out.append({"type": "text",
                             "text": f"[image omitted: more than {MAX_IMAGES_PER_RESULT} images]"})
             else:
-                image_count += 1
+                image_budget -= 1
                 out.append(image_part(block.get("data"), block.get("mimeType"),
                                       store_dir=store_dir))
         elif kind == "audio":
             raw = _decode_base64(block.get("data"))
             if raw is None:
                 out.append({"type": "text", "text": "[audio omitted: invalid base64]"})
+            elif len(raw) > MAX_BINARY_BYTES:
+                out.append({"type": "text",
+                            "text": f"[audio omitted: {len(raw)} bytes exceeds "
+                                    f"{MAX_BINARY_BYTES} byte limit]"})
             else:
                 try:
                     path = _save_bytes(raw, prefix=TEMP_RESOURCE_PREFIX, suffix=".audio",
@@ -226,8 +240,10 @@ def content_parts(content: list[dict] | None, *, server: str,
             res = block.get("resource")
             if isinstance(res, dict):
                 rp = resource_parts([res], server=server,
-                                    uri=str(res.get("uri") or ""), store_dir=store_dir)
+                                    uri=str(res.get("uri") or ""), store_dir=store_dir,
+                                    max_images=image_budget)
                 out.extend(rp)
+                image_budget -= sum(1 for p in rp if p.get("type") == "image")
             else:
                 out.append({"type": "text", "text": "[unsupported embedded resource]"})
         else:

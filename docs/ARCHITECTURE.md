@@ -31,7 +31,7 @@ fwcore/  db.py(SCHEMA v17/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变
          gates_db.py(权威 Gate)                  models/model_client(适配器/协议)
          policy.py(Authz)  limits.py(边界)  watchdog.py  migrate_all.py  cli.py
 fwapp/  应用层(TUI/print,薄组合;见 docs/APP.md)
-fwloop/  兼容入口        scripts/ 演练与 e2e        eval/ 答案隔离评测
+scripts/ 演练与 e2e        eval/ 答案隔离评测
 tools/registry/*.json  仓库工具 manifest(8 个); .agents/skills/*/SKILL.md
 ```
 
@@ -144,7 +144,8 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **MCP Resources**：连接服务器声明 `capabilities.resources` 时才注册
   `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`；
   支持 server 过滤、分页、resource_link、嵌入 text/image/binary/audio；图片按图片处理，
-  二进制落临时文件，音频明确标注无音频输入能力。
+  二进制落临时文件，音频明确标注无音频输入能力。资源工具本身跨 server，只要有任一
+  server 未声明 `external=false`，三个资源工具也按外部工具走同一授权门。
 - **conversation/checkpoint**：conversation 的 live tool payload 与 Pi 边界一致；
   checkpoint 的磁盘保护另有 `CHECKPOINT_TOOL_TAIL_CHARS=2000`，不混同 live 输出。
 - **错误/探针摘要**（如 160/600 字符）只用于状态说明，不承载完整工具输出。
@@ -160,7 +161,8 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   也只能留摘要，完整 JSON 落临时文件并在 `structured_full_output_path` 指回。
 - **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP transport 单条消息 `16 MiB`、
   Skill 文件 `512 KiB`、错误摘要 `160/600` 字符、legacy 修复 excerpt `1500`、
-  MCP observation `2000`、图片单张 `4 MiB`/单结果 `8` 张、资源分页 `50` 页。
+  MCP observation `2000`、图片单张 `4 MiB`/单结果 `8` 张（含 embedded resource）、
+  二进制/音频单块 `8 MiB`、资源分页 `50` 页。
   这些应保持命名常量/局部理由，不能反过来冒充 Pi。
 
 ## 5. 上下文生命周期(静态前缀 + 尾部状态 + 阈值压缩)

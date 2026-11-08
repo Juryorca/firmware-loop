@@ -12,6 +12,7 @@ import os
 import sys
 
 from fwcore import db as _db
+from fwcore import mcp_content
 from fwcore.domain import Domain
 from fwcore.mcp_client import ServerSpec
 from fwcore.mcp_content import (MAX_IMAGE_BYTES, MAX_IMAGES_PER_RESULT,
@@ -151,14 +152,14 @@ for line in sys.stdin:
 '''
 
 
-def _start(tmp_path):
+def _start(tmp_path, *, external: bool | None = False):
     script = tmp_path / "fake_mcp.py"
     script.write_text(FAKE, encoding="utf-8")
     cfg = tmp_path / "mcp.json"
     cfg.write_text(json.dumps({"mcpServers": {"fake": {
-        "command": sys.executable, "args": [str(script)], "external": False}}}),
+        "command": sys.executable, "args": [str(script)], "external": external}}}),
         encoding="utf-8")
-    spec = ServerSpec(name="fake", command=sys.executable, args=[str(script)], external=False)
+    spec = ServerSpec(name="fake", command=sys.executable, args=[str(script)], external=external)
     root = str(tmp_path)
     con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
     dom = Domain(con, root)
@@ -269,6 +270,44 @@ def test_resource_tools_list_pages_read_types_and_link(tmp_path):
         bad = reg.call(ctx, "read_mcp_resource", {"server": "nope", "uri": "res://x"})
         assert bad["status"] == "error"
         _cleanup(img)
+    finally:
+        bridge.close()
+
+
+def test_content_parts_caps_images_across_direct_and_embedded_resources(tmp_path):
+    img = {"type": "image", "data": PNG, "mimeType": "image/png"}
+    embedded = {"type": "resource", "resource": {
+        "uri": "res://many", "mimeType": "image/png", "blob": PNG}}
+    parts = content_parts([img] * 5 + [embedded] * 5, server="fake",
+                          store_dir=str(tmp_path / "content"))
+    images = [p for p in parts if p.get("type") == "image"]
+    assert len(images) == MAX_IMAGES_PER_RESULT
+    assert any("omitted" in p.get("text", "") for p in parts if p.get("type") == "text")
+    for path in {p["path"] for p in images}:
+        os.unlink(path)
+
+
+def test_content_parts_rejects_oversized_audio(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcp_content, "MAX_BINARY_BYTES", 4)
+    parts = content_parts([{"type": "audio", "mimeType": "audio/wav",
+                            "data": base64.b64encode(b"12345").decode()}],
+                          server="fake", store_dir=str(tmp_path / "content"))
+    assert len(parts) == 1 and parts[0]["type"] == "text"
+    assert "exceeds 4 byte limit" in parts[0]["text"]
+
+
+def test_resource_tools_inherit_external_gate(tmp_path):
+    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path, external=None)
+    try:
+        assert reg.specs["read_mcp_resource"].external is True
+        strict = ToolContext(domain=dom, root=root,
+                             policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
+        denied = reg.call(strict, "read_mcp_resource", {"server": "fake", "uri": "res://text"})
+        assert denied["status"] == "cancelled"
+        allowed = ToolContext(domain=dom, root=root, policy=Policy(authorization=Authz(
+            roots=[root], allow_high_risk=True, allow_external_mcp=True)))
+        out = reg.call(allowed, "read_mcp_resource", {"server": "fake", "uri": "res://text"})
+        assert out["status"] == "ok" and "hello resource" in out["text"]
     finally:
         bridge.close()
 

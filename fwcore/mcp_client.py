@@ -334,6 +334,8 @@ class MCPClient:
             msg = self._http_post({"jsonrpc": "2.0", "id": rid, "method": method,
                                    "params": params or {}},
                                   timeout if timeout is not None else self.timeout)
+            if not isinstance(msg, dict):
+                raise MCPError(f"{self.spec.name}: 非法 JSON-RPC 响应(顶层不是 object)")
             if "error" in msg:
                 raise MCPError(f"{self.spec.name}: {method} 失败: {msg['error']}")
             return msg.get("result") or {}
@@ -341,6 +343,8 @@ class MCPClient:
         deadline = time.time() + (timeout if timeout is not None else self.timeout)
         while True:
             msg = self._read_message(deadline, timeout)
+            if not isinstance(msg, dict):
+                raise MCPError(f"{self.spec.name}: 非法 JSON-RPC 响应(顶层不是 object)")
             if msg.get("id") != rid:
                 continue                      # 忽略通知/其它响应
             if "error" in msg:
@@ -358,7 +362,9 @@ class MCPClient:
     def initialize(self) -> dict:
         result = self.request("initialize", {"protocolVersion": "2024-11-05", "capabilities": {},
                                              "clientInfo": {"name": "fwcore", "version": "0.4"}})
-        caps = result.get("capabilities") if isinstance(result, dict) else {}
+        if not isinstance(result, dict):
+            raise MCPError(f"{self.spec.name}: initialize 结果不是 object")
+        caps = result.get("capabilities")
         self.capabilities = caps if isinstance(caps, dict) else {}
         self.notify("notifications/initialized")
         return result
@@ -374,13 +380,33 @@ class MCPClient:
         seen: set[str] = set()
         for _ in range(50):
             result = self.request("tools/list", {} if not cursor else {"cursor": cursor})
-            tools = result.get("tools") or []
+            if not isinstance(result, dict):
+                raise MCPError(f"{self.spec.name}: tools/list 结果不是 object")
+            tools = result.get("tools")
+            if tools is None:
+                tools = []
+            if not isinstance(tools, list):
+                raise MCPError(f"{self.spec.name}: tools/list.tools 不是数组")
             for t in tools:
-                out.append({"name": t.get("name"), "description": t.get("description", ""),
-                            "input_schema": t.get("inputSchema") or {}})
+                if not isinstance(t, dict):
+                    raise MCPError(f"{self.spec.name}: tools/list 含非 object 工具")
+                name = t.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise MCPError(f"{self.spec.name}: tools/list 工具有空/非字符串 name")
+                schema = t.get("inputSchema")
+                if schema is None:
+                    schema = {}
+                if not isinstance(schema, dict):
+                    raise MCPError(f"{self.spec.name}: 工具 {name} 的 inputSchema 不是 object")
+                description = t.get("description", "")
+                out.append({"name": name,
+                            "description": description if isinstance(description, str) else "",
+                            "input_schema": schema})
             nxt = result.get("nextCursor")
             if not nxt:
                 return out
+            if not isinstance(nxt, str):
+                raise MCPError(f"{self.spec.name}: tools/list nextCursor 不是字符串")
             if nxt in seen:
                 raise MCPError(f"{self.spec.name}: tools/list 返回重复 cursor")
             seen.add(nxt)
@@ -406,7 +432,13 @@ class MCPClient:
 
     def call_tool(self, name: str, args: dict | None = None, timeout: float | None = None) -> dict:
         result = self.request("tools/call", {"name": name, "arguments": args or {}}, timeout=timeout)
-        content = result.get("content") or []
+        if not isinstance(result, dict):
+            raise MCPError(f"{self.spec.name}: tools/call 结果不是 object")
+        content = result.get("content")
+        if content is None:
+            content = []
+        if not isinstance(content, list):
+            raise MCPError(f"{self.spec.name}: tools/call.content 不是数组")
         text = "\n".join(c.get("text", "") for c in content if isinstance(c, dict))
         return {"is_error": bool(result.get("isError")), "content": content,
                 "text": text, "structured": result.get("structuredContent")}

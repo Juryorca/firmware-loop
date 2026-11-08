@@ -238,9 +238,18 @@ class MCPBridge:
         return changed
 
     def _register_resource_tools(self) -> None:
-        """只在至少一个已连接服务器声明 resources 时注册三个只读工具。"""
-        if self.resource_tools_registered or not self._resource_servers():
+        """只在至少一个已连接服务器声明 resources 时注册三个只读工具。
+
+        资源工具是跨服务器的入口，本身不知道该读哪一台；只要有一台是外部
+        （未声明 external=false），就保守地按外部工具处理，避免用只读资源的
+        名义绕过 MCP 的外部授权门。
+        """
+        resource_servers = self._resource_servers()
+        if self.resource_tools_registered or not resource_servers:
             return
+        resource_external = any(
+            client.spec.external is None or bool(client.spec.external)
+            for _, client in resource_servers)
         specs = [
             ToolSpec(
                 "list_mcp_resources",
@@ -250,7 +259,7 @@ class MCPBridge:
                     "cursor": {"type": "string"}},
                  "additionalProperties": False},
                 handler=lambda ctx, args: self._list_resources_tool(args, "resources"),
-                risk="low", requires="mcp"),
+                risk="low", requires="mcp", external=resource_external),
             ToolSpec(
                 "list_mcp_resource_templates",
                 "Lists URI templates for MCP resources. Omit server to list every page of every server.",
@@ -259,7 +268,7 @@ class MCPBridge:
                     "cursor": {"type": "string"}},
                  "additionalProperties": False},
                 handler=lambda ctx, args: self._list_resources_tool(args, "resourceTemplates"),
-                risk="low", requires="mcp"),
+                risk="low", requires="mcp", external=resource_external),
             ToolSpec(
                 "read_mcp_resource",
                 "Reads an MCP resource by server and URI. Text becomes text and images become images; binary resources are saved.",
@@ -268,7 +277,7 @@ class MCPBridge:
                     "uri": {"type": "string"}},
                  "required": ["server", "uri"], "additionalProperties": False},
                 handler=lambda ctx, args: self._read_resource_tool(args),
-                risk="low", requires="mcp"),
+                risk="low", requires="mcp", external=resource_external),
         ]
         for spec in specs:
             if spec.name not in self.registry.specs:

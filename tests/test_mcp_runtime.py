@@ -6,16 +6,36 @@ import json
 import os
 import sys
 import time
+from typing import cast
 
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.limits import Limits
-from fwcore.mcp_client import ServerSpec
+from fwcore.mcp_client import MCPClient, ServerSpec
 from fwcore.mcp_runtime import MCPBridge, tool_name
 from fwcore.models import ScriptedAdapter
 from fwcore.policy import Authz, Policy
 from fwcore.runtime import Runner
 from fwcore.tools import Registry, ToolSpec
+
+MALFORMED_TOOLS = r'''
+import json, sys
+
+def send(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    m, rid = msg.get("method"), msg.get("id")
+    if m == "initialize":
+        send({"jsonrpc": "2.0", "id": rid, "result": {
+            "protocolVersion": "2024-11-05", "capabilities": {}}})
+    elif m == "tools/list":
+        send({"jsonrpc": "2.0", "id": rid, "result": {"tools": "not-a-list"}})
+    elif rid is not None:
+        send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "no method"}})
+'''
+
 
 FAKE = r'''
 import json, sys, time
@@ -113,6 +133,19 @@ def test_bridge_registers_tools_and_maps_schema(tmp_path):
         assert {"mcp__fake__echo", "mcp__fake__boom", "mcp__fake__slow"} <= names
         echo = next(t for t in reg.describe() if t["name"] == "mcp__fake__echo")
         assert echo["input_schema"]["required"] == ["text"]
+    finally:
+        b.close()
+
+
+def test_malformed_tools_list_is_reported_without_crashing(tmp_path):
+    spec, _ = _spec(tmp_path, body=MALFORMED_TOOLS, name="malformed.py")
+    reg = Registry()
+    b = MCPBridge(root=str(tmp_path), registry=reg, specs=[spec])
+    st = b.start()
+    try:
+        assert st["fake"]["status"] == "unreachable"
+        assert not [n for n in reg.specs if n.startswith("mcp__fake__")]
+        assert b.clients == {}
     finally:
         b.close()
 
@@ -281,7 +314,7 @@ def test_tools_list_changed_refresh_replaces_stale_tools(tmp_path):
             pass
 
     bridge = MCPBridge(root=str(tmp_path), registry=reg, specs=[spec])
-    bridge.clients["fake"] = Changing()
+    bridge.clients["fake"] = cast(MCPClient, Changing())
     bridge.registered["fake"] = ["mcp__fake__old"]
     bridge.claimed["mcp__fake__old"] = ("fake", "old")
     bridge.status["fake"] = {"status": "ready", "server": "fake"}

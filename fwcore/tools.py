@@ -27,8 +27,8 @@ if TYPE_CHECKING:  # 只用于类型,避免循环导入
 
 from . import db as _db
 from .domain import Domain, new_id
-from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, OutputAccumulator,
-                     truncate_head)
+from .output import (DEFAULT_FULL_READ_BYTES, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,
+                     OutputAccumulator, truncate_head)
 from .policy import Policy
 
 
@@ -456,8 +456,12 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
                          "stdout_tail;二进制内容用 shell_exec 的 strings/file 而不是 fs_read"}
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
-    limit = int(args.get("limit", DEFAULT_MAX_BYTES))
-    offset = max(0, int(args.get("offset", 0)))
+    try:
+        limit = max(0, min(int(args.get("limit", DEFAULT_MAX_BYTES)),
+                           DEFAULT_FULL_READ_BYTES))
+        offset = max(0, int(args.get("offset", 0)))
+    except (TypeError, ValueError):
+        return {"status": "error", "error": "limit/offset 必须是整数"}
     try:
         with open(p, "rb") as f:
             f.seek(offset)

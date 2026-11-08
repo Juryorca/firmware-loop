@@ -162,7 +162,7 @@
    确需从根搜必须**先征得用户许可** + `-xdev` + 排除 `/mnt /proc /sys /dev /run`,**禁扫 Windows 盘**。**细则见 `research-loop` Skill(`references/LOOP.md`)「文件搜索 / 扫描边界」**;harness 层由 `scan-guard` 扩展拦截。
 
 
-13. **版本控制(硬)**: 本工作区是 git 仓库,只纳框架/产品本体(`AGENTS.md` / `fwcore/` / `fwloop/` /
+13. **版本控制(硬)**: 本工作区是 git 仓库,只纳框架/产品本体(`AGENTS.md` / `fwcore/` / `fwapp/` /
     `tools/` / `knowledge/` / `.agents/` / `tests/` / `eval/` / `docs/`);`state/`、`intel/`、固件与工作副本**不进库**。
     提交单位按会话类型定:
     - **研究轮次**改框架文件:改前留一个可回滚基线 + 改后一次提交(保证 `git checkout` 能复原);
