@@ -380,6 +380,15 @@ class AgentSession:
         runner = None
         try:
             con = _db.connect(self.cfg.db_path)
+            # Pi 在会话启动时装配 MCP；不要等用户发第一条消息才让 /mcp
+            # 看到服务器。后台 worker 里启动，不阻塞 TUI 输入。
+            try:
+                runner = self._make_runner(con)
+                self._runner_ref = runner
+                self._runner_model_name = self.model_name
+                runner._ensure_mcp(None)  # noqa: SLF001 - session-owned runner
+            except Exception as e:  # noqa: BLE001 - app layer must surface setup errors
+                self._last_error = str(e)
             while not self._closed:
                 item = self._q.get()
                 if item is None:
