@@ -99,7 +99,7 @@ Pi 会话工具调用统计(10 个 firmware-loop 会话):
 | QNAP cipher / QELF decrypt | `qnapcipher`、`qelf_decrypt.py` | QNAP 加密/QELF 解密 | 文件保留 | 只能 `shell_exec`;无 registry | `tool-quirks` 有配方,无专项测试 | 部分 | 可发现性/schema 缺失,模型需自己知道路径 |
 | Go Gin 路由枚举 | `go_gin_routes*.py` | 二进制路由候选提取 | 文件保留 | 只能 `shell_exec` | 旧会话 20 次 | 部分 | 未注册为研究工具 |
 | `parse_signal.py` | tools | 信号判读 | `research_signal` | `tools/registry/research_signal.json` | `test_parse_signal` 等 | 完整 | `MISS` 退出码 1 已声明 |
-| derived/queue/kb | `derived_check.sh`、`queue_state.sh`、`kb.py` | 派生量/队列/KB 编辑 | `research_derived`、`research_queue` | registry;`kb.py` 仍 CLI | 工具/CLI 测试 | 适配 | `kb.py` 未注册为模型工具;KB 编辑仍偏开发侧 |
+| derived/queue/kb | `derived_check.sh`、`queue_state.sh`、`kb.py` | 派生量/队列/KB 编辑 | `research_derived`、`research_queue` | registry;旧 `kb.py` 已移除 | 工具/CLI 测试 | 适配 | KB 编辑统一走 SQLite 接口 |
 | termshot / ansi2png | tools | 声明式终端截图 | `termshot.sh` | 报告模板/工具;无 registry | `tools/termshot.sh` + 模板 | 适配 | 截图 guard 未迁入 fwcore;只靠规范 |
 | tmux-capture | tools | 旧手工截图 | 文件保留 | 无注册 | 无 | 有意废弃 | 与 termshot 规范冲突;仅历史保留 |
 | Chrome DevTools / Chrome Live MCP | Pi `mcp.json` | JS 页面取件、提交表单 | `fwcore/mcp_client` 通用 MCP | 需要 `state/mcp.json`/`FW_MCP_CONFIG` | `check.sh` 报 MCP 配置缺失 | **部分/未配置** | 旧两个 server 未搬入;fw-core 当前无浏览器能力 |
