@@ -87,7 +87,7 @@ def test_cli_run_uses_mcp_and_cleans_up(tmp_path):
     _write_mcp_cfg(root, _fake_server(tmp_path))
     script = tmp_path / "s.json"
     script.write_text(json.dumps([
-        {"content": "先问一下 MCP。", "tool_calls": [{"name": "mcp_fake_echo", "args": {"text": "cli"}}]},
+        {"content": "先问一下 MCP。", "tool_calls": [{"name": "mcp__fake__echo", "args": {"text": "cli"}}]},
         {"content": "FINAL: 完成", "tool_calls": []},
     ]), encoding="utf-8")
 
@@ -100,7 +100,7 @@ def test_cli_run_uses_mcp_and_cleans_up(tmp_path):
     con = _db.connect(db)
     rows = con.execute("SELECT tool, status, provider FROM tool_calls").fetchall()
     assert rows, "CLI 路径里没有任何工具调用"
-    mcp_rows = [x for x in rows if x["tool"] == "mcp_fake_echo"]
+    mcp_rows = [x for x in rows if x["tool"] == "mcp__fake__echo"]
     assert mcp_rows and mcp_rows[0]["status"] == "ok", rows
     assert mcp_rows[0]["provider"] == "mcp:fake", mcp_rows[0]["provider"]
 
@@ -125,7 +125,7 @@ def test_cli_no_mcp_control_fails_the_call(tmp_path):
     _write_mcp_cfg(root, _fake_server(tmp_path))
     script = tmp_path / "s.json"
     script.write_text(json.dumps([
-        {"content": "试试 MCP。", "tool_calls": [{"name": "mcp_fake_echo", "args": {"text": "x"}}]},
+        {"content": "试试 MCP。", "tool_calls": [{"name": "mcp__fake__echo", "args": {"text": "x"}}]},
         {"content": "FINAL: 完", "tool_calls": []},
     ]), encoding="utf-8")
     assert _cli(root, db, "init", "t", "--version", "1").returncode == 0
@@ -134,7 +134,7 @@ def test_cli_no_mcp_control_fails_the_call(tmp_path):
              "--steps", "4", "--no-watchdog", "--no-mcp")
     assert r.returncode == 0, r.stderr[-500:]
     con = _db.connect(db)
-    row = con.execute("SELECT status, note FROM tool_calls WHERE tool='mcp_fake_echo'").fetchone()
+    row = con.execute("SELECT status, note FROM tool_calls WHERE tool='mcp__fake__echo'").fetchone()
     assert row is not None and row["status"] == "error", dict(row) if row else None
 
 
@@ -152,14 +152,14 @@ def _mk(tmp_path):
 def test_advance_keeps_mcp_alive_across_rounds(tmp_path):
     con, dom, root = _mk(tmp_path)
     _write_mcp_cfg(root, _fake_server(tmp_path))
-    echo = {"tool_calls": [{"name": "mcp_fake_echo", "args": {"text": "r"}}]}
+    echo = {"tool_calls": [{"name": "mcp__fake__echo", "args": {"text": "r"}}]}
     script = [echo, {"content": "FINAL: 第1轮", "tool_calls": []},
               echo, {"content": "FINAL: 第2轮", "tool_calls": []}]
     pol = Policy(authorization=Authz(roots=[root]), allow_high_risk=True)
     r = Runner(con, root, ScriptedAdapter(script=script), limits=Limits(max_model_calls=6),
                policy=pol, mcp=True, mcp_config_paths=[os.path.join(root, "state", "mcp.json")])
     res = r.advance("t1", "目标", max_rounds=2)
-    rows = con.execute("SELECT status, provider FROM tool_calls WHERE tool='mcp_fake_echo'").fetchall()
+    rows = con.execute("SELECT status, provider FROM tool_calls WHERE tool='mcp__fake__echo'").fetchall()
     assert len(rows) >= 2, f"跨轮没跑满: {rows}"
     assert all(x["status"] == "ok" for x in rows), rows
     assert all(x["provider"] == "mcp:fake" for x in rows), rows
@@ -172,7 +172,7 @@ def test_advance_keeps_mcp_alive_across_rounds(tmp_path):
 def test_runner_reopens_mcp_if_closed_between_turns(tmp_path):
     con, dom, root = _mk(tmp_path)
     _write_mcp_cfg(root, _fake_server(tmp_path))
-    echo = {"tool_calls": [{"name": "mcp_fake_echo", "args": {"text": "again"}}]}
+    echo = {"tool_calls": [{"name": "mcp__fake__echo", "args": {"text": "again"}}]}
     pol = Policy(authorization=Authz(roots=[root]), allow_high_risk=True)
     r = Runner(con, root, ScriptedAdapter(script=[echo, {"content": "FINAL: a", "tool_calls": []},
                                                   echo, {"content": "FINAL: b", "tool_calls": []}]),
@@ -182,7 +182,7 @@ def test_runner_reopens_mcp_if_closed_between_turns(tmp_path):
     r.turn(rid, "t1", None, [])
     r.close()                      # 人为关掉(模拟外部清理/上一轮结束)
     r.turn(rid, "t1", None, [])    # 下一轮必须自己把桥拉起来
-    rows = con.execute("SELECT status FROM tool_calls WHERE tool='mcp_fake_echo'").fetchall()
+    rows = con.execute("SELECT status FROM tool_calls WHERE tool='mcp__fake__echo'").fetchall()
     assert len(rows) == 2 and all(x["status"] == "ok" for x in rows), rows
     kinds = [x["kind"] for x in con.execute("SELECT kind FROM events")]
     assert "mcp.reopened" in kinds

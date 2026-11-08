@@ -98,7 +98,9 @@ def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
     return out
 
 
-MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+# MCP 单条 transport 上限（Pi 用 16 MiB）；这是消息/传输硬上限，不是图片解码上限。
+# 图片另有 4 MiB/张、8 张/结果的内容安全边界，二者独立。
+MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 
 
 class MCPClient:
@@ -114,6 +116,7 @@ class MCPClient:
         self._buf = b""
         self._http_session: str | None = None
         self.capabilities: dict = {}
+        self.tools_changed = False
         self._stderr_tail = bytearray()
         self._stderr_thread: threading.Thread | None = None
 
@@ -231,7 +234,10 @@ class MCPClient:
                         raise MCPError(f"{self.spec.name}: HTTP MCP 响应超过 {MAX_MESSAGE_BYTES} 字节上限")
                     if not raw:
                         return {}
-                    return json.loads(raw.decode("utf-8", errors="replace"))
+                    msg = json.loads(raw.decode("utf-8", errors="replace"))
+                    if isinstance(msg, dict) and msg.get("method") == "notifications/tools/list_changed":
+                        self.tools_changed = True
+                    return msg
                 # SSE 必须增量读：只解析到与本次请求 id 匹配的响应，不能等连接关闭。
                 # 忽略注释/心跳/通知/其它请求的响应；支持一个事件多行 data。
                 deadline = time.time() + timeout
@@ -261,6 +267,8 @@ class MCPClient:
                             continue
                         if isinstance(msg, dict) and msg.get("id") == rid:
                             return msg
+                        if isinstance(msg, dict) and msg.get("method") == "notifications/tools/list_changed":
+                            self.tools_changed = True
                         continue
                     if line.startswith(b":"):
                         continue                         # SSE comment / heartbeat
@@ -275,6 +283,8 @@ class MCPClient:
                             msg = None
                         if isinstance(msg, dict) and msg.get("id") == rid:
                             return msg
+                        if isinstance(msg, dict) and msg.get("method") == "notifications/tools/list_changed":
+                            self.tools_changed = True
                 raise MCPError(f"{self.spec.name}: SSE 中没有匹配 id={rid} 的 JSON-RPC 响应")
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")[:500]
@@ -294,9 +304,12 @@ class MCPClient:
                 if not line:
                     continue
                 try:
-                    return json.loads(line)
+                    msg = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if isinstance(msg, dict) and msg.get("method") == "notifications/tools/list_changed":
+                    self.tools_changed = True
+                return msg
             remaining = deadline - time.time()
             if remaining <= 0:
                 raise MCPError(

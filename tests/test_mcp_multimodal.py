@@ -185,7 +185,7 @@ def test_mcp_mixed_text_and_image_are_ordered(tmp_path):
     con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
     out: dict = {}
     try:
-        out = reg.call(ctx, "mcp_fake_mix", {})
+        out = reg.call(ctx, "mcp__fake__mix", {})
         assert out["status"] == "ok"
         assert [p["type"] for p in out["parts"]] == ["text", "image", "text"]
         assert out["parts"][1]["mimeType"] == "image/png"
@@ -201,10 +201,10 @@ def test_mcp_multiple_images_and_long_text_keep_images(tmp_path):
     con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
     long: dict = {}
     try:
-        multi = reg.call(ctx, "mcp_fake_multi", {})
+        multi = reg.call(ctx, "mcp__fake__multi", {})
         assert len(_paths(multi)) == 2
         _cleanup(multi)
-        long = reg.call(ctx, "mcp_fake_long", {})
+        long = reg.call(ctx, "mcp__fake__long", {})
         assert long["status"] == "ok" and long["truncated"] is True
         assert len(_paths(long)) == 1
         assert os.path.isfile(long["full_output_path"])
@@ -218,10 +218,10 @@ def test_mcp_error_with_image_and_invalid_images_are_honest(tmp_path):
     con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
     err: dict = {}
     try:
-        err = reg.call(ctx, "mcp_fake_errimg", {})
+        err = reg.call(ctx, "mcp__fake__errimg", {})
         assert err["status"] == "error" and len(_paths(err)) == 1
         assert err["text"] if "text" in err else True
-        bad = reg.call(ctx, "mcp_fake_badimg", {})
+        bad = reg.call(ctx, "mcp__fake__badimg", {})
         assert bad["status"] == "ok" and not _paths(bad)
         assert "invalid base64" in bad["text"] and "unsupported MIME" in bad["text"]
     finally:
@@ -258,11 +258,11 @@ def test_resource_tools_list_pages_read_types_and_link(tmp_path):
         _cleanup(multi)
         audio = reg.call(ctx, "read_mcp_resource", {"server": "fake", "uri": "res://audio"})
         assert "audio" in audio["text"] and "no audio input" in audio["text"]
-        link = reg.call(ctx, "mcp_fake_link", {})
+        link = reg.call(ctx, "mcp__fake__link", {})
         assert "read_mcp_resource" in link["text"] and "res://one" in link["text"]
         linked = reg.call(ctx, "read_mcp_resource", {"server": "fake", "uri": "res://one"})
         assert linked["status"] == "ok" and "one resource" in linked["text"]
-        embedded = reg.call(ctx, "mcp_fake_embedded", {})
+        embedded = reg.call(ctx, "mcp__fake__embedded", {})
         assert [p["type"] for p in embedded["parts"]] == ["text", "image", "text"]
         assert "saved to" in embedded["text"]
         _cleanup(embedded)
@@ -279,7 +279,7 @@ def test_model_adapter_receives_images_without_fake_user_message(tmp_path):
     messages = [
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "c1", "type": "function",
-             "function": {"name": "mcp_fake_mix", "arguments": "{}"}}]},
+             "function": {"name": "mcp__fake__mix", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "c1", "content": '{"status":"ok"}',
          "parts": [{"type": "text", "text": "before"},
                    {"type": "image", "mimeType": "image/png", "path": str(path),
@@ -309,7 +309,7 @@ def test_checkpoint_persists_image_reference_without_base64(tmp_path):
     con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
     bridge.close()
     call = {"id": "c1", "type": "function",
-            "function": {"name": "mcp_fake_mix", "arguments": "{}"}}
+            "function": {"name": "mcp__fake__mix", "arguments": "{}"}}
     r = Runner(con, root, ScriptedAdapter(script=[
         {"content": "", "tool_calls": [call]},
         {"content": "FINAL: ok"}]),
@@ -353,7 +353,7 @@ def test_openai_adapter_payload_sends_image_in_tool_parts_without_user(tmp_path)
     messages = [
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "c1", "type": "function",
-             "function": {"name": "mcp_fake_mix", "arguments": "{}"}}]},
+             "function": {"name": "mcp__fake__mix", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "c1", "content": '{"status":"ok"}',
          "parts": [{"type": "text", "text": "see"}, {"type": "image", "mimeType": "image/png",
                     "path": str(path), "bytes": 8, "sha256": "x"}]},
@@ -382,7 +382,7 @@ def test_openai_responses_adapter_uses_legal_tool_image_output(tmp_path):
     messages = [
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "call_1", "type": "function",
-             "function": {"name": "mcp_fake_mix", "arguments": "{}"}}]},
+             "function": {"name": "mcp__fake__mix", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "call_1", "content": '{"status":"ok"}',
          "parts": [{"type": "text", "text": "see"}, {"type": "image", "mimeType": "image/png",
                     "path": str(path), "bytes": 8, "sha256": "x"}]},
@@ -410,12 +410,12 @@ def test_bridge_parts_reach_model_adapter_end_to_end(tmp_path):
     con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
     out = {}
     try:
-        out = reg.call(ctx, "mcp_fake_mix", {})
+        out = reg.call(ctx, "mcp__fake__mix", {})
         assert out["status"] == "ok"
         history = [
             {"role": "assistant", "content": "", "tool_calls": [
                 {"id": "c1", "type": "function",
-                 "function": {"name": "mcp_fake_mix", "arguments": "{}"}}]},
+                 "function": {"name": "mcp__fake__mix", "arguments": "{}"}}]},
             {"role": "tool", "tool_call_id": "c1", "content": '{"status":"ok"}',
              "parts": out["parts"]},
         ]

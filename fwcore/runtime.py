@@ -853,6 +853,10 @@ class Runner:
             return RunResult(rid, "paused", step, rounds, "", False, [], reason, history)
         self._watchdog_start()           # 心跳在起看护之前,避免旧 pid 被误判 owner_dead
         self._ensure_mcp(rid)          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
+        if self.mcp_bridge is not None:
+            # tools/list_changed 可能只在请求时被读到；每个 turn 开头主动刷新一次，
+            # 避免模型长期拿旧工具清单。刷新失败保留旧工具。
+            self.mcp_bridge.refresh_tools(force=True)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
         # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
         row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",

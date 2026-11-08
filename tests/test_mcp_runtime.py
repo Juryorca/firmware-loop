@@ -15,7 +15,7 @@ from fwcore.mcp_runtime import MCPBridge, tool_name
 from fwcore.models import ScriptedAdapter
 from fwcore.policy import Authz, Policy
 from fwcore.runtime import Runner
-from fwcore.tools import Registry
+from fwcore.tools import Registry, ToolSpec
 
 FAKE = r'''
 import json, sys, time
@@ -98,7 +98,7 @@ def _setup(tmp_path):
 
 
 def test_tool_name_is_openai_compatible():
-    assert tool_name("chrome-live", "take.snapshot") == "mcp_chrome-live_take_snapshot"
+    assert tool_name("chrome-live", "take.snapshot") == "mcp__chrome_live__take_snapshot"
     assert len(tool_name("s", "x" * 100)) <= 64
 
 
@@ -110,8 +110,8 @@ def test_bridge_registers_tools_and_maps_schema(tmp_path):
     try:
         assert st["fake"]["status"] == "ready"
         names = {t["name"] for t in reg.describe()}
-        assert {"mcp_fake_echo", "mcp_fake_boom", "mcp_fake_slow"} <= names
-        echo = next(t for t in reg.describe() if t["name"] == "mcp_fake_echo")
+        assert {"mcp__fake__echo", "mcp__fake__boom", "mcp__fake__slow"} <= names
+        echo = next(t for t in reg.describe() if t["name"] == "mcp__fake__echo")
         assert echo["input_schema"]["required"] == ["text"]
     finally:
         b.close()
@@ -121,7 +121,7 @@ def test_runner_executes_mcp_tool_and_records_provider(tmp_path):
     spec, cfg = _spec(tmp_path)
     con, dom, root = _setup(tmp_path)
     call = {"id": "c1", "type": "function",
-            "function": {"name": "mcp_fake_echo", "arguments": '{"text":"hi"}'}}
+            "function": {"name": "mcp__fake__echo", "arguments": '{"text":"hi"}'}}
     r = Runner(con, root, ScriptedAdapter(script=[{"content": "", "tool_calls": [call]},
                                                  {"content": "FINAL: ok", "tool_calls": []}]),
                limits=Limits(max_model_calls=4),
@@ -153,7 +153,7 @@ def test_unreachable_server_is_reported_but_does_not_break_run(tmp_path):
     assert res.state == "finished"
     assert r.mcp_bridge is not None
     assert r.mcp_bridge.status["dead"]["status"] == "unreachable"
-    assert not [t for t in r.registry.describe() if t["name"].startswith("mcp_dead_")]
+    assert not [t for t in r.registry.describe() if t["name"].startswith("mcp__dead__")]
 
 
 def test_mcp_tool_error_and_timeout_are_distinct(tmp_path):
@@ -167,9 +167,9 @@ def test_mcp_tool_error_and_timeout_are_distinct(tmp_path):
 
         ctx = ToolContext(domain=dom, root=root,
                           policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
-        ok = reg.call(ctx, "mcp_fake_echo", {"text": "x"})
-        err = reg.call(ctx, "mcp_fake_boom", {})
-        tmo = reg.call(ctx, "mcp_fake_slow", {})
+        ok = reg.call(ctx, "mcp__fake__echo", {"text": "x"})
+        err = reg.call(ctx, "mcp__fake__boom", {})
+        tmo = reg.call(ctx, "mcp__fake__slow", {})
         assert ok["status"] == "ok"
         assert err["status"] == "error" and "boom-failed" in err["error"]
         assert tmo["status"] == "timeout"
@@ -189,7 +189,7 @@ def test_mcp_large_result_uses_pi_middle_truncation_and_structured(tmp_path):
         from fwcore.tools import ToolContext
         ctx = ToolContext(domain=dom, root=root,
                           policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
-        out = reg.call(ctx, "mcp_fake_big", {})
+        out = reg.call(ctx, "mcp__fake__big", {})
         assert out["status"] == "ok" and out["structured"] == {"answer": 42}
         assert out["truncated"] is True
         assert out["text"].startswith("Warning: truncated output")
@@ -216,7 +216,7 @@ def test_mcp_large_structured_is_bounded_and_full_json_saved(tmp_path):
         from fwcore.tools import ToolContext, fs_read
         ctx = ToolContext(domain=dom, root=root,
                           policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
-        out = reg.call(ctx, "mcp_fake_big_struct", {})
+        out = reg.call(ctx, "mcp__fake__big_struct", {})
         assert out["status"] == "ok"
         assert out["structured"]["_truncated"] is True
         path = out["structured_full_output_path"]
@@ -247,7 +247,7 @@ def test_mcp_large_error_uses_middle_truncation_and_saves_full(tmp_path):
         from fwcore.tools import ToolContext, fs_read
         ctx = ToolContext(domain=dom, root=root,
                           policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
-        out = reg.call(ctx, "mcp_fake_big_error", {})
+        out = reg.call(ctx, "mcp__fake__big_error", {})
         assert out["status"] == "error"
         assert out["truncated"] is True and "chars truncated" in out["error"]
         path = out["full_output_path"]
@@ -263,3 +263,30 @@ def test_mcp_large_error_uses_middle_truncation_and_saves_full(tmp_path):
         for path in paths:
             if path and os.path.exists(path):
                 os.unlink(path)
+
+
+def test_tools_list_changed_refresh_replaces_stale_tools(tmp_path):
+    spec = ServerSpec(name="fake", command="x", args=[], external=False)
+    reg = Registry()
+    reg.register(ToolSpec("mcp__fake__old", "old", {"type": "object", "properties": {}},
+                          lambda ctx, args: {"status": "ok"}))
+
+    class Changing:
+        supports_resources = False
+        tools_changed = True
+        def list_tools(self):
+            return [{"name": "new", "description": "new",
+                     "input_schema": {"type": "object", "properties": {}}}]
+        def close(self):
+            pass
+
+    bridge = MCPBridge(root=str(tmp_path), registry=reg, specs=[spec])
+    bridge.clients["fake"] = Changing()
+    bridge.registered["fake"] = ["mcp__fake__old"]
+    bridge.claimed["mcp__fake__old"] = ("fake", "old")
+    bridge.status["fake"] = {"status": "ready", "server": "fake"}
+    assert bridge.refresh_tools(force=True) is True
+    assert "mcp__fake__old" not in reg.specs
+    assert "mcp__fake__new" in reg.specs
+    assert bridge.registered["fake"] == ["mcp__fake__new"]
+    assert bridge.clients["fake"].tools_changed is False

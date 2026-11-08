@@ -98,7 +98,7 @@ def _calls(counter):
 def test_new_process_resumes_mcp_and_keeps_idempotency(tmp_path):
     root, counter = _prep(tmp_path)
     a = _script(root, "a.json", [
-        {"content": "先问 MCP", "tool_calls": [{"id": "c1", "name": "mcp_fake_echo",
+        {"content": "先问 MCP", "tool_calls": [{"id": "c1", "name": "mcp__fake__echo",
                                                "args": {"text": "a"}}]},
         {"content": "FINAL: 阶段一结束", "tool_calls": []},
     ])
@@ -112,9 +112,9 @@ def test_new_process_resumes_mcp_and_keeps_idempotency(tmp_path):
     assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "paused"
 
     b = _script(root, "b.json", [
-        {"content": "重放同一个调用 id", "tool_calls": [{"id": "c1", "name": "mcp_fake_echo",
+        {"content": "重放同一个调用 id", "tool_calls": [{"id": "c1", "name": "mcp__fake__echo",
                                                         "args": {"text": "a"}}]},
-        {"content": "再开一个新的", "tool_calls": [{"id": "c2", "name": "mcp_fake_echo",
+        {"content": "再开一个新的", "tool_calls": [{"id": "c2", "name": "mcp__fake__echo",
                                                    "args": {"text": "b"}}]},
         {"content": "FINAL: 完成", "tool_calls": []},
     ])
@@ -123,7 +123,7 @@ def test_new_process_resumes_mcp_and_keeps_idempotency(tmp_path):
     assert r2.returncode == 0, r2.stderr[-600:]
 
     # 新进程里 MCP 必须**重新发现**:新调用成功 + provider 正确
-    rows = con.execute("SELECT tool,status,provider,call_key FROM tool_calls WHERE tool='mcp_fake_echo'"
+    rows = con.execute("SELECT tool,status,provider,call_key FROM tool_calls WHERE tool='mcp__fake__echo'"
                        " ORDER BY created_at").fetchall()
     assert [r["status"] for r in rows] == ["ok", "ok"], [dict(r) for r in rows]
     assert all(r["provider"] == "mcp:fake" for r in rows)

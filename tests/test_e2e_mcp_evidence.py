@@ -70,7 +70,7 @@ class ChainModel:
                 data = json.loads(m.get("content") or "{}")
             except json.JSONDecodeError:
                 continue
-            if m.get("name") == "mcp_fake_decompile" and data.get("db_tool_call_id"):
+            if m.get("name") == "mcp__fake__decompile" and data.get("db_tool_call_id"):
                 # 只认 MCP 那次调用的 id:所有工具结果都带自己的 tool_call_id,别被后来者覆盖
                 self.ids["tool_call_id"] = data["db_tool_call_id"]
                 if data.get("text"):
@@ -81,7 +81,7 @@ class ChainModel:
 
         if self.stage == 0:
             self.stage += 1
-            return self._call("mcp_fake_decompile", {"path": "bundle/app.bin"})
+            return self._call("mcp__fake__decompile", {"path": "bundle/app.bin"})
         if self.stage == 1 and "tool_call_id" in self.ids:
             self.stage += 1
             return self._call("state_add_hypothesis", {
@@ -142,7 +142,7 @@ def test_mcp_to_conclusion_end_to_end(tmp_path):
     assert res.state == "finished", (res.state, res.blockers)
 
     # ① MCP 调用真的执行了;文本留在 tool result,不自动落 artifact
-    tc = con.execute("SELECT * FROM tool_calls WHERE tool='mcp_fake_decompile'").fetchone()
+    tc = con.execute("SELECT * FROM tool_calls WHERE tool='mcp__fake__decompile'").fetchone()
     assert tc and tc["status"] == "ok" and tc["provider"] == "mcp:fake"
     assert tc["result_path"] is None and tc["result_sha256"] is None
 

@@ -128,12 +128,12 @@ def test_allow_mcp_false_skips_and_policy_denies(tmp_path):
     from fwcore.tools import Registry, ToolSpec
 
     reg2 = Registry()
-    reg2.register(ToolSpec(name="mcp_fake_echo", description="x",
+    reg2.register(ToolSpec(name="mcp__fake__echo", description="x",
                            input_schema={"type": "object", "properties": {}},
                            handler=lambda ctx, a: {"status": "ok"}, risk="high",
                            requires="mcp", external=False))
     ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True))
-    out = reg2.call(ctx, "mcp_fake_echo", {})
+    out = reg2.call(ctx, "mcp__fake__echo", {})
     assert out["status"] == "cancelled" and "allow_mcp" in out["error"]
 
 
@@ -191,12 +191,12 @@ def test_authorization_can_allow_external_mcp_without_percall_confirm(tmp_path):
 # ---------------- ③ 名称碰撞:确定性消歧 / 明确拒绝 ----------------
 
 def test_collision_between_servers_is_deterministic_not_silent():
-    a = tool_name("a b", "c")            # mcp_a_b_c
-    b = tool_name("a", "b c")            # mcp_a_b_c
-    assert a == b, "构造前提:两个不同 (server, tool) 规范化后同名"
-    assert disambiguated_name("a b", "c") != disambiguated_name("a", "b c")
+    a = tool_name("a-b", "c")            # mcp__a_b__c
+    b = tool_name("a_b", "c")            # mcp__a_b__c
+    assert a == b, "构造前提:两个不同 server 规范化后同名"
+    assert disambiguated_name("a-b", "c") != disambiguated_name("a_b", "c")
     # 同一输入永远得到同名(跨轮/重启稳定)
-    assert disambiguated_name("a b", "c") == disambiguated_name("a b", "c")
+    assert disambiguated_name("a-b", "c") == disambiguated_name("a-b", "c")
 
 
 def test_same_tool_reopened_is_idempotent(tmp_path):

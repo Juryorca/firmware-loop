@@ -3,7 +3,7 @@
 设计要点(工具生命周期:注册/调用/超时/取消)
 - **注册即探测**:只有 `initialize` + `tools/list` 成功的服务器才把工具注册进 Registry;
   不可达/未启用的服务器**如实记录状态**,不注册、不影响其它工具。
-- **命名规范**:OpenAI 兼容端点要求 `^[A-Za-z0-9_-]+$` ⇒ 工具名 = `mcp_<server>_<tool>`(非法字符转 `_`)。
+- **命名规范**:Pi 风格 `mcp__<server>__<tool>`；只保留 `[A-Za-z0-9_]`，≤64 字符，撞名/超长用 8 位哈希后缀。
 - **Schema 映射**:MCP 的 `inputSchema` 直接作为 ToolSpec.input_schema(Shape 相同)。
 - **执行语义**:成功 → `ok` + Pi MCP 20 KiB 中间截断文本 + structuredContent;工具内错误 → `error`(带 isError 原文);
   连接断/非法响应 → `error`;超时 → `timeout`;并记录 provider = `mcp:<server>`。
@@ -24,25 +24,34 @@ from .mcp_content import (MCP_OUTPUT_MAX_BYTES, bound_parts, content_parts,
 from .output import limit_structured_for_model
 from .tools import Registry, ToolSpec
 
-_SAFE = re.compile(r"[^A-Za-z0-9_-]")
+_SAFE = re.compile(r"[^A-Za-z0-9_]")
 MAX_RESOURCE_PAGES = 50
 
 
+def _base_tool_name(server: str, tool: str) -> str:
+    # Pi: mcp__<server>__<tool>; only [A-Za-z0-9_] is kept.
+    return _SAFE.sub("_", f"mcp__{server}__{tool}")
+
+
+def _hashed_tool_name(server: str, tool: str) -> str:
+    import hashlib
+
+    h = hashlib.sha256(f"{server}\x00{tool}".encode()).hexdigest()[:8]
+    return _base_tool_name(server, tool)[:55] + "_" + h
+
+
 def tool_name(server: str, tool: str) -> str:
-    """把 MCP 工具名映射到 OpenAI 兼容的合法工具名(单次映射,不去重)。"""
-    return _SAFE.sub("_", f"mcp_{server}_{tool}")[:64]
+    """Pi MCP 工具名：mcp__server__tool，超 64 字符用 8 位哈希后缀。"""
+    base = _base_tool_name(server, tool)
+    return base if len(base) <= 64 else _hashed_tool_name(server, tool)
 
 
 def disambiguated_name(server: str, tool: str) -> str:
-    """确定性消歧:规范化后可能撞名(截断/字符替换),用同一输入的哈希后缀区分。
+    """规范化撞名时使用同一输入的 8 位哈希后缀。"""
+    return _hashed_tool_name(server, tool)
 
-    同一个 (server, tool) 永远得到同一个名字 ⇒ 跨轮/重启稳定;不同输入撞名则不同后缀。
-    """
-    import hashlib
 
-    h = hashlib.sha256(f"{server}\x00{tool}".encode()).hexdigest()[:6]
-    base = tool_name(server, tool)
-    return base[:57] + "_" + h
+
 
 
 
@@ -167,6 +176,66 @@ class MCPBridge:
     def _resource_servers(self) -> list[tuple[str, MCPClient]]:
         return [(name, c) for name, c in sorted(self.clients.items())
                 if c.supports_resources]
+
+    def _replace_server_tools(self, server: str, tools: list[dict]) -> None:
+        """刷新一个服务器的工具集合：先移除旧注册，再按当前 tools/list 重建。"""
+        old = self.registered.get(server, [])
+        for name in old:
+            owner = self.claimed.get(name)
+            if owner and owner[0] == server:
+                self.registry.specs.pop(name, None)
+                self.claimed.pop(name, None)
+        spec = next((s for s in self.specs if s.name == server), None)
+        if spec is None:
+            return
+        external = True if spec.external is None else bool(spec.external)
+        names: list[str] = []
+        collisions: list[str] = []
+        for t in tools:
+            base = tool_name(server, t["name"])
+            owner = self.claimed.get(base)
+            if owner is None and base not in self.registry.specs:
+                final = base
+            elif owner == (server, t["name"]):
+                final = base
+            else:
+                final = disambiguated_name(server, t["name"])
+                if final in self.claimed or final in self.registry.specs:
+                    collisions.append(t["name"])
+                    continue
+            self.claimed[final] = (server, t["name"])
+            if final in self.registry.specs:
+                names.append(final)
+                continue
+            self.registry.register(ToolSpec(
+                name=final,
+                description=f"[MCP:{server}] {t.get('description', '')}".strip(),
+                input_schema=t.get("input_schema") or {"type": "object", "properties": {}},
+                handler=self._make_handler(server, t["name"]),
+                risk="high", requires="mcp", external=external))
+            names.append(final)
+        self.registered[server] = names
+        st = self.status.setdefault(server, {"status": "ready", "server": server})
+        st["tools"] = names
+        st["resources"] = bool(self.clients[server].supports_resources) if server in self.clients else False
+        if collisions:
+            st["name_collisions"] = collisions
+
+    def refresh_tools(self, *, force: bool = False) -> bool:
+        """拉取 tools/list；notification 后或每个 turn 开始调用，避免长期用旧列表。"""
+        changed = False
+        for server, client in list(self.clients.items()):
+            if not force and not client.tools_changed:
+                continue
+            try:
+                tools = client.list_tools()
+            except (MCPError, OSError, ValueError) as e:
+                self.status.setdefault(server, {})["tools_refresh_error"] = str(e)[:300]
+                continue
+            self._replace_server_tools(server, tools)
+            client.tools_changed = False
+            changed = True
+        return changed
 
     def _register_resource_tools(self) -> None:
         """只在至少一个已连接服务器声明 resources 时注册三个只读工具。"""

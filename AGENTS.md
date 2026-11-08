@@ -396,6 +396,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - MCP 的大 `structuredContent` 只给模型小摘要，完整 JSON 在 `structured_full_output_path`；不要把它重新整包塞回上下文。
 - MCP 图片走内部 `parts`（路径/哈希，不含 base64），图片/二进制落 `state/artifacts/mcp-content/`，模型适配层再编码；纯文本模型只拿路径和限制。MCP `resources` 的 list/templates/read 工具只在服务器声明 resources 时出现，仍受 MCP 授权门约束。
 - 视觉模型配置：`state/model.json` 或环境变量 `supports_vision`/`image_mode`；标准 OpenAI Responses 用 `api=responses` 走合法的 tool-result 图片，Chat Completions 的 `tool_parts` 只在端点明确支持时启用。
+- MCP transport 单条消息上限 **16 MiB**；`notifications/tools/list_changed` 触发刷新，Runtime 每个 turn 开头主动重取 `tools/list`，不让旧工具清单长期生效。
 - 需要长期保存时，Agent 自己用 bash 重定向到 `state/<target>/artifacts/` 或 `state/_scratch/`。
 - `observation` 记录研究事实；`evidence` 必须显式给 `path` 或 `capture`，并复核后才能支撑结论。工具跑过 ≠ 证据。
 
@@ -436,8 +437,8 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|migrate|revise|deprecate`;模型用 `knowledge_search/get/propose/stats/revise/deprecate`。旧 `tools/kb.py` 只维护静态来源文件,不是知识权威。
 - **默认工具集完整性**: `python3 -m fwcore toolset`(区分仓库资产/外部依赖/能力/服务);只读探针,不启动有副作用的服务。
 - **批量静态/动态工具**: `tools/ghidra_scripts/{ProfileFuncs,DumpFuncsWithStr,DumpDecomp}.java`(函数画像/反编译批处理;Ghidra base = IDA base + 0x100000) + `tools/cgi_fuzz.sh`(对厂商 CGI 有界变异 fuzz,判据 = qemu `uncaught signal`/SIGSEGV;用法见文件头)→ 用法与坑见 `knowledge/methodology.md`「函数画像 × 动作表 join」
-- **JS 页面取件**: `mcp__chrome-devtools__navigate_page` → `take_snapshot` / `list_network_requests` ⇒ 真实下载 URL(curl 拿不到时);见「环境清单 → 取件 / JS 页面」
-- **提交(用户要求时)**: 先 `python3 tools/chrome-live-probe.py`(OFF ⇒ 提醒用户开 `chrome://inspect/#remote-debugging`)→ `mcp__chrome-live__*` 填表 → **不点提交** → 贴待确认清单;见「环境清单 → 提交」
+- **JS 页面取件**: `mcp__chrome_devtools__navigate_page` → `take_snapshot` / `list_network_requests` ⇒ 真实下载 URL(curl 拿不到时);见「环境清单 → 取件 / JS 页面」
+- **提交(用户要求时)**: 先 `python3 tools/chrome-live-probe.py`(OFF ⇒ 提醒用户开 `chrome://inspect/#remote-debugging`)→ `mcp__chrome_live__*` 填表 → **不点提交** → 贴待确认清单;见「环境清单 → 提交」
 - **netlink 面解锁**: `qemu-aarch64-patched`(已装,直接用)→ 判读探针 `tools/qemu-nl-probe/`
 - **派生量重算**: `bash tools/derived_check.sh [目标]` —— 一次算出 knowledge 条数 / A2 覆盖度 /
   每个 finding 的包完整性;覆盖度与材料完成的**断言直接粘它的输出**(有 FAIL 非零退出)

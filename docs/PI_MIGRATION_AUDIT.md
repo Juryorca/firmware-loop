@@ -142,7 +142,7 @@ Pi 会话工具调用统计(10 个 firmware-loop 会话):
 | `knowledge/exploits-validated.md` | 旧 | 同文件(38 行) | 仅标题 | 部分/按需 | 已验证链不自动进入 |
 | `prompts/*.txt` | 旧 OpenCode | 文件仍在 | **不加载**(文件头 DEPRECATED) | 有意废弃 | 内容已声明折叠;但指向的 `AGENTS「专项任务分派」` 当前已不在 AGENTS,指针过期 |
 | `.pi/prompts/fw.md` | 旧 Pi | 文件仍在(未入库) | fwcore 不加载 | Pi-only/部分 | 内容仍写 harness=pi、Pi MCP、`/reload`;fw-core 不适用 |
-| `.pi/prompts/提交.md` | 旧 Pi | 文件仍在(未入库) | fwcore 不加载 | Pi-only/部分 | 提交流程依赖 `mcp__chrome-live__*`;当前产品无此入口 |
+| `.pi/prompts/提交.md` | 旧 Pi | 文件仍在(未入库) | fwcore 不加载 | Pi-only/部分 | 提交流程依赖 `mcp__chrome_live__*`;当前产品无此入口 |
 | `.pi/guards/*` | 旧 Pi | 文件仍在(未入库) | fwcore 不加载 | **未迁移到 runtime** | 旧 3 类护栏只有文档规则 |
 | `.pi/dev-notes.md` | 旧开发 | 文件仍在(未入库) | 不存在产品入口 | 有意不迁移 | 开发笔记不属研究知识;不能当产品文档 |
 | `docs/OVERVIEW.md` / `ARCHITECTURE-RUNTIME.md` / `PI-CORE-ALIGNMENT.md` | 旧 docs | 合并为 `docs/ARCHITECTURE.md` + `docs/evidence/token-audit.md` | 开发文档 | 适配/有意精简 | 历史 P9 细表有删减;关键工程结论保留在 ARCH §6/证据 |

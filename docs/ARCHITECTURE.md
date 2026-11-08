@@ -104,7 +104,7 @@ conclusions runs checkpoints tool_calls events mirror_checks research_logs docum
 ## 4. 工具接入(统一注册契约,不统一内部实现)
 
 四条路径:内置 `ToolSpec`(state_*/shell_exec/fs_*)、`tools/registry/*.json`(script/python)、
-feature 适配器(ida)、MCP(`mcp_<server>_<tool>`)。
+feature 适配器(ida)、MCP(`mcp__<server>__<tool>`)。
 
 ```json
 {"name":"x","description":"…","input_schema":{…},"kind":"script",
@@ -139,7 +139,8 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   只接受与请求 id 匹配的响应。模型能力来自 `state/model.json` / 环境变量：
   `api=responses`（合法的 `function_call_output` 图片）、`supports_vision`、
   `image_mode=tool_parts`（仅在端点确实接受 tool content image parts 时启用）；
-  纯文本模型只得到路径和限制。
+  纯文本模型只得到路径和限制。`notifications/tools/list_changed` 会标记客户端，
+  Runtime 在每个 turn 开头主动 `tools/list` 刷新，移除旧工具，避免长期使用过期列表。
 - **MCP Resources**：连接服务器声明 `capabilities.resources` 时才注册
   `list_mcp_resources` / `list_mcp_resource_templates` / `read_mcp_resource`；
   支持 server 过滤、分页、resource_link、嵌入 text/image/binary/audio；图片按图片处理，
@@ -157,7 +158,7 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **Pi MCP 的 script/full 分层**：Pi 把完整 `CallToolResult` 留给 codemode，
   模型只看转换后的 content。fwcore 没有 codemode，因此模型可见 structured
   也只能留摘要，完整 JSON 落临时文件并在 `structured_full_output_path` 指回。
-- **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP transport 单条消息 `8 MiB`、
+- **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP transport 单条消息 `16 MiB`、
   Skill 文件 `512 KiB`、错误摘要 `160/600` 字符、legacy 修复 excerpt `1500`、
   MCP observation `2000`、图片单张 `4 MiB`/单结果 `8` 张、资源分页 `50` 页。
   这些应保持命名常量/局部理由，不能反过来冒充 Pi。
