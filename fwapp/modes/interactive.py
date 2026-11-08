@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import signal
 import time
@@ -473,9 +474,17 @@ class FwApp(App):
         self.push_screen(ResearchScreen(self.sess, tab="evidence"))
 
     def _cmd_tool_setup(self, arg: str) -> None:
-        """用户显式触发工具管理 Skill:先展示缺失项,再交给 Agent 执行。"""
+        """用户显式触发工具管理 Skill:异步检查,避免工具探针冻结 TUI。"""
+        self._notice("正在检查默认工具集…")
+        self.run_worker(self._tool_setup_worker(), exclusive=True)
+
+    async def _tool_setup_worker(self) -> None:
         from fwcore.toolset import check_toolset, render_report
-        rep = check_toolset(self.sess.services.cfg.root)
+        try:
+            rep = await asyncio.to_thread(check_toolset, self.sess.services.cfg.root)
+        except Exception as e:  # noqa: BLE001 - UI 必须把异常显示出来，而不是退出
+            self._notice(f"工具集检查失败: {e}", "error")
+            return
         missing = [x for x in rep["items"]
                    if x["required"] and x["status"] != "ready"]
         if not missing:
@@ -630,7 +639,8 @@ class FwApp(App):
 
     def action_toggle_tools(self) -> None:
         self._expand_tools = not self._expand_tools
-        for w in self._tool_widgets.values():
+        # 流式工具预览尚未进入 _tool_widgets;与已执行工具一起切换。
+        for w in (*self._tool_widgets.values(), *self._stream_tools.values()):
             w.body.display = self._expand_tools
         self._notice("工具输出: " + ("展开" if self._expand_tools else "折叠"))
 

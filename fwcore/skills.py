@@ -3,7 +3,7 @@
 边界
 - 不扫描任意路径；所有路径 realpath 后必须仍在 `.agents/skills/<name>/` 内。
 - Skill 不是 Agent，不创建子代理；只是操作知识。
-- catalog 只返回 name/description；正文由 `skill_read` 按需读取。
+- catalog 返回 name/description/audience；研究 Agent 默认隐藏 development；正文由 `skill_read` 按需读取。
 """
 from __future__ import annotations
 
@@ -104,15 +104,19 @@ def discover_skills(root: str, *, strict: bool = False) -> list[Skill]:
     return sorted(out, key=lambda s: s.name)
 
 
-def catalog(root: str) -> list[dict]:
+def catalog(root: str, *, include_development: bool = False) -> list[dict]:
+    """研究 Agent 的 Skill 目录默认隐藏 development-only Skill。"""
     return [{"name": s.name, "description": s.description, "audience": s.audience}
-            for s in discover_skills(root)]
+            for s in discover_skills(root)
+            if include_development or s.audience != "development"]
 
 
-def read_skill(root: str, name: str, reference: str | None = None) -> dict:
+def read_skill(root: str, name: str, reference: str | None = None,
+               *, include_development: bool = False) -> dict:
     if not NAME_RE.match(name or ""):
         raise SkillError("非法 Skill 名称")
-    matches = [s for s in discover_skills(root) if s.name == name]
+    matches = [s for s in discover_skills(root)
+               if s.name == name and (include_development or s.audience != "development")]
     if not matches:
         raise SkillError(f"未找到 Skill: {name}")
     s = matches[0]

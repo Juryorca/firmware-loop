@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from fwapp.args import AppOptions
 from fwapp.config import resolve
@@ -276,6 +277,96 @@ def test_tui_quit_confirm_while_running(tmp_path):
             assert row["state"] == "paused"
             await pilot.press("ctrl+q")
             await pilot.pause(0.2)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_toggle_tools_includes_streaming_previews():
+    from types import SimpleNamespace
+
+    from fwapp.modes.interactive import FwApp
+
+    class Body:
+        display = False
+
+    tool = SimpleNamespace(body=Body())
+    stream = SimpleNamespace(body=Body())
+    fake: Any = SimpleNamespace(
+        _expand_tools=False,
+        _tool_widgets={"a": tool},
+        _stream_tools={"b": stream},
+        _notice=lambda *a, **k: None,
+    )
+    FwApp.action_toggle_tools(fake)
+    assert tool.body.display is True and stream.body.display is True
+    FwApp.action_toggle_tools(fake)
+    assert tool.body.display is False and stream.body.display is False
+
+
+def test_toolset_screen_loads_in_worker(monkeypatch, tmp_path):
+    import fwapp.widgets.screens as screens
+
+    calls = []
+    report = {
+        "required_total": 1, "required_ready": 0, "required_incomplete": 1,
+        "optional_total": 0, "integrity": "incomplete", "items": [], "config_error": None,
+    }
+
+    def slow_check(root):
+        calls.append(root)
+        time.sleep(0.15)
+        return report
+
+    monkeypatch.setattr(screens, "check_toolset", slow_check)
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.2)
+            screen = ToolsetScreen(str(tmp_path))
+            app.push_screen(screen)
+            await pilot.pause(0.05)
+            assert "正在检查" in str(screen.query_one("#toolset-body").render())
+            await pilot.pause(0.35)
+            assert "Default Toolset Integrity" in str(screen.query_one("#toolset-body").render())
+            assert calls == [str(tmp_path)]
+            await pilot.press("escape")
+            await pilot.pause(0.1)
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_tool_setup_command_runs_in_worker(monkeypatch, tmp_path):
+    import fwcore.toolset as toolset
+
+    report = {
+        "required_total": 0, "required_ready": 0, "required_incomplete": 0,
+        "optional_total": 0, "integrity": "ready", "items": [], "config_error": None,
+    }
+    monkeypatch.setattr(toolset, "check_toolset", lambda root: report)
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.2)
+            app.query_one(PromptEditor).text = "/tool-setup"
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            texts = [str(w.render()) for w in app.query("NoticeWidget")]
+            assert any("正在检查默认工具集" in t for t in texts)
+            assert any("默认工具集已完整" in t for t in texts)
+            await pilot.press("ctrl+q")
 
     try:
         asyncio.run(scenario())

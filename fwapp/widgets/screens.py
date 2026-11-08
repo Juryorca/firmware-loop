@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
 
 from rich.markdown import Markdown as RichMarkdown
@@ -11,12 +13,19 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, DataTable, Input, OptionList, Static, TabbedContent, TabPane,
+    Button,
+    DataTable,
+    Input,
+    OptionList,
+    Static,
+    TabbedContent,
+    TabPane,
 )
 from textual.widgets.option_list import Option
 
-from ..commands import COMMANDS
 from fwcore.toolset import check_toolset, render_report
+
+from ..commands import COMMANDS
 from ..services import state_store_rows
 from ..session import AgentSession
 
@@ -286,8 +295,22 @@ class ToolsetScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog research"):
             yield Static("默认工具集完整性", classes="dialog-title")
-            yield Static(render_report(check_toolset(self.root)), classes="pane")
+            yield Static("正在检查默认工具集…", id="toolset-body", classes="pane")
             yield Static("Esc 关闭", classes="dialog-hint")
+
+    def on_mount(self) -> None:
+        # toolset 探针会跑外部命令；不能在 compose/UI 线程里同步阻塞。
+        self.run_worker(self._load_report(), exclusive=True)
+
+    async def _load_report(self) -> None:
+        try:
+            report = await asyncio.to_thread(check_toolset, self.root)
+        except Exception as e:  # noqa: BLE001 - 状态页要显示失败原因
+            with contextlib.suppress(Exception):
+                self.query_one("#toolset-body", Static).update(f"检查失败: {e}")
+            return
+        with contextlib.suppress(Exception):
+            self.query_one("#toolset-body", Static).update(render_report(report))
 
     def action_close(self) -> None:
         self.dismiss(None)

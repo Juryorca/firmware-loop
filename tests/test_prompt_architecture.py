@@ -51,8 +51,9 @@ def test_slash_commands_are_registered_and_not_tools():
     names = {c.name for c in COMMANDS}
     for name in ("help", "status", "skills", "knowledge", "continue", "quit"):
         assert name in names
-    for name in ("skills", "knowledge"):
-        assert hasattr(FwApp, f"_cmd_{name}")
+    # prompt catalog 与实际 TUI dispatcher 必须同步：每个登记命令都有 handler。
+    for c in COMMANDS:
+        assert hasattr(FwApp, f"_cmd_{c.name.replace('-', '_')}"), c.name
 
 
 def test_opencode_assets_are_gone():
@@ -60,3 +61,12 @@ def test_opencode_assets_are_gone():
     root = Path(__file__).resolve().parents[1]
     assert not (root / "opencode.json").exists()
     assert not (root / "prompts").exists()
+
+
+def test_development_skill_is_not_injected_into_agent_prompt():
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    prompt = build_system_prompt(repo)
+    # AGENTS.md 可以提到开发 Skill 的路径；限制的是“可用 Skills 目录”本身。
+    catalog = prompt.split("## Available Skills", 1)[1].split("## User Slash Commands", 1)[0]
+    assert "fwcore-development" not in catalog
+    assert "research-loop" in catalog

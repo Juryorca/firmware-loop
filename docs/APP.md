@@ -64,11 +64,11 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 - 工具调用参数分片接收、完整组装并校验后才执行;状态实时更新,可折叠/展开
   (Ctrl+O),展示参数、结果、stdout 摘录。
 - Slash Commands 带补全:`/help /model /target /resume /status /budget
-  /hypotheses /evidence /new /continue /clear /expand /quit`。
+  /hypotheses /evidence /skills /knowledge /tools /tool-setup /new /continue /clear /expand /quit`。
 - 选择器:模型、目标、历史 run(搜索 + 列表)。
 - 研究面板:进度、假设池、观察、证据、结论、Gate 阻塞(每 2 秒从 SQLite 刷新)。
-- 状态栏:模型、target、run、状态、调用/工具数、Token(含 cache)、
-  上下文占用、运行时长、假设/证据/阻塞、最近预算触发。
+- 状态栏:target、模型、状态、调用/工具数、上下文占用、假设/证据、阻塞计数；
+  Token、运行时长和最近预算触发用 `/budget` 查看。
 - 快捷键:F1 帮助、F2/Ctrl+G 研究面板、Ctrl+L 模型、Ctrl+R 恢复、
   Ctrl+T 目标、Ctrl+O 展开工具、Ctrl+Q 退出、Esc 停止、Ctrl+C 取消/清空/退出。
 

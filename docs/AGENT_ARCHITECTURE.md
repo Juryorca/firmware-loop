@@ -70,6 +70,7 @@ tools = registry.describe()
 ---
 name: research-loop
 description: 一句话说明适用场景（Agent 据此判断是否加载）
+audience: research        # 可选；development 不进入研究 Agent catalog
 ---
 ```
 
@@ -81,9 +82,10 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 
 `fwcore/skills.py`：
 
-- `discover_skills(root)`：只扫描 `.agents/skills/*/SKILL.md`；跳过 symlink/非法 frontmatter；catalog 只返回 name/description。
-- `read_skill(root, name, reference=None)`：读取完整 `SKILL.md` 或 `references/*`；realpath 必须在 Skill 目录内；拒绝绝对路径、`..`、symlink、非文本、>512KB。
-- 工具：`skills_list`、`skill_read`。
+- `discover_skills(root)`：只扫描 `.agents/skills/*/SKILL.md`；跳过 symlink/非法 frontmatter；返回完整发现结果（含开发 Skill）。
+- `catalog(root, include_development=False)`：返回 name/description/audience；研究 Agent 目录默认隐藏 `audience: development`；只有开发代码显式传 `include_development=True`。
+- `read_skill(root, name, reference=None, include_development=False)`：读取完整 `SKILL.md` 或 `references/*`；realpath 必须在 Skill 目录内；拒绝绝对路径、`..`、symlink、非文本、>512KB；研究 Agent 默认不能读取开发 Skill。
+- 工具：`skills_list`、`skill_read` 与研究 Agent 的 `/skills` 使用同一过滤规则。
 - 不创建 Subagent、不引入新编排层；Skill 只是操作知识。
 
 ### 当前 Skills
@@ -97,7 +99,7 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 | `report-submission` | advisory/CVE/厂商提交（只填不提交） |
 | `research-knowledge-curation` | 研究知识检索与直接沉淀（无中间审核态） |
 | `tool-management` | 工具元数据、Python 环境队列、安装与接入（用户 `/tool-setup` 触发） |
-| `fwcore-development` | 产品开发会话方法（开发用，不是研究流程） |
+| `fwcore-development` | 产品开发会话方法（开发用，不是研究流程；研究 Agent 的 catalog 不暴露） |
 
 ## 5. Slash Commands
 
@@ -197,7 +199,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 - Prompt 组装：core + AGENTS + skills catalog + commands；案例正文不在 system；AGENTS 后段不裁剪。
 - Skills：发现、frontmatter、catalog 不含正文、按需读取、路径穿越/symlink 拒绝。
-- Commands：登记、分发、参数/错误/补全，不进入模型工具。
+- Commands：登记、分发、参数/错误/补全，不进入模型工具；每个登记命令必须有对应 handler，文档命令清单与 `fwcore/commands.py` 同步。
 - Knowledge：迁移幂等、FTS 中英文、get 完整正文、propose 直接 approved、版本追加。
 - Tool：真实能力、失败路径、授权；未接线状态如实。
 - 全量：`bash tools/fwcore_verify.sh`。

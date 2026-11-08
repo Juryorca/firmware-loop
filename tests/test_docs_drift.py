@@ -41,3 +41,11 @@ def test_verify_step_list_matches_script():
     steps = [s for s in ("运行产物边界", "迁移一致性/幂等") if s in script]
     for s in steps:
         assert s in road, f"verify 有步骤「{s}」但 ROADMAP 验证清单没写"
+
+
+def test_command_registry_is_documented():
+    from fwcore.commands import COMMANDS
+    for rel in ("docs/APP.md", "docs/AGENT_ARCHITECTURE.md"):
+        text = _read(rel)
+        missing = [c.name for c in COMMANDS if f"/{c.name}" not in text]
+        assert not missing, f"{rel} 缺少命令文档: {missing}"

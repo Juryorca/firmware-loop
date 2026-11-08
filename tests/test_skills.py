@@ -9,11 +9,12 @@ from fwcore.skills import SkillError, catalog, discover_skills, read_skill
 from fwcore.tools import ToolContext, default_registry
 
 
-def _mk(root, name="demo", body="正文", ref=True):
+def _mk(root, name="demo", body="正文", ref=True, audience=None):
     d = os.path.join(root, ".agents", "skills", name)
     os.makedirs(d, exist_ok=True)
+    extra = f"audience: {audience}\n" if audience else ""
     with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as f:
-        f.write(f"---\nname: {name}\ndescription: 测试用 Skill\n---\n\n# {body}\n")
+        f.write(f"---\nname: {name}\ndescription: 测试用 Skill\n{extra}---\n\n# {body}\n")
     if ref:
         os.makedirs(os.path.join(d, "references"), exist_ok=True)
         with open(os.path.join(d, "references", "detail.md"), "w", encoding="utf-8") as f:
@@ -64,3 +65,28 @@ def test_skill_tools(tmp_path):
     assert got["status"] == "ok" and "引用内容" in got["skill"]["content"]
     bad = reg.call(ctx, "skill_read", {"name": "demo", "reference": "../x"})
     assert bad["status"] == "error"
+
+
+def test_development_skills_are_hidden_from_research_catalog_and_reader(tmp_path):
+    root = str(tmp_path)
+    _mk(root, "demo")
+    _mk(root, "dev", audience="development")
+    assert [s.name for s in discover_skills(root)] == ["demo", "dev"]
+    assert [s["name"] for s in catalog(root)] == ["demo"]
+    assert [s["name"] for s in catalog(root, include_development=True)] == ["demo", "dev"]
+    try:
+        read_skill(root, "dev")
+    except SkillError:
+        pass
+    else:
+        raise AssertionError("研究 Agent 不应读取 development Skill")
+    assert read_skill(root, "dev", include_development=True)["content"].startswith("---")
+
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    ctx = ToolContext(domain=dom, root=root)
+    reg = default_registry()
+    listed = reg.call(ctx, "skills_list", {})
+    assert [s["name"] for s in listed["skills"]] == ["demo"]
+    blocked = reg.call(ctx, "skill_read", {"name": "dev"})
+    assert blocked["status"] == "error"
