@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import codecs
 import contextlib
+import json
 import os
 import tempfile
 from typing import Any
@@ -210,27 +211,73 @@ def combined_output_text(out: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _utf8_boundary(buf: bytes, index: int) -> bool:
+    """Pi 的字符边界判断：10xxxxxx 是续字节，不是字符起点。"""
+    return index >= len(buf) or (buf[index] & 0xC0) != 0x80
+
+
 def truncate_middle(content: str, *, max_bytes: int = DEFAULT_MAX_BYTES) -> dict[str, Any]:
-    """Pi MCP 的中间截断：保留头/尾各一半，中间替换为省略标记。"""
+    """Pi MCP 的中间截断：保留头/尾各一半，中间替换为省略标记。
+
+    与 Pi `truncateMiddle` 一致：头尾都移动到完整 UTF-8 字符边界，
+    统计的是被裁掉的**字符数**，不是字节数。
+    """
     buf = content.encode("utf-8")
     total_lines = len(_split_lines_for_counting(content))
     if len(buf) <= max_bytes:
         return {"content": content, "truncated": False, "removed_chars": 0,
                 "total_bytes": len(buf), "total_lines": total_lines}
-    head_bytes = max_bytes // 2
-    tail_bytes = max_bytes - head_bytes
-    head = buf[:head_bytes]
-    tail = buf[-tail_bytes:]
-    # head 末尾/ tail 开头都可能落在 UTF-8 字符中间；只裁到合法边界。
-    head_text = head.decode("utf-8", errors="replace")
-    tail_start = 0
-    while tail_start < len(tail) and (tail[tail_start] & 0xC0) == 0x80:
+    head_end = max_bytes // 2
+    while head_end > 0 and not _utf8_boundary(buf, head_end):
+        head_end -= 1
+    tail_start = len(buf) - (max_bytes - max_bytes // 2)
+    while tail_start < len(buf) and not _utf8_boundary(buf, tail_start):
         tail_start += 1
-    tail_text = tail[tail_start:].decode("utf-8", errors="replace")
-    removed = len(buf) - head_bytes - tail_bytes
-    return {"content": f"{head_text}…{removed} bytes truncated…{tail_text}",
-            "truncated": True, "removed_chars": removed,
+    head_text = buf[:head_end].decode("utf-8")
+    tail_text = buf[tail_start:].decode("utf-8")
+    removed_chars = len(buf[head_end:tail_start].decode("utf-8"))
+    return {"content": f"{head_text}…{removed_chars} chars truncated…{tail_text}",
+            "truncated": True, "removed_chars": removed_chars,
             "total_bytes": len(buf), "total_lines": total_lines}
+
+
+def save_temp_text(content: str, *, prefix: str = "fwcore-output",
+                   suffix: str = ".txt") -> str:
+    """把完整输出写入系统临时文件；不创建 workspace artifact。"""
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as f:
+            f.write(content)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+        raise
+    return path
+
+
+def limit_structured_for_model(value: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
+                               prefix: str = "fwcore-structured") -> tuple[Any, str | None]:
+    """限制模型可见的结构化对象；完整 JSON 落临时文件（Pi 的 script/full 分层）。
+
+    小对象原样返回。超过上限时返回一个很小的摘要对象，并给出完整 JSON 的
+    临时路径；模型可用 fs_read 读取。这里不是协议截断，而是本 Runtime
+    没有 codemode 时的模型可见投影。
+    """
+    try:
+        raw = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError) as e:
+        return {"_unserializable": f"{type(e).__name__}: {e}"}, None
+    raw_bytes = len(raw.encode("utf-8"))
+    if raw_bytes <= max_bytes:
+        return value, None
+    path = save_temp_text(raw, prefix=prefix, suffix=".json")
+    summary: dict[str, Any] = {"_truncated": True, "bytes": raw_bytes,
+                               "full_output_path": path}
+    if isinstance(value, dict):
+        summary["keys"] = [str(k) for k in list(value)[:20]]
+    elif isinstance(value, (list, tuple)):
+        summary["items"] = len(value)
+    return summary, path
 
 
 class OutputAccumulator:

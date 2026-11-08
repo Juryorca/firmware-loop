@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 
 from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers
-from .output import truncate_middle
+from .output import limit_structured_for_model, save_temp_text, truncate_middle
 
 MCP_OUTPUT_MAX_BYTES = 20 * 1024
 from .tools import Registry, ToolSpec
@@ -41,6 +40,35 @@ def disambiguated_name(server: str, tool: str) -> str:
     h = hashlib.sha256(f"{server}\x00{tool}".encode()).hexdigest()[:6]
     base = tool_name(server, tool)
     return base[:57] + "_" + h
+
+
+def _bounded_mcp_text(raw_text: str) -> tuple[str, dict, str | None]:
+    """Pi MCP 的模型可见文本：20 KiB 中间截断 + 截断时保存完整文本。"""
+    mid = truncate_middle(raw_text, max_bytes=MCP_OUTPUT_MAX_BYTES)
+    text = mid["content"]
+    full_path = None
+    if mid["truncated"]:
+        try:
+            full_path = save_temp_text(raw_text, prefix="fwcore-mcp", suffix=".txt")
+            where = f"[Full output: {full_path} (read it with offset/limit)]"
+        except OSError as e:
+            where = f"[Could not save full MCP output: {type(e).__name__}: {e}]"
+        tokens = (mid["total_bytes"] + 3) // 4
+        text = (f"Warning: truncated output (original token count: {tokens})\n"
+                f"Total output lines: {mid['total_lines']}\n\n{text}\n\n{where}")
+    return text, mid, full_path
+
+
+def _bounded_mcp_structured(value):
+    """模型可见结构化结果；大对象只留摘要和完整 JSON 临时路径。"""
+    if value is None:
+        return None, None
+    try:
+        return limit_structured_for_model(value, max_bytes=MCP_OUTPUT_MAX_BYTES,
+                                          prefix="fwcore-mcp-structured")
+    except OSError as e:
+        return {"_truncated": True,
+                "error": f"完整结构化结果保存失败: {type(e).__name__}: {e}"}, None
 
 
 @dataclass
@@ -149,46 +177,48 @@ class MCPBridge:
             except (OSError, ValueError) as e:
                 return {"status": "error", "error": f"{type(e).__name__}: {e}"[:500], "meta": meta}
             raw_text = out.get("text") or ""
-            if out.get("is_error"):
-                result = {"status": "error",
-                          "error": (raw_text or "MCP tool error")[:500],
-                          "meta": meta,
-                          "observation": {"status": "error", "text": raw_text[:2000]}}
-                if out.get("structured") is not None:
-                    result["structured"] = out["structured"]
-                if out.get("content"):
-                    result["content_items"] = len(out["content"])
+            text, mid, full_path = _bounded_mcp_text(raw_text)
+            structured, structured_path = _bounded_mcp_structured(out.get("structured"))
+            content = out.get("content") or []
+            content_types: dict[str, int] = {}
+            for block in content:
+                if isinstance(block, dict):
+                    kind = str(block.get("type") or "unknown")
+                    content_types[kind] = content_types.get(kind, 0) + 1
+
+            def _attach_common(result: dict) -> dict:
+                if full_path:
+                    result["full_output_path"] = full_path
+                if structured is not None:
+                    result["structured"] = structured
+                if structured_path:
+                    result["structured_full_output_path"] = structured_path
+                if content:
+                    result["content_items"] = len(content)
+                    result["content_types"] = content_types
                 return result
-            # Pi MCP 的模型可见文本是 head/tail 各一半的 20 KiB middle truncation；
-            # 完整文本写系统临时文件，图片/结构化结果不在文本层丢弃。
-            mid = truncate_middle(raw_text, max_bytes=MCP_OUTPUT_MAX_BYTES)
-            text = mid["content"]
-            full_path = None
-            if mid["truncated"]:
-                try:
-                    fd, full_path = tempfile.mkstemp(prefix="fwcore-mcp-", suffix=".txt")
-                    with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as f:
-                        f.write(raw_text)
-                    where = f"[Full output: {full_path}]"
-                except OSError as e:
-                    where = f"[Could not save full MCP output: {e}]"
-                text = (f"Warning: truncated output (original bytes: {mid['total_bytes']})\n"
-                        f"Total output lines: {mid['total_lines']}\n\n{text}\n\n{where}")
+
+            if out.get("is_error"):
+                # 错误也走同一 20 KiB 中间截断并保存完整文本；不能再只留 500/2000。
+                result = {"status": "error",
+                          "error": text or "MCP tool error",
+                          "truncated": mid["truncated"],
+                          "removed_chars": mid["removed_chars"],
+                          "total_lines": mid["total_lines"],
+                          "total_bytes": mid["total_bytes"],
+                          "meta": meta,
+                          "observation": {"status": "error", "text": raw_text[:2000],
+                                          "content_items": len(content)}}
+                return _attach_common(result)
             result = {"status": "ok", "text": text,
                       "truncated": mid["truncated"],
-                      "removed_bytes": mid["removed_chars"],
+                      "removed_chars": mid["removed_chars"],
                       "total_lines": mid["total_lines"],
                       "total_bytes": mid["total_bytes"],
                       "meta": meta,
                       "observation": {"status": "ok", "text": raw_text[:2000],
-                                      "content_items": len(out.get("content") or [])}}
-            if full_path:
-                result["full_output_path"] = full_path
-            if out.get("structured") is not None:
-                result["structured"] = out["structured"]
-            if out.get("content"):
-                result["content_items"] = len(out["content"])
-            return result
+                                      "content_items": len(content)}}
+            return _attach_common(result)
         return _handler
 
     def close(self) -> None:
@@ -215,8 +245,6 @@ def bridge_from_config(registry: Registry, root: str, config_paths: list[str] | 
                        *, timeout: float = 20.0, call_timeout: float = 120.0,
                        pgids_path: str | None = None) -> MCPBridge:
     """从 fwcore 自己的配置建桥:`FW_MCP_CONFIG` 或 `state/mcp.json`。"""
-    import os
-
     if config_paths is None:
         # 只认 fwcore 自己的配置(显式 FW_MCP_CONFIG 或 state/mcp.json);
         # 不隐式读外部 agent 运行时的配置 —— fwcore 只认自己的 state/mcp.json / FW_MCP_CONFIG

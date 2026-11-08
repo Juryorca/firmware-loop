@@ -457,8 +457,10 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
     if not os.path.isfile(p):
         return {"status": "error", "error": f"文件不存在: {args['path']}"}
     limit = int(args.get("limit", DEFAULT_MAX_BYTES))
+    offset = max(0, int(args.get("offset", 0)))
     try:
         with open(p, "rb") as f:
+            f.seek(offset)
             data = f.read(limit + 1)
     except OSError as e:
         return {"status": "error", "error": f"读文件失败: {e}"}
@@ -471,7 +473,8 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
         text = (f"[first line exceeds {limit} bytes; use shell_exec with "
                 f"`head -c {limit} {p}` / `sed` if you need a slice]")
     return {
-        "status": "ok", "path": args["path"], "bytes": os.path.getsize(p),
+        "status": "ok", "path": args["path"], "offset": offset,
+        "bytes": os.path.getsize(p),
         "truncated": truncated,
         "truncated_by": truncated_by,
         "sha256": _sha256(p),
@@ -721,7 +724,9 @@ def default_registry() -> Registry:
         {"type": "object", "properties": {
             "path": {"type": "string"},
             "limit": {"type": "number",
-                      "description": "最多读取字节数(默认 50 KiB;仍受 2000 行上限)"}},
+                      "description": "最多读取字节数(默认 50 KiB;仍受 2000 行上限)"},
+            "offset": {"type": "number",
+                       "description": "从文件第几字节开始读(默认 0;用于分段读取 full_output_path)"}},
          "required": ["path"]},
         fs_read))
     r.register(ToolSpec(

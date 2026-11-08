@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from dataclasses import dataclass, field
 from collections.abc import Callable
 
@@ -66,6 +67,19 @@ class Policy:
     max_timeout: float = 120.0
     sandbox_roots: list[str] = field(default_factory=list)
     require_path_within: bool = True
+    # 框架自己生成的完整工具输出在系统临时目录；这些文件必须能被 fs_read/fs_hash
+    # 读回，否则 full_output_path 只是摆设。只放行带框架前缀的临时文件，不放开整个 /tmp。
+    allow_framework_temp_outputs: bool = True
+
+    @staticmethod
+    def is_framework_temp_output(path: str) -> bool:
+        full = os.path.realpath(path)
+        tmp = os.path.realpath(tempfile.gettempdir())
+        if not full.startswith(tmp + os.sep):
+            return False
+        name = os.path.basename(full)
+        return name.startswith(("fwcore-output", "fwcore-stdout", "fwcore-stderr",
+                                "fwcore-mcp", "fwcore-structured", "fwcore-observation"))
 
     def decide(self, tool: str, risk: str, args: dict, *, external: bool = False,
                requires: str | None = None) -> tuple[bool, str]:
@@ -156,6 +170,9 @@ class Policy:
             raise DomainError("路径参数非法")
         full = os.path.realpath(p if os.path.isabs(p) else os.path.join(root, p))
         allowed = [os.path.realpath(r) for r in (roots or self.sandbox_roots or [root])]
-        if self.require_path_within and not any(full == a or full.startswith(a + os.sep) for a in allowed):
+        if (self.require_path_within
+                and not any(full == a or full.startswith(a + os.sep) for a in allowed)
+                and not (self.allow_framework_temp_outputs
+                         and self.is_framework_temp_output(full))):
             raise DomainError(f"路径越界(不在允许的根内): {full}")
         return full

@@ -61,7 +61,7 @@ def test_stop_works_with_spaces_in_stage_path(tmp_path):
         try:
             sup.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            raise AssertionError("含空格的暂存目录下 supervisor 未被停掉")
+            raise AssertionError("含空格的暂存目录下 supervisor 未被停掉") from None
         assert not (stage / "supervisor.pid").exists()
     finally:
         if sup.poll() is None:

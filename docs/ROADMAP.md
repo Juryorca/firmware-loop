@@ -27,7 +27,7 @@
 - **Agent 内容架构**:`fwcore/prompts/system.md` + 根 `AGENTS.md` 组成 system;LOOP 迁入 `research-loop` Skill;
   `.agents/skills/` 渐进式加载;Slash Commands 保留并由 fwapp 分发;SQLite `knowledge_entries` 保存 curated 研究知识,
   旧案例 Markdown 仅作来源。
-- **验证**:`bash tools/fwcore_verify.sh` = pytest(72 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
+- **验证**:`bash tools/fwcore_verify.sh` = pytest(73 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
 
 ## 待办
 

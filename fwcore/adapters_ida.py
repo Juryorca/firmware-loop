@@ -37,6 +37,28 @@ def _tail(out: dict, keep: int = 600) -> str:
     return text[-keep:]
 
 
+def _parse_envelope(text: str) -> dict | None:
+    """从可能带日志前缀/尾随日志的 IDA 输出中解析 JSON-RPC 信封。
+
+    不再只取末尾 2 MiB：大 JSON 被切掉开头时永远解析不了。这里对完整的
+    解析前缀用 raw_decode，允许前后有非 JSON 日志；只有真正超过前缀上限
+    （调用方另行报告 stdout_truncated）才会失败。
+    """
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    for start in (0, text.find("{")):
+        if start < 0:
+            continue
+        try:
+            obj, _end = decoder.raw_decode(text[start:])
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
 def _probe_enabled() -> bool:
     """默认探测 supervisor;测试里可用 FW_IDA_PROBE=0 关掉(生产不要关)。"""
     return os.environ.get("FW_IDA_PROBE", "1") != "0"
@@ -142,21 +164,23 @@ class IdAdapter(Adapter):
                             "arch": args.get("arch"), "url": cfg.url})
         # IDA MCP 返回 JSON-RPC 信封。优先把内层 structuredContent 交给 observer，
         # 避免 600 字符尾部截断导致明明成功却显示 unparsed；原始 stdout 仍在路径里。
-        text = (out.get("stdout") or out.get("stdout_tail") or "")[-2_000_000:]
-        if text.strip().startswith("{"):
-            try:
-                envelope = json.loads(text)
-                result = envelope.get("result") if isinstance(envelope, dict) else None
-                if isinstance(result, dict) and result.get("structuredContent") is not None:
-                    out["text"] = json.dumps(result["structuredContent"], ensure_ascii=False)
-                elif isinstance(result, dict):
-                    content = result.get("content")
-                    if isinstance(content, list) and content and isinstance(content[0], dict):
-                        inner = content[0].get("text")
-                        if isinstance(inner, str):
-                            out["text"] = inner
-            except json.JSONDecodeError:
-                pass
+        # 用完整解析前缀（不是任意 2 MiB 尾部）：大响应从开头解析，截断风险显式标注。
+        text = out.get("stdout") or out.get("stdout_tail") or ""
+        envelope = _parse_envelope(text)
+        if envelope is not None:
+            result = envelope.get("result")
+            if isinstance(result, dict) and result.get("structuredContent") is not None:
+                out["text"] = json.dumps(result["structuredContent"], ensure_ascii=False)
+            elif isinstance(result, dict):
+                content = result.get("content")
+                if isinstance(content, list) and content and isinstance(content[0], dict):
+                    inner = content[0].get("text")
+                    if isinstance(inner, str):
+                        out["text"] = inner
+        elif "{" in text:
+            # 看起来是 JSON 但解析失败（日志前缀/截断/损坏）：明确报告，不静默当普通文本。
+            out["parse_error"] = "IDA JSON-RPC 响应无法从完整解析前缀中解析（可能超过输出上限）"
+            out["parse_truncated"] = bool(out.get("stdout_truncated"))
         return out
 
     def close(self) -> None:

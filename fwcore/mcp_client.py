@@ -218,26 +218,63 @@ class MCPClient:
                 session = resp.headers.get("Mcp-Session-Id")
                 if session:
                     self._http_session = session
-                raw = resp.read(MAX_MESSAGE_BYTES + 1)
-                if len(raw) > MAX_MESSAGE_BYTES:
-                    raise MCPError(f"{self.spec.name}: HTTP MCP 响应超过 {MAX_MESSAGE_BYTES} 字节上限")
                 content_type = (resp.headers.get("Content-Type") or "").lower()
-                if not raw:
+                rid = payload.get("id")
+                if rid is None:
+                    # JSON-RPC notification 通常返回 202/空 body；不能为一条通知
+                    # 去等一个可能永不结束的 SSE 流。
                     return {}
                 if "text/event-stream" not in content_type:
+                    raw = resp.read(MAX_MESSAGE_BYTES + 1)
+                    if len(raw) > MAX_MESSAGE_BYTES:
+                        raise MCPError(f"{self.spec.name}: HTTP MCP 响应超过 {MAX_MESSAGE_BYTES} 字节上限")
+                    if not raw:
+                        return {}
                     return json.loads(raw.decode("utf-8", errors="replace"))
-                # SSE:取第一个 data: JSON 行;忽略注释/心跳/其它事件。
-                for line in raw.decode("utf-8", errors="replace").splitlines():
-                    if not line.startswith("data:"):
+                # SSE 必须增量读：只解析到与本次请求 id 匹配的响应，不能等连接关闭。
+                # 忽略注释/心跳/通知/其它请求的响应；支持一个事件多行 data。
+                deadline = time.time() + timeout
+                total = 0
+                data_lines: list[str] = []
+                while time.time() < deadline:
+                    line = resp.readline(MAX_MESSAGE_BYTES + 1)
+                    if not line:
+                        break
+                    total += len(line)
+                    if total > MAX_MESSAGE_BYTES:
+                        raise MCPError(f"{self.spec.name}: SSE 响应超过 {MAX_MESSAGE_BYTES} 字节上限")
+                    if line.endswith(b"\n"):
+                        line = line[:-1]
+                    if line.endswith(b"\r"):
+                        line = line[:-1]
+                    if not line:
+                        if not data_lines:
+                            continue
+                        data = "\n".join(data_lines).strip()
+                        data_lines = []
+                        if not data or data == "[DONE]":
+                            continue
+                        try:
+                            msg = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(msg, dict) and msg.get("id") == rid:
+                            return msg
                         continue
-                    data = line[5:].strip()
-                    if not data or data == "[DONE]":
-                        continue
-                    try:
-                        return json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                raise MCPError(f"{self.spec.name}: SSE 中没有 JSON-RPC 响应")
+                    if line.startswith(b":"):
+                        continue                         # SSE comment / heartbeat
+                    if line.startswith(b"data:"):
+                        data_lines.append(line[5:].lstrip().decode("utf-8", errors="replace"))
+                if data_lines:
+                    data = "\n".join(data_lines).strip()
+                    if data and data != "[DONE]":
+                        try:
+                            msg = json.loads(data)
+                        except json.JSONDecodeError:
+                            msg = None
+                        if isinstance(msg, dict) and msg.get("id") == rid:
+                            return msg
+                raise MCPError(f"{self.spec.name}: SSE 中没有匹配 id={rid} 的 JSON-RPC 响应")
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")[:500]
             raise MCPError(f"{self.spec.name}: HTTP {e.code}: {body}") from e

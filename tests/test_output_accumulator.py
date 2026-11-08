@@ -6,6 +6,7 @@ import os
 
 from fwcore.output import (
     DEFAULT_MAX_BYTES,
+    limit_structured_for_model,
     truncate_middle,
     DEFAULT_MAX_LINES,
     OutputAccumulator,
@@ -110,5 +111,29 @@ def test_middle_truncation_keeps_head_and_tail():
     assert r["truncated"] is True
     assert r["content"].startswith("H")
     assert r["content"].endswith("T")
-    assert "bytes truncated" in r["content"]
+    assert "chars truncated" in r["content"]
     assert len(r["content"].encode("utf-8")) <= 20 * 1024 + 80
+
+
+def test_middle_truncation_never_splits_utf8():
+    text = "中" * 10_000                 # 3 bytes each
+    r = truncate_middle(text, max_bytes=10_000)
+    assert r["truncated"] is True
+    assert "\ufffd" not in r["content"]
+    assert r["content"].startswith("中")
+    assert r["content"].endswith("中")
+    assert r["removed_chars"] > 0
+
+
+def test_large_structured_is_projected_and_full_json_saved(tmp_path):
+    value = {"blob": "x" * 80_000, "ok": True}
+    got, path = limit_structured_for_model(value, max_bytes=1024,
+                                           prefix="fwcore-structured-test")
+    assert got["_truncated"] is True and got["keys"] == ["blob", "ok"]
+    assert path and os.path.isfile(path)
+    try:
+        import json
+        with open(path, encoding="utf-8") as f:
+            assert json.load(f) == value
+    finally:
+        os.unlink(path)

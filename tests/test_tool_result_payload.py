@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 
 from fwcore import db as _db
 from fwcore.domain import Domain
@@ -82,3 +83,73 @@ def test_large_text_is_capped_to_pi_tail():
     d = json.loads(_bounded_tool_result(out))
     assert len(d["text"].encode("utf-8")) <= 50 * 1024
     assert d["text_truncated"] is True
+
+
+def test_large_structured_is_projected_and_full_json_saved():
+    out = {"status": "ok", "structured": {"blob": "x" * 100_000}}
+    d = json.loads(_bounded_tool_result(out))
+    assert d["structured"]["_truncated"] is True
+    path = d["structured_full_output_path"]
+    try:
+        assert path and os.path.isfile(path)
+        with open(path, encoding="utf-8") as f:
+            assert json.load(f) == out["structured"]
+        assert len(json.dumps(d["structured"], ensure_ascii=False)) < 1000
+    finally:
+        if path and os.path.exists(path):
+            os.unlink(path)
+
+
+def test_framework_temp_output_is_readable_but_other_temp_is_not(tmp_path):
+    from fwcore.tools import ToolContext, fs_read
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
+    fd, ok_path = tempfile.mkstemp(prefix="fwcore-output", suffix=".txt")
+    os.write(fd, b"full tool output")
+    os.close(fd)
+    fd, bad_path = tempfile.mkstemp(prefix="not-fwcore-", suffix=".txt")
+    os.write(fd, b"not allowed")
+    os.close(fd)
+    try:
+        assert fs_read(ctx, {"path": ok_path})["status"] == "ok"
+        assert fs_read(ctx, {"path": bad_path})["status"] == "error"
+    finally:
+        os.unlink(ok_path)
+        os.unlink(bad_path)
+
+
+def test_fs_read_can_read_a_later_slice_of_full_output(tmp_path):
+    from fwcore.tools import ToolContext, fs_read
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
+    fd, path = tempfile.mkstemp(prefix="fwcore-output", suffix=".txt")
+    os.write(fd, b"HEAD" + b"x" * 9000 + b"TAIL")
+    os.close(fd)
+    try:
+        out = fs_read(ctx, {"path": path, "offset": 9004, "limit": 100})
+        assert out["status"] == "ok"
+        assert out["offset"] == 9004 and out["text"].startswith("TAIL")
+    finally:
+        os.unlink(path)
+
+
+def test_restored_oversized_tool_message_is_rebounded():
+    from fwcore.runtime import _sanitize_history
+    history = [{"role": "tool", "tool_call_id": "call_old",
+                "content": json.dumps({"status": "ok",
+                                       "structured": {"blob": "x" * 100_000}})}]
+    out = _sanitize_history(history)
+    payload = json.loads(out[0]["content"])
+    assert payload["structured"]["_truncated"] is True
+    path = payload["structured_full_output_path"]
+    try:
+        assert path and os.path.isfile(path)
+    finally:
+        if path and os.path.exists(path):
+            os.unlink(path)

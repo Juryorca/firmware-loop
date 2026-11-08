@@ -29,6 +29,8 @@ TOOLS = [
     {"name": "boom", "description": "总是报错", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "slow", "description": "慢", "inputSchema": {"type": "object", "properties": {}}},
     {"name": "big", "description": "大输出", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "big_struct", "description": "大结构化结果", "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "big_error", "description": "大错误结果", "inputSchema": {"type": "object", "properties": {}}},
 ]
 
 for line in sys.stdin:
@@ -58,6 +60,15 @@ for line in sys.stdin:
             send({"jsonrpc": "2.0", "id": rid, "result": {
                 "content": [{"type": "text", "text": "HEAD" + ("x" * 30000) + "TAIL"}],
                 "structuredContent": {"answer": 42}}})
+        elif name == "big_struct":
+            send({"jsonrpc": "2.0", "id": rid, "result": {
+                "content": [{"type": "text", "text": "ok"}],
+                "structuredContent": {"blob": "S" * 30000}}})
+        elif name == "big_error":
+            send({"jsonrpc": "2.0", "id": rid, "result": {
+                "isError": True,
+                "content": [{"type": "text", "text": "ERRHEAD" + ("e" * 30000) + "ERRTAIL"}],
+                "structuredContent": {"detail": "D" * 30000}}})
         else:
             send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "no such tool"}})
     elif rid is not None:
@@ -183,7 +194,7 @@ def test_mcp_large_result_uses_pi_middle_truncation_and_structured(tmp_path):
         assert out["truncated"] is True
         assert out["text"].startswith("Warning: truncated output")
         assert "HEAD" in out["text"] and "TAIL" in out["text"]
-        assert "bytes truncated" in out["text"]
+        assert "chars truncated" in out["text"]
         path = out["full_output_path"]
         assert path and os.path.isfile(path)
         try:
@@ -192,3 +203,63 @@ def test_mcp_large_result_uses_pi_middle_truncation_and_structured(tmp_path):
             os.unlink(path)
     finally:
         b.close()
+
+
+def test_mcp_large_structured_is_bounded_and_full_json_saved(tmp_path):
+    spec, _ = _spec(tmp_path)
+    con, dom, root = _setup(tmp_path)
+    reg = Registry()
+    b = MCPBridge(root=root, registry=reg, specs=[spec])
+    b.start()
+    paths = []
+    try:
+        from fwcore.tools import ToolContext, fs_read
+        ctx = ToolContext(domain=dom, root=root,
+                          policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
+        out = reg.call(ctx, "mcp_fake_big_struct", {})
+        assert out["status"] == "ok"
+        assert out["structured"]["_truncated"] is True
+        path = out["structured_full_output_path"]
+        paths.append(path)
+        assert path and os.path.isfile(path)
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        assert payload == {"blob": "S" * 30000}
+        # 模型可见的结构化对象只剩摘要，不携带 30 KB 字段；完整 JSON 可读。
+        assert len(json.dumps(out["structured"], ensure_ascii=False)) < 1000
+        read = fs_read(ctx, {"path": path})
+        assert read["status"] == "ok" and "S" * 100 in read["text"]
+    finally:
+        b.close()
+        for path in paths:
+            if path and os.path.exists(path):
+                os.unlink(path)
+
+
+def test_mcp_large_error_uses_middle_truncation_and_saves_full(tmp_path):
+    spec, _ = _spec(tmp_path)
+    con, dom, root = _setup(tmp_path)
+    reg = Registry()
+    b = MCPBridge(root=root, registry=reg, specs=[spec])
+    b.start()
+    paths = []
+    try:
+        from fwcore.tools import ToolContext, fs_read
+        ctx = ToolContext(domain=dom, root=root,
+                          policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)))
+        out = reg.call(ctx, "mcp_fake_big_error", {})
+        assert out["status"] == "error"
+        assert out["truncated"] is True and "chars truncated" in out["error"]
+        path = out["full_output_path"]
+        paths.append(path)
+        assert path and "ERRTAIL" in open(path, encoding="utf-8").read()
+        # 完整临时输出必须能被 fs_read 读回，否则 full_output_path 没有意义。
+        read = fs_read(ctx, {"path": path})
+        assert read["status"] == "ok" and "ERRTAIL" in read["text"]
+        assert out["structured"]["_truncated"] is True
+        paths.append(out["structured_full_output_path"])
+    finally:
+        b.close()
+        for path in paths:
+            if path and os.path.exists(path):
+                os.unlink(path)

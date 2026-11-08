@@ -392,7 +392,8 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 ### 工具输出与证据(2026-11-08)
 - 工具输出默认留在 tool result/session；进程/文件工具看 Pi 风格边界（`2000` 行或 `50 KiB`）；
   **MCP 单独按 Pi MCP 的 `20 KiB` 中间截断**（保留头/尾），不是通用尾部策略。
-- 被截断时结果带 `full_output_path`（系统临时文件，不是 workspace artifact）；完整输出用它查看，不在 `artifacts/` 自动建 stdout/stderr 文件。
+- 被截断时结果带 `full_output_path`（系统临时文件，不是 workspace artifact）；完整输出用它查看（`fs_read` 支持 `offset/limit` 分段读），不在 `artifacts/` 自动建 stdout/stderr 文件。
+- MCP 的大 `structuredContent` 只给模型小摘要，完整 JSON 在 `structured_full_output_path`；不要把它重新整包塞回上下文。
 - 需要长期保存时，Agent 自己用 bash 重定向到 `state/<target>/artifacts/` 或 `state/_scratch/`。
 - `observation` 记录研究事实；`evidence` 必须显式给 `path` 或 `capture`，并复核后才能支撑结论。工具跑过 ≠ 证据。
 

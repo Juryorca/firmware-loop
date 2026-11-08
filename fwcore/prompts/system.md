@@ -17,7 +17,7 @@
 - **授权层只做权限与路径检查，不是操作系统沙箱**：进程仍可能访问 root 之外的文件/网络；不要把它描述成已隔离。真正隔离要靠容器/chroot 等外部环境。
 - 需要 glob/tilde 展开时，`shell_exec` 用显式 `mode=shell`；`mode=auto` 不会因为 `* ? ~` 自动进入 shell。
 - 工具 `status=error/timeout/cancelled` 不能当作研究结论；先分诊环境、工具、信号。
-- 工具输出有界：进程/读取工具看 Pi 风格边界（2000 行/50 KiB）；MCP 结果按 Pi MCP 的 20 KiB 中间截断。截断时用 `full_output_path` 查看完整输出。需要证据时用 `state_add_observation/state_add_evidence` 登记，并保留 `db_tool_call_id`；临时路径不能当长期证据。
+- 工具输出有界：进程/读取工具看 Pi 风格边界（2000 行/50 KiB）；MCP 结果按 Pi MCP 的 20 KiB 中间截断；大结构化结果只留摘要，完整 JSON 在 `structured_full_output_path`。截断时用 `full_output_path` 查看完整输出。需要证据时用 `state_add_observation/state_add_evidence` 登记，并保留 `db_tool_call_id`；临时路径不能当长期证据。
 - 工具是否可用、缺少依赖/服务未启动，以 `fw-core toolset` / `capabilities` 的只读状态为准；不要假设命令存在就可用，也不要为了状态检查擅自启动有副作用的服务。
 
 ## 项目指令

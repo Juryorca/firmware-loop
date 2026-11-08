@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 from fwcore import db as _db
@@ -151,3 +152,12 @@ def test_ghidra_structured_when_runner_exists(tmp_path, monkeypatch):
     row = con.execute("SELECT provider FROM tool_calls WHERE tool='ghidra_query'"
                       " ORDER BY created_at DESC LIMIT 1").fetchone()
     assert row["provider"] == "repo:ghidra_run.sh"
+
+
+def test_parse_ida_envelope_large_json_above_two_megabytes():
+    from fwcore.adapters_ida import _parse_envelope
+    payload = json.dumps({"result": {"structuredContent": {"blob": "x" * 2_500_000}}})
+    assert len(payload.encode("utf-8")) > 2_000_000
+    envelope = _parse_envelope("ida log line\n" + payload + "\ntrailing log")
+    assert envelope is not None
+    assert envelope["result"]["structuredContent"]["blob"][:1] == "x"

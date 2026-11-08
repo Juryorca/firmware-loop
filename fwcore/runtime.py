@@ -29,7 +29,8 @@ from .contextinfo import build_status
 from .domain import ConversationPersistError, Domain, new_id
 from .limits import Limits
 from .models import Adapter, ModelHTTPError, Reply, ScriptedAdapter, assistant_message  # noqa: F401
-from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail
+from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, limit_structured_for_model,
+                     truncate_tail)
 from .policy import Policy
 from .streaming import StreamCancelled, StreamControl, StreamError, as_event
 from .research import Research
@@ -791,14 +792,16 @@ class Runner:
                        "stdout_total_lines", "stderr_total_lines",
                        "stdout_total_bytes", "stderr_total_bytes",
                        "stdout_full_output_path", "stderr_full_output_path",
-                       "full_output_path")
+                       "full_output_path", "structured_full_output_path",
+                       "observation_full_output_path")
                    if out.get(k) not in (None, "")}
         for key in ("stdout_tail", "stderr_tail", "text", "output_tail"):
             value = payload.get(key)
             if isinstance(value, str):
                 # Pi 的 live tool output 是 2000 行/50 KiB；持久化也沿用这个
-                # 上限，不再使用独立的 8k 拍脑袋值。
-                payload[key] = value[:DEFAULT_MAX_BYTES]
+                # 边界（按字节 + 行，而不是按 Python 字符数切）。
+                payload[key] = truncate_tail(value, max_lines=DEFAULT_MAX_LINES,
+                                             max_bytes=DEFAULT_MAX_BYTES)["content"]
         if out.get("tool_call_id"):
             payload["tool_call_id"] = out["tool_call_id"]
         content = json.dumps(payload, ensure_ascii=False)
@@ -1712,6 +1715,24 @@ def _bounded_tool_result(out: dict, limit: int | None = None) -> str:
         elif len(value.encode("utf-8")) > DEFAULT_MAX_BYTES:
             out[f"{key}_omitted_bytes"] = len(value.encode("utf-8"))
             out.pop(key, None)
+    # 模型可见的结构化对象也必须有界：Pi 把完整 structuredContent 留给脚本，
+    # 模型看的是转换后的 content。fwcore 没有 codemode，因此把完整 JSON 落临时
+    # 文件、模型只保留摘要；否则 20 KiB 文本上限会被结构化对象绕过。
+    for key in ("structured", "observation"):
+        if out.get(key) is None:
+            continue
+        try:
+            bounded_value, full_path = limit_structured_for_model(
+                out[key], max_bytes=DEFAULT_MAX_BYTES,
+                prefix=f"fwcore-{key}")
+        except OSError as e:
+            bounded_value, full_path = {
+                "_truncated": True,
+                "error": f"完整 {key} 保存失败: {type(e).__name__}: {e}",
+            }, None
+        out[key] = bounded_value
+        if full_path:
+            out[f"{key}_full_output_path"] = full_path
     # 所有模型可见文本字段统一走 Pi 尾部边界（适配器也不能绕过）。
     for key in ("stdout_tail", "stderr_tail", "text", "output_tail"):
         value = out.get(key)
@@ -1729,6 +1750,7 @@ def _bounded_tool_result(out: dict, limit: int | None = None) -> str:
             "stderr_path", "result_sha256", "sha256", "exit_code", "error", "note",
             "path", "bytes", "truncated", "duration_ms", "replayed", "next",
             "needs_user_input", "provider", "capability", "full_output_path",
+            "structured_full_output_path", "observation_full_output_path",
             "stdout_full_output_path", "stderr_full_output_path",
             "stdout_truncated", "stderr_truncated",
             "stdout_truncated_by", "stderr_truncated_by")
@@ -1766,10 +1788,16 @@ def _sanitize_history(history: list[dict], lookup=None) -> list[dict]:
         if not isinstance(c, str):
             continue
         try:
-            json.loads(c)
-            continue
+            data = json.loads(c)
         except (ValueError, TypeError):
             pass
+        else:
+            # 旧检查点可能仍带着升级前的超大 structured/text；恢复时重新过一遍
+            # 模型可见边界，避免只修新产生的消息、旧历史继续撑爆上下文。
+            if (isinstance(data, dict)
+                    and len(c.encode("utf-8")) > DEFAULT_MAX_BYTES):
+                m["content"] = _bounded_tool_result(data)
+            continue
         rec = {}
         if lookup:
             try:

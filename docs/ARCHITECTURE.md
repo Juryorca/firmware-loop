@@ -125,11 +125,14 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 
 - **进程输出**（`shell_exec` / `run_process`）：模型看尾部 `2000` 行或 `50 KiB`，先到者生效；
   截断时临时完整输出由 `full_output_path` 给出，**不自动写 workspace artifact**。
-- **文件读取**（`fs_read`）：保留头部 `2000` 行或 `50 KiB`；文件路径本身是可回读的完整来源。
+- **文件读取**（`fs_read`）：保留头部 `2000` 行或 `50 KiB`，支持 `offset/limit`
+  分段读；`full_output_path` 这类框架临时文件可被 `fs_read` 读回，否则路径没有意义。
 - **manifest / toolkit**：`output_tail` / `text` 走 `truncate_tail`（2000 行/50 KiB）。
 - **MCP**：单独按 Pi MCP 策略：模型可见文本 `20 KiB` **中间截断**（保留头/尾），
-  完整文本写临时 `full_output_path`；`structuredContent` 不丢。当前 JSON tool result
-  只能记录图片块数量，尚未渲染图片。
+  完整文本写临时 `full_output_path`；`isError` 也走同一路径。完整
+  `structuredContent` 写临时 `structured_full_output_path`，模型只保留小摘要；
+  当前 JSON tool result 只能记录图片块数量，尚未渲染图片。HTTP SSE 按行增量读取，
+  只接受与请求 id 匹配的响应。
 - **conversation/checkpoint**：conversation 的 live tool payload 与 Pi 边界一致；
   checkpoint 的磁盘保护另有 `CHECKPOINT_TOOL_TAIL_CHARS=2000`，不混同 live 输出。
 - **错误/探针摘要**（如 160/600 字符）只用于状态说明，不承载完整工具输出。
@@ -140,6 +143,9 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **Pi 原值**（有来源可核）：bash live output `2000` 行 / `50 KiB` 尾部；
   read `2000` 行 / `50 KiB` 头部；MCP 模型可见文本 `20 KiB` 中间截断；
   structured/full read `1 MiB`；compaction 单条 tool result `2000` 字符。
+- **Pi MCP 的 script/full 分层**：Pi 把完整 `CallToolResult` 留给 codemode，
+  模型只看转换后的 content。fwcore 没有 codemode，因此模型可见 structured
+  也只能留摘要，完整 JSON 落临时文件并在 `structured_full_output_path` 指回。
 - **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP transport 单条消息 `8 MiB`、
   Skill 文件 `512 KiB`、错误摘要 `160/600` 字符、legacy 修复 excerpt `1500`、
   MCP observation `2000`。这些应保持命名常量/局部理由，不能反过来冒充 Pi。
@@ -199,4 +205,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 72 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 73 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
