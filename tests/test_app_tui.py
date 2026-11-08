@@ -254,7 +254,8 @@ def test_tui_escape_cancels_running_turn(tmp_path):
                 (app.sess.run_id,)).fetchone()
             assert row["state"] == "paused"
             assert (row["handback_reason"] or "").startswith("user_stop")
-            notices = [str(w.render()) for w in app.query(NoticeWidget)]
+            tui = app
+            notices = [str(w.render()) for w in tui.query(NoticeWidget)]
             assert sum("正在停止" in n for n in notices) == 1
             assert not any("回复未完整生成" in n or "已停止:" in n or "本轮已暂停" in n
                            for n in notices)
@@ -690,7 +691,8 @@ def test_model_error_clears_busy_status(tmp_path):
             assert users and all(w.size.height <= 3 for w in users)
             assistants = [w for w in app.query(MessageWidget) if getattr(w, "role", "") == "assistant"]
             assert all(getattr(w, "_text", "").strip() for w in assistants)
-            notices = [str(w.render()) for w in app.query(NoticeWidget)]
+            tui = app
+            notices = [str(w.render()) for w in tui.query(NoticeWidget)]
             assert not any("已已" in n for n in notices)
             assert any("cannot read from timed out object" in n for n in notices)
             await pilot.press("ctrl+q")
@@ -738,7 +740,8 @@ def test_model_error_does_not_block_next_submit(tmp_path):
             await pilot.pause(0.5)
             assert app.sess.busy is False
             assert calls["n"] >= 2
-            assert any("已恢复" in getattr(w, "_text", "") for w in app.query(MessageWidget))
+            tui = app
+            assert any("已恢复" in getattr(w, "_text", "") for w in tui.query(MessageWidget))
             await pilot.press("ctrl+q")
 
     try:
@@ -776,3 +779,20 @@ def test_thinking_block_is_visible_and_toggles(tmp_path):
         asyncio.run(scenario())
     finally:
         rt.dispose()
+
+
+def test_status_bar_cache_uses_latest_request_like_pi():
+    from types import SimpleNamespace
+
+    from fwapp.widgets.status import format_snapshot
+
+    s: Any = SimpleNamespace(
+        target="t1", model="scripted", state="running", busy=False, handback=None,
+        target_status="active", limits={"max_model_calls": 200}, calls=2, tools=0,
+        tokens={"prompt": 100, "cached": 75, "last_prompt": 200,
+                "last_cached": 190, "completion": 0, "total": 100},
+        context={}, hypotheses={}, evidence=0, blockers=[],
+    )
+    text = format_snapshot(s).plain
+    assert "缓存 95%" in text
+    assert "缓存 75%" not in text

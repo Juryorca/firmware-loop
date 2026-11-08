@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -394,5 +395,28 @@ def test_transcript_keeps_tool_without_call_key_before_later_assistant(tmp_path)
         items = rt.session.transcript()
         assert [i.kind for i in items] == ["user", "assistant", "tool", "assistant"]
         assert items[2].meta["call"]["id"] == "TC-test"
+    finally:
+        rt.dispose()
+
+
+def test_tokens_expose_latest_cache_hit_for_footer(tmp_path):
+    from fwcore.runtime import Runner
+
+    root, cfg = make_ws(tmp_path)
+    con = _db.connect(cfg.db_path)
+    runner = Runner(con, str(root), ScriptedAdapter(script=[]), mcp=False, watchdog=False)
+    rid = runner.start("t1", "cache metric")
+    for prompt, cached in ((100, 90), (200, 190)):
+        con.execute(
+            "INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+            ("2026-01-01T00:00:00+00:00", "model.call", rid,
+             json.dumps({"usage": {"prompt_tokens": prompt},
+                         "cached_tokens": cached})))
+    con.commit()
+    rt = AppRuntime(cfg, target="t1", run_id=rid, mcp=False, watchdog=False)
+    try:
+        tok = rt.session.snapshot().tokens
+        assert tok["prompt"] == 300 and tok["cached"] == 280
+        assert tok["last_prompt"] == 200 and tok["last_cached"] == 190
     finally:
         rt.dispose()

@@ -538,22 +538,31 @@ class AgentSession:
 
     def _tokens(self) -> dict:
         if not self.run_id:
-            return {"prompt": 0, "completion": 0, "cached": 0, "total": 0, "calls": 0}
+            return {"prompt": 0, "completion": 0, "cached": 0, "total": 0,
+                    "calls": 0, "last_prompt": 0, "last_cached": 0}
         last = self.services.con.execute(
             "SELECT MAX(id) m FROM events WHERE kind='model.call' AND ref=?",
             (self.run_id,)).fetchone()["m"]
         if self._usage_cache and self._usage_cache[0] == (self.run_id, last):
             return self._usage_cache[1]
-        out = {"prompt": 0, "completion": 0, "cached": 0, "total": 0, "calls": 0}
+        out = {"prompt": 0, "completion": 0, "cached": 0, "total": 0,
+               "calls": 0, "last_prompt": 0, "last_cached": 0}
         for r in self.services.con.execute(
                 "SELECT payload FROM events WHERE kind='model.call' AND ref=? ORDER BY id",
                 (self.run_id,)).fetchall():
             p = _json(r["payload"], {})
             u = p.get("usage") or {}
-            out["prompt"] += int(u.get("prompt_tokens") or p.get("prompt_tokens") or 0)
+            prompt = int(u.get("prompt_tokens") or p.get("prompt_tokens") or 0)
+            cached = int(p.get("cached_tokens") or 0)
+            out["prompt"] += prompt
             out["completion"] += int(u.get("completion_tokens") or p.get("completion_tokens") or 0)
-            out["cached"] += int(p.get("cached_tokens") or 0)
+            out["cached"] += cached
             out["calls"] += 1
+            # Pi 的 footer 显示最近一次 assistant 请求的 cache hit rate；
+            # summarize 调用的 usage 不混进这个“当前请求”指标。
+            if p.get("kind") != "summarize" and prompt:
+                out["last_prompt"] = prompt
+                out["last_cached"] = cached
         out["total"] = out["prompt"] + out["completion"]
         self._usage_cache = ((self.run_id, last), out)
         return out

@@ -151,8 +151,9 @@ def format_snapshot(s: Snapshot) -> Text:
     # tools 是 tool_calls 计数，不是“可用工具数”。
     t.append(f" · 工具调用 {s.tools}", style="#66717F")
     tok = s.tokens or {}
-    prompt = _as_int(tok.get("prompt"))
-    cached = _as_int(tok.get("cached"))
+    # Pi 的 footer 口径是最近一次模型请求；没有 latest 字段时兼容旧快照。
+    prompt = _as_int(tok.get("last_prompt")) or _as_int(tok.get("prompt"))
+    cached = _as_int(tok.get("last_cached")) if "last_cached" in tok else _as_int(tok.get("cached"))
     if prompt:
         pct = min(100.0, cached / prompt * 100)
         t.append(f" · 缓存 {pct:.0f}%", style="#83A9D5")

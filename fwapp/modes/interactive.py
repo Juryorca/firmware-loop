@@ -653,8 +653,14 @@ class FwApp(App):
                  f"合计 {tok.get('total')}\n")
         prompt = int(tok.get("prompt") or 0)
         cached = int(tok.get("cached") or 0)
+        last_prompt = int(tok.get("last_prompt") or 0)
+        last_cached = int(tok.get("last_cached") or 0)
+        if last_prompt:
+            t.append(f"- 最近一次缓存 {min(100, last_cached / last_prompt * 100):.0f}% "
+                     f"({last_cached}/{last_prompt})\n")
         if prompt:
-            t.append(f"- 缓存命中率 {min(100, cached / prompt * 100):.0f}% ({cached}/{prompt})\n")
+            t.append(f"- 本 run 累计缓存 {min(100, cached / prompt * 100):.0f}% "
+                     f"({cached}/{prompt})\n")
         if ctx.get("window"):
             t.append(f"- 上下文 {ctx.get('last_prompt') or ctx.get('estimated')}/{ctx['window']}")
             if ctx.get("percent") is not None:
