@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass, field
 
 from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers  # noqa: F401
-from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, truncate_tail
+from .output import DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, OutputAccumulator
 from .tools import Registry, ToolSpec
 
 _SAFE = re.compile(r"[^A-Za-z0-9_-]")
@@ -148,16 +148,27 @@ class MCPBridge:
                 return {"status": "error", "error": (out.get("text") or "MCP tool error")[:500],
                         "meta": meta, "observation": {"status": "error", "text": out.get("text", "")[:2000]}}
             text = out.get("text") or ""
-            bounded = truncate_tail(text, max_lines=DEFAULT_MAX_LINES,
-                                    max_bytes=DEFAULT_MAX_BYTES)
-            return {"status": "ok", "text": bounded["content"],
-                    "truncated": bounded["truncated"],
-                    "truncated_by": bounded["truncated_by"],
-                    "total_lines": bounded["total_lines"],
-                    "total_bytes": bounded["total_bytes"],
-                    "meta": meta,
-                    "observation": {"status": "ok", "text": text[:2000],
-                                    "content_items": len(out.get("content") or [])}}
+            # MCP 结果同样保留 Pi 尾部；截断时把完整文本落到系统临时文件，
+            # 不写 workspace artifact。没有截断就不会有文件。
+            acc = OutputAccumulator(max_lines=DEFAULT_MAX_LINES,
+                                    max_bytes=DEFAULT_MAX_BYTES,
+                                    temp_file_prefix="fwcore-mcp")
+            acc.append(text.encode("utf-8"))
+            acc.finish()
+            snap = acc.snapshot(persist_if_truncated=True)
+            acc.close()
+            bounded = snap["truncation"]
+            result = {"status": "ok", "text": snap["content"],
+                      "truncated": bounded["truncated"],
+                      "truncated_by": bounded["truncated_by"],
+                      "total_lines": bounded["total_lines"],
+                      "total_bytes": bounded["total_bytes"],
+                      "meta": meta,
+                      "observation": {"status": "ok", "text": text[:2000],
+                                      "content_items": len(out.get("content") or [])}}
+            if snap.get("full_output_path"):
+                result["full_output_path"] = snap["full_output_path"]
+            return result
         return _handler
 
     def close(self) -> None:
