@@ -867,10 +867,34 @@ class Runner:
         # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
         row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
                                 (rid,)).fetchone()
-        run_calls = int(row0["model_calls"] or 0) if row0 else 0
-        run_tools = int(row0["tool_calls"] or 0) if row0 else 0
-        run_elapsed = float(row0["elapsed_s"] or 0.0) if row0 else 0.0
+        try:
+            run_calls = int(row0["model_calls"] or 0) if row0 else 0
+            run_tools = int(row0["tool_calls"] or 0) if row0 else 0
+            run_elapsed = float(row0["elapsed_s"] or 0.0) if row0 else 0.0
+        except (TypeError, ValueError):
+            run_calls = run_tools = 0
+            run_elapsed = 0.0
         t0 = time.time()
+        # 用户消息本身是 append-only 历史的一部分；不能只塞在每轮临时
+        # state prompt 里。否则下一次请求会改写尾部，前缀缓存从目标处失效。
+        # 以 conversation(权威、append-only)补齐 history 中缺失的用户轮次。
+        conv_users = [
+            (e.get("content") or "").strip()
+            for e in self.domain.conversation(rid, roles=("user",))
+            if (e.get("content") or "").strip()
+        ]
+        existing_users = [
+            (m.get("content") or "").strip()
+            for m in history
+            if m.get("role") == "user" and not m.get("_context_only")
+            and (m.get("content") or "").strip()
+        ]
+        if existing_users == conv_users[:len(existing_users)]:
+            for text in conv_users[len(existing_users):]:
+                history.append({"role": "user", "content": text})
+        elif goal and (not existing_users or existing_users[-1] != goal.strip()):
+            # 直接 turn(未经过 start/resume 持久化)的兼容路径。
+            history.append({"role": "user", "content": goal})
 
         def _persist() -> None:
             # 检查与写入同一条 UPDATE;并发接管后旧 owner 不能改计数
@@ -969,10 +993,9 @@ class Runner:
                 # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
                 # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
                 _sys = self.research.rules_prompt(target)
-                _conv = self.domain.conversation(rid, roles=("user",))
-                if goal and _conv and (_conv[-1].get("content") or "").strip() == goal.strip():
-                    _conv = _conv[:-1]          # 当前目标单独放在「本轮目标」,不重复
-                _state = self.research.state_prompt(target, goal, rid, conversation=_conv)
+                # 用户消息已在 history 中；动态状态只保留程序生成的研究事实。
+                # 这与 Pi 的 append-only custom/context message 语义一致。
+                _state = self.research.state_prompt(target, None, rid)
                 _status = build_status(
                     model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
                     window=self.limits.context_tokens or None,
@@ -1018,6 +1041,12 @@ class Runner:
                 _ctx = _context_stats(_sys + _state, history)
                 try:
                     reply = self._model_call(rid, msgs, self.registry.describe(), run_calls)
+                    # Pi 式 append-only context:这次请求实际发送的动态状态
+                    # 保留在历史里,下一次请求的前缀才能继续命中。
+                    # 它不进入 conversation/transcript(不冒充用户消息),但会随
+                    # checkpoint 持久化,resume 后仍作为模型上下文。
+                    history.append({"role": "user", "content": _state,
+                                    "_context_only": True})
                 except StreamCancelled:
                     _event(self.con, "model.cancelled", rid, {"calls": run_calls})
                     state = "paused"
@@ -1573,7 +1602,10 @@ class Runner:
         for r in self.con.execute("SELECT id,pid,pid_starttime,host,heartbeat_at FROM runs"
                                   " WHERE state='running'").fetchall():
             hb = r["heartbeat_at"]
-            age = now - _epoch(hb) if hb else float("inf")
+            try:
+                age = now - _epoch(hb) if hb else float("inf")
+            except (TypeError, ValueError):
+                age = float("inf")
             same_host = (r["host"] or "") == _host()
             alive: bool | None = None
             if same_host:

@@ -67,7 +67,7 @@ def _ws(tmp_path):
     return con, root
 
 
-def test_context_note_is_tail_only_and_not_persisted(tmp_path):
+def test_context_note_is_appended_and_persisted(tmp_path):
     con, root = _ws(tmp_path)
     m = Rec()
     r = Runner(con, root, m, limits=Limits(max_model_calls=5, context_tokens=100_000,
@@ -79,9 +79,9 @@ def test_context_note_is_tail_only_and_not_persisted(tmp_path):
         assert msgs[0]["role"] == "system"
         assert "[Context status]" not in msgs[0]["content"], "状态块不得进 system"
         assert "[Context status]" in msgs[-1]["content"], "状态块应在尾部"
-    # 不写入 checkpoint(不持久化)
+    # append-only context:状态块随 checkpoint 持久化,下一轮前缀仍可命中。
     ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
-    assert ck and "[Context status]" not in ck["messages"]
+    assert ck and "[Context status]" in ck["messages"]
 
 
 def test_system_prompt_identical_across_calls(tmp_path):

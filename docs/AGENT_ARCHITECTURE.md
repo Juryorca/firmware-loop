@@ -32,8 +32,8 @@ core system（fwcore/prompts/system.md）
 
 ```text
 system = rules_prompt()
-history = 对话/工具消息
-user tail = state_prompt() + context status + 轮前准备
+history = append-only 用户消息/工具消息/隐藏 context 消息
+user tail = state_prompt() + context status + 轮前准备(当前请求)
 tools = registry.describe()
 ```
 
