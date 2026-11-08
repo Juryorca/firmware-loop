@@ -345,7 +345,11 @@ def connect(path: str, *, timeout: float = 5.0) -> sqlite3.Connection:
         ms = 5000
     # 纯整数,没有外部输入(PRAGMA 不能参数化);标注给静态扫描器,避免被误判成注入
     con.execute(f"PRAGMA busy_timeout={int(max(0, ms))}")  # nosemgrep: python.lang.security.audit.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-    _migrate(con)
+    try:
+        _migrate(con)
+    except BaseException:
+        con.close()
+        raise
     return con
 
 

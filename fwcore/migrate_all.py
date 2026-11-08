@@ -636,14 +636,17 @@ def reset_migrated(con: sqlite3.Connection, root: str, only: list[str] | None = 
 
 def migrate_all(root: str, dry_run: bool = False, only: list[str] | None = None) -> dict:
     con = _db.connect(_db.default_db_path(root))
-    names = only or list_targets(root)
-    results = [migrate_target(con, root, n, dry_run=dry_run) for n in names]
-    total = {k: sum(r["stats"].get(k, 0) for r in results) for k in
-             ("documents", "surfaces", "hypotheses", "observations", "evidence",
-              "mirror_checks", "logs", "logs_needs_review", "conclusions", "conflicts")}
-    return {"dry_run": dry_run, "targets": len(results), "total": total,
-            "results": results,
-            "conflicts": [f"{r['target']}: {c}" for r in results for c in r["conflicts"]]}
+    try:
+        names = only or list_targets(root)
+        results = [migrate_target(con, root, n, dry_run=dry_run) for n in names]
+        total = {k: sum(r["stats"].get(k, 0) for r in results) for k in
+                 ("documents", "surfaces", "hypotheses", "observations", "evidence",
+                  "mirror_checks", "logs", "logs_needs_review", "conclusions", "conflicts")}
+        return {"dry_run": dry_run, "targets": len(results), "total": total,
+                "results": results,
+                "conflicts": [f"{r['target']}: {c}" for r in results for c in r["conflicts"]]}
+    finally:
+        con.close()
 
 
 def verify_target(con: sqlite3.Connection, root: str, name: str) -> dict:
