@@ -575,3 +575,29 @@ def test_sigterm_while_model_blocked_pauses_run(tmp_path):
             p.kill()
         os.close(master)
         reader.join(timeout=2)
+
+
+def test_idle_tui_does_not_repeat_redraws(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.5)
+            editor = app.query_one(PromptEditor)
+            bar = app.query_one(StatusBar)
+            from fwapp.widgets.transcript import PendingBar
+            pending = app.query_one(PendingBar)
+            assert editor.cursor_blink is False
+            status_text = bar._last_plain
+            pending_key = pending._last_pending
+            await pilot.pause(1.2)
+            assert bar._last_plain == status_text
+            assert pending._last_pending == pending_key
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()

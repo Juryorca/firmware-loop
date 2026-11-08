@@ -131,6 +131,7 @@ class FwApp(App):
         self._show_thinking = False
         self._last_sigint = 0.0
         self._signal_exit = False
+        self._last_title: str | None = None
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -197,6 +198,9 @@ class FwApp(App):
             t.append("  · 演示模式", style="#D5B47A")
         if s.busy:
             t.append("  · 正在处理", style="#D5B47A")
+        if t.plain == self._last_title:
+            return
+        self._last_title = t.plain
         self.query_one("#title", Static).update(t)
 
     def _update_status(self) -> None:

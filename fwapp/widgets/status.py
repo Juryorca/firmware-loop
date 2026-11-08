@@ -173,8 +173,16 @@ def format_snapshot(s: Snapshot) -> Text:
 
 
 class StatusBar(Static):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self._last_plain: str | None = None
+
     def update_snapshot(self, s: Snapshot) -> None:
-        self.update(format_snapshot(s))
+        text = format_snapshot(s)
+        if text.plain == self._last_plain:
+            return
+        self._last_plain = text.plain
+        self.update(text)
 
 
 HINTS = (

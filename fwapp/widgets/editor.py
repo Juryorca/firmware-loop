@@ -37,6 +37,9 @@ class PromptEditor(TextArea):
     def __init__(self, **kw):
         super().__init__("", id="editor", soft_wrap=True, tab_behavior="indent",
                          show_line_numbers=False, placeholder="问点什么,或用 / 打开命令…", **kw)
+        # Textual 用重绘模拟光标闪烁；在 WSL/终端切换后会造成无意义的重绘积压。
+        # 光标保持常显，输入行为不变。
+        self.cursor_blink = False
         self.prompt_history: list[str] = []
         self._hidx = 0
         self.completion_active: Callable[[], bool] = lambda: False

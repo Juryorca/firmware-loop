@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from dataclasses import dataclass
 
 from rich.markdown import Markdown as RichMarkdown
@@ -185,6 +186,7 @@ class ResearchScreen(ModalScreen[None]):
         super().__init__(**kw)
         self.session = session
         self.initial_tab = tab
+        self._last_refresh_sig: str | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog research"):
@@ -221,12 +223,16 @@ class ResearchScreen(ModalScreen[None]):
             self.query_one("#progress-body", Static).update("没有目标")
             return
         rows = state_store_rows(sess.services.con, sess.target, sess.run_id)
-        run = rows.get("run") or {}
         derived = {}
         try:
             derived = sess.services.domain.derived(sess.target)
         except Exception as e:
             derived = {"error": str(e)}
+        sig = json.dumps({"rows": rows, "derived": derived}, sort_keys=True, default=str)
+        if sig == self._last_refresh_sig:
+            return
+        self._last_refresh_sig = sig
+        run = rows.get("run") or {}
 
         def counts(d, labels=None):
             labels = labels or {}

@@ -211,13 +211,18 @@ class PendingBar(Static):
     def __init__(self, **kw):
         super().__init__("", classes="pending-bar", **kw)
         self.display = False
+        self._last_pending: tuple[str, ...] | None = None
 
     def update_pending(self, pending: list[str]) -> None:
-        if not pending:
+        key = tuple(pending or ())
+        if key == self._last_pending:
+            return
+        self._last_pending = key
+        if not key:
             self.display = False
             self.update("")
             return
         self.display = True
         t = Text("已排队（Alt+↑ 取回）：", style="dim")
-        t.append(" | ".join(_short(x, 60) for x in pending), style="italic")
+        t.append(" | ".join(_short(x, 60) for x in key), style="italic")
         self.update(t)
