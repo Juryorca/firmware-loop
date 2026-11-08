@@ -61,13 +61,13 @@ class FwApp(App):
     .notice.error { color: #CE8888; }
     .notice.success { color: #89B99D; }
     .banner { margin: 0 0 1 0; color: #83A9D5; }
-    .tool { margin: 0 0 0 0; padding-left: 1; }
-    .tool-header { color: #DCE3EA; }
+    .tool { height: auto; margin: 0 0 0 0; padding-left: 1; }
+    .tool-header { height: 1; color: #DCE3EA; }
+    .tool-body { height: auto; color: #8995A5; padding-left: 3; }
     .tool.ok .tool-header { color: #89B99D; }
     .tool.error .tool-header { color: #CE8888; }
     .tool.cancelled .tool-header { color: #D5B47A; }
     .tool.running .tool-header { color: #83A9D5; }
-    .tool-body { color: #8995A5; padding-left: 3; }
     #pending { height: auto; max-height: 2; color: #D5B47A; padding: 0 1; }
     StatusBar { height: 1; background: #10151C; color: #8995A5; padding: 0 1; }
     #palette { display: none; height: auto; max-height: 8; border: solid #2C3643;

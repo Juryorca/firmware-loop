@@ -49,7 +49,7 @@ class StatusBar(Static):
             if pct is not None:
                 t.append(f" {pct:.0f}%", style="#83A9D5")
         h = s.hypotheses or {}
-        t.append(f" · H {h.get('open', 0) + h.get('investigating', 0)}/{h.get('vulnerable', 0)} vuln",
+        t.append(f" · H {h.get('open', 0) + h.get('investigating', 0)}/{h.get('vulnerable', 0)}",
                  style="#66717F")
         t.append(f" · E {s.evidence}", style="#66717F")
         if s.blockers:
