@@ -127,8 +127,7 @@ class MCPClient:
 
     def start(self) -> None:
         if self.spec.transport == "http":
-            if not (self.spec.url or "").startswith(("http://", "https://")):
-                raise MCPError(f"{self.spec.name}: HTTP transport 需要 http(s) URL")
+            self._http_url()
             return
         env = dict(os.environ, **{k: str(v) for k, v in self.spec.env.items()})
         self._proc = subprocess.Popen(
@@ -185,8 +184,17 @@ class MCPClient:
         self._proc.stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode())
         self._proc.stdin.flush()
 
+    def _http_url(self) -> str:
+        """MCP HTTP 端点必须是 http(s) 且有 host；防止配置成 file:// 读本地文件。"""
+        url = self.spec.url or ""
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise MCPError(f"{self.spec.name}: HTTP transport 需要合法 http(s) URL,收到 {url[:80]!r}")
+        return url
+
     def _http_post(self, payload: dict, timeout: float) -> dict:
         """MCP Streamable HTTP:POST JSON-RPC;兼容 application/json 与 SSE。"""
+        url = self._http_url()
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -196,7 +204,7 @@ class MCPClient:
             headers["Mcp-Session-Id"] = self._http_session
         # start() 已把 transport 限定为 http(s);这里仍是用户配置 URL,标注给静态扫描器。
         req = urllib.request.Request(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            self.spec.url or "", data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers=headers, method="POST")
         try:
             host = urllib.parse.urlparse(self.spec.url or "").hostname or ""

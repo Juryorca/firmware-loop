@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from fwcore.mcp_client import MCPClient, MCPConfigError, ServerSpec, load_servers, probe
+from fwcore.mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers, probe
 
 FAKE = r'''
 import json, sys
@@ -208,3 +208,9 @@ def test_load_servers_rejects_non_string_url_and_command(tmp_path):
     p.write_text(json.dumps({"mcpServers": {"x": {"command": 123}}}), encoding="utf-8")
     with pytest.raises(MCPConfigError):
         load_servers([str(p)])
+
+
+def test_http_transport_rejects_non_http_url_before_urllib():
+    spec = ServerSpec(name="file", command="", url="file:///etc/passwd")
+    with pytest.raises(MCPError):
+        MCPClient(spec).request("initialize")
