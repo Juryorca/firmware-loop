@@ -123,7 +123,9 @@ def afl_tracer_provider(dirpath: str, arch: str, kind: str = "built",
                         continue
                     a = _file_arch(p)
                     if a == "aarch64":
-                        return p, os.path.dirname(root) if os.path.basename(root) != "rootfs_merged" else root
+                        # QEMU_LD_PREFIX 必须指向该样本所属的 rootfs；
+                        # 之前用 parent 目录会把 /lib/ld-* 解析错，导致 provider 误判不可用。
+                        return p, root
         return None
 
     def probe() -> Probe:
