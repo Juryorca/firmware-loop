@@ -129,11 +129,11 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 
 ### 当前迁移策略
 
-旧 `vuln-patterns.md`（24 条）+ `misreports.md`（27 条）是**原始来源**，不是 DB 行数目标。
+旧 `vuln-patterns.md`（24 条）+ `misreports.md`（27 条）曾作为**原始来源**；提炼完成后，
+这两份 Markdown 已从当前工作树移除，只在 Git 历史中保留。运行时只读 SQLite `knowledge_entries`。
 本轮提炼 8 条研究知识种子 + 6 条工具判据（后者已合并入 tool-quirks 迁移）
 （认证授权、代理信任、命令注入、解析/内存、URL/Host、DoS、误报判据），去掉地址级复现细节。
-旧两份 Markdown 保留，供回溯与再提炼；不常驻 System Prompt。
-迁移报告必须区分“源条目 51”与“知识条目 8”，不能把源案例数冒充知识数。
+迁移报告区分“源条目 51”与“知识条目”行数，不能把源案例数冒充知识数。
 
 ### Schema（最小结构）
 
@@ -223,8 +223,8 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | `.pi/prompts/提交.md` | 提交操作清单 | `report-submission` Skill | Skill 按需 |
 | `prompts/*.txt` | 旧 OpenCode 子代理提示词 | 已删除（只保留职责映射） | 不再加载 |
 | `opencode.json` | 旧 OpenCode 配置 | 已删除 | 不再加载 |
-| `knowledge/vuln-patterns.md` | 正向案例来源 | 14 条 curated 知识 + 原始来源 | DB 检索 / 按需 fs_read |
-| `knowledge/misreports.md` | 反向案例来源 | 同上 | DB 检索 / 按需 fs_read |
+| `knowledge/vuln-patterns.md` | 旧正向案例来源 | 已移出当前树；Git 历史保留 | 不再加载 |
+| `knowledge/misreports.md` | 旧反向案例来源 | 已移出当前树；Git 历史保留 | 不再加载 |
 | `knowledge/methodology.md` 等 | 静态方法参考 | 静态参考 | 按需 fs_read |
 | `knowledge/tool-quirks.md` | 旧工具经验 Markdown | SQLite `knowledge_entries`（94 条，已合并/退休） | `knowledge_search` / `knowledge_get`，Git 历史保留 |
 | `.pi/guards/*` | Pi 工具调用护栏 | 尚未迁入 fwcore runtime | 明确遗留 |
@@ -232,7 +232,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 ## 12. 当前边界
 
-- 旧案例 51 条保留为原始来源；DB 现有 8 条研究知识 + 94 条工具经验；旧 tool-quirks Markdown 已移出工作树，Git 历史保留；
+- 旧案例 51 条与 tool-quirks Markdown 已移出当前树，只在 Git 历史保留；运行时只读 SQLite；
 - 旧 Pi 的 scan/screenshot/continue guard 尚未产品化（工具台账附录 A 记录）；
 - Chrome MCP 只有配置/探针，不在只读检查里自动启动；`write/edit` 未接入 fwcore 工具层；
 - Ghidra/QEMU/IDA 已按 provider/adapter 接入，缺依赖状态如实显示；真实付费模型验证不在本轮范围。
@@ -269,7 +269,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | 速率限制/DoS | `vuln-patterns` 的认证限流条目；`misreports` 的限流/DoS 条目 | 速率限制、锁定与拒绝服务 |
 | 误报判据/设计内行为 | `misreports` 的反例库整体 | 误报判据：能力、证据与设计内行为 |
 
-**不是“51 条案例逐条入库”**：旧 51 条（24 + 27）保留为原始来源；DB 只存能跨目标复用的研究知识。
+**不是“51 条案例逐条入库”**：旧 51 条（24 + 27）已移出当前树，只在 Git 历史保留；DB 只存能跨目标复用的研究知识。
 `knowledge/research-knowledge.md` 是 8 条研究知识 + 6 条工具判据的种子；6 条工具判据在 tool-quirks
 迁移时已合并到完整源条目。旧 51 条中未提升为 DB 条目的原因仍是：目标专属地址/一次性复现细节、
 已被主题条目覆盖、或属于低成本公开检索的通用知识。

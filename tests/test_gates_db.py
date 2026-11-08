@@ -58,16 +58,6 @@ def test_mirror_due_is_target_scoped(tmp_path):
     assert rep.rounds_since_mirror == 3 and rep.mirror_due is True
 
 
-def test_kb_counts_detects_mismatch(tmp_path):
-    from fwcore.gates_db import kb_counts
-
-    k = tmp_path / "knowledge"
-    k.mkdir()
-    (k / "INDEX.md").write_text("| `a.md` | x | 3 |\n", encoding="utf-8")
-    (k / "a.md").write_text("## one\n## two\n", encoding="utf-8")
-    rows = kb_counts(str(tmp_path))
-    assert rows[0]["status"] == "mismatch" and rows[0]["declared"] == 3 and rows[0]["actual"] == 2
-
 
 def test_dangling_attachment_refs(tmp_path):
     from fwcore.gates_db import dangling_attachment_refs

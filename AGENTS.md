@@ -221,8 +221,8 @@
 - 正式知识:SQLite `knowledge_entries`(正文 `body_md` + kind/tags/status/source);
 - 版本:`knowledge_entry_versions`,修改不覆盖历史;
 - 检索:FTS5 + 结构化过滤;同时搜 `pattern`(正向)、`misreport`(反向)与 `guideline`(判据/工具经验);
-- 旧 `knowledge/vuln-patterns.md` / `misreports.md` 仅作**原始来源**,不常驻、不是运行时权威;
-- `knowledge/tool-quirks.md` 已迁移到 SQLite 并移出工作树;**不再作为运行时知识权威**;
+- 旧 `knowledge/vuln-patterns.md` / `misreports.md` / `tool-quirks.md` 已从当前树移除，只保留 Git 历史；
+  **运行时只读 SQLite `knowledge_entries`**，不存在 Markdown 回退；
 - 结构化只保留最小分类/检索信息,不要求每条填十几个字段。
 
 **生命周期**: Agent 自己判断是否记录;记录即为 `approved`。后续可 `deprecated` / `superseded`;不设 `draft`/`needs_review`/人工批准中间态。
@@ -237,9 +237,9 @@
 
 **旧 Markdown 归属**:
 - `knowledge/methodology.md`、`sdk-bloodlines.md`、`exploits-validated.md`、`intel-log.md` = 静态参考,按需 fs_read;
-- `knowledge/research-knowledge.md` = 研究知识迁移种子(DB 导入源,不常驻);
-- `knowledge/INDEX.md` = 索引/来源说明,不是运行时 Prompt;
-- `knowledge/tool-quirks.md` = 已迁移的旧源文件(Git 历史保留,不作为当前入口)。
+- `knowledge/research-knowledge.md` = 一次性迁移种子(DB 导入源,不常驻);
+- `knowledge/INDEX.md` = 静态参考索引/来源说明,不是运行时 Prompt;
+- 旧 raw source（`vuln-patterns.md`、`misreports.md`、`tool-quirks.md`）已移出当前树，Git 历史保留。
 
 ## 报告产出(硬性要求)
 

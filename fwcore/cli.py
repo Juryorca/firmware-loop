@@ -391,12 +391,11 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(c.call_tool(args.tool, json.loads(args.args)),
                                      ensure_ascii=False, indent=2))
         elif args.cmd == "gates":
-            from .gates_db import dangling_attachment_refs, evaluate, kb_counts
+            from .gates_db import dangling_attachment_refs, evaluate
             rep = evaluate(con, args.root, args.target).as_dict()
-            rep["kb"] = kb_counts(args.root)
             rep["dangling_refs"] = dangling_attachment_refs(con, args.root, args.target)
             print(json.dumps(rep, ensure_ascii=False, indent=2))
-            ok = rep["ok"] and all(x["status"] == "ok" for x in rep["kb"]) and not rep["dangling_refs"]
+            ok = rep["ok"] and not rep["dangling_refs"]
             return 0 if ok else 1
         elif args.cmd == "knowledge":
             from .knowledge import (get as _kb_get, migrate_seed, revise as _kb_revise,

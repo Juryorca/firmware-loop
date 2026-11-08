@@ -25,8 +25,7 @@
   面/假设/观察/证据/复核/结论/三镜进结构化表;叙述与模糊内容进 `research_logs`);
   `fw-core migrate --all` 幂等,`--verify` 逐目标核对;运行路径**无 Markdown 回退**。
 - **Agent 内容架构**:`fwcore/prompts/system.md` + 根 `AGENTS.md` 组成 system;LOOP 迁入 `research-loop` Skill;
-  `.agents/skills/` 渐进式加载;Slash Commands 保留并由 fwapp 分发;SQLite `knowledge_entries` 保存 curated 研究知识,
-  旧案例 Markdown 仅作来源。
+  `.agents/skills/` 渐进式加载;Slash Commands 保留并由 fwapp 分发;SQLite `knowledge_entries` 保存 curated 研究知识；旧案例 Markdown 已移出当前树，只保留 Git 历史。
 - **验证**:`bash tools/fwcore_verify.sh` = pytest(74 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean。
 
 ## 待办

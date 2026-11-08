@@ -216,7 +216,7 @@ PoC `report/attachments/btest-related-connection-unauthenticated-access/btest-re
 - **guard page 的正确定位**: 只用来回答“有没有发生过越界**访问**”;**不得**单独作为“破坏”的证据。
   误报的根因正是把 “WRITE_PROT fault” 当成了破坏。
 - **双输出要求**: 判为 HIT 前至少跑一个**负对照 + 净变化比对**;真机/整机以崩溃或日志独立确认。
-- 关联:`misreports.md` 反例 4;实例证据
+- 关联:旧反例库（已移出当前树，Git 历史）反例 4;实例证据
   `RouterOS-7.24.4-arm64/artifacts/poc/sstp-accelerator-reachability.md`。
 
 ## 容器/OCI 型固件:用宿主 docker 直跑得到整机动态环境(免仿真) | (2026-09-21/Ubiquiti UniFi OS Server)
@@ -293,7 +293,7 @@ PoC `report/attachments/btest-related-connection-unauthenticated-access/btest-re
      嵌在长字符串里的路由字面量 —— 本项目第一版生成器即有此缺陷);丢弃含 `%`/`..`/`//` 的、含 `.`(域名/符号名)、
      `(`、Go 函数名形状(`pkg.Type.Method`、`.func1`)的条目;限制段长与总长。
   2. **判据探测(直连后端)**: 绕过反代直连 `127.0.0.1:<port><cand>`,只有 **404** 才算"路由不存在";
-     `200/400/401/403/500` 都算"路由存在"(注意 `misreports.md` 反例 10:有的后端鉴权失败也回 200)。
+     `200/400/401/403/500` 都算"路由存在"(注意 旧反例库反例 10:有的后端鉴权失败也回 200)。
   3. **有效性自证**: 先确认"这个方法在同一个二进制上确实能找到真实路由"(本轮 ulp-go 上找到 36 条),
      再拿它下"某些前缀无路由"的否证结论 —— 否则无法区分"没有路由"与"生成器漏了"。
   4. 最后回到**反代配置**判断网络可达性(挂载前缀改写、是否带鉴权指令),区分"上游有路由但被鉴权挡住"与"上游根本没有该路由"。
@@ -403,7 +403,7 @@ Ubiquiti UniFi OS Server 的 `ulp-go-app`/`uid-agent-app`/`unifi-directory-app`/
   ④不变量与授权(签名、配对、audience、nonce、role)、②状态·持久化净变化;
 - **导航**: ②语法·结构感知(用真实请求作种子) / ⑤边界·组合 / ⑥重放+变异 / ①覆盖率(`afl-fuzz -Q` 仍可对**单进程**
   命令行目标用,对长驻服务要么做 harness 要么改用网络侧 oracle)。
-**纪律**: 别因为"进程没崩"就把面判干净(守则 11);也**别把被 recover 的 panic 报成漏洞**(`misreports.md` 反例 11)。
+**纪律**: 别因为"进程没崩"就把面判干净(守则 11);也**别把被 recover 的 panic 报成漏洞**(旧反例库反例 11)。
 
 ### Go 二进制的完整路由表:优先读**内嵌 Swagger**,字符串候选 + 404 判据作交叉验证
 - go-swagger 生成的 Go 服务会把 `swagger.json` **原文内嵌**在二进制里(`.../restapi/embedded_spec.go`)。
@@ -585,7 +585,7 @@ A = pristine(setup 态) / B = 预设版(已配置 + 多主体 + 自签 CA);同�
   `WebMvcConfigurer`/`@Configuration` 的 `@Import` 链,把**真正注册进这个上下文**的 controller 收敛成小集合。
   收集手段: `strings`/`grep` 类常量找字符串 → `javap -p -v` 读 `RuntimeVisibleAnnotations`(注解里的
   `@Import(value=[class A,B,C])`、`@PostMapping(value=[...])`、`@RequestParam` 都在常量池可读)。
-  **小集合一旦确定,就对集合内每个 handler 做"检查项差分"**(见 vuln-patterns「同族设备上传端点」条):
+  **小集合一旦确定,就对集合内每个 handler 做"检查项差分"**(见旧案例库「同族设备上传端点」条（Git 历史）):
   同族里判定链最短的那个就是候选。
 - **动态校验(必须)**: 对每个候选 URI 发一次请求区分"handler 已到达"与"路由不存在":
   Spring 未命中映射多为 Tomcat 404 页;命中但参数/前提不满足会走 controller advice(业务 JSON、405、500)。

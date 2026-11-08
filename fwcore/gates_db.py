@@ -169,44 +169,6 @@ def check_files(con, root: str, target: str) -> list[str]:
     return Domain(con, root).material_check(target)["missing"]
 
 
-# ---------------- KB 条数 / 引用完整性(只读文件事实,不解析研究状态) ----------------
-
-def kb_counts(root: str) -> list[dict]:
-    """knowledge/INDEX.md 声明的条数 vs 文件实际条数(只看文件事实)。"""
-    import re
-
-    idx = os.path.join(root, "knowledge", "INDEX.md")
-    if not os.path.isfile(idx):
-        return [{"file": "INDEX.md", "status": "missing"}]
-    try:
-        with open(idx, encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except OSError as e:
-        return [{"file": "INDEX.md", "status": "unreadable", "detail": str(e)}]
-    out = []
-    for name, declared in re.findall(r"^\|\s*`([A-Za-z0-9_.-]+\.md)`\s*\|.*?\|\s*(\d+)\s*\|", text, re.M):
-        path = os.path.join(root, "knowledge", name)
-        if not os.path.isfile(path):
-            out.append({"file": name, "declared": int(declared), "status": "missing"})
-            continue
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                body = f.read()
-        except OSError as e:
-            out.append({"file": name, "declared": int(declared), "status": "unreadable", "detail": str(e)})
-            continue
-        actual = (len(re.findall(r"^- 20\d\d", body, re.M)) if name == "intel-log.md"
-                  else len(re.findall(r"(?m)^## ", body)))
-        try:
-            want = int(declared)
-        except (TypeError, ValueError):
-            out.append({"file": name, "declared": declared, "status": "bad_declaration"})
-            continue
-        out.append({"file": name, "declared": want, "actual": actual,
-                    "status": "ok" if actual == want else "mismatch"})
-    return out
-
-
 def dangling_attachment_refs(con, root: str, target: str) -> list[str]:
     """报告里引用 attachments/... 但文件不存在(引用完整性;只看文件事实)。"""
     import re

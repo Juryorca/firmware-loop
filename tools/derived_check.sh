@@ -8,7 +8,6 @@
 # 为什么: "覆盖度 / 条数 / 材料完成"这类值都能从权威处**算**出来;手写复述必漂。
 #   本脚本把它们算出来 → 断言一律粘这里的输出,散文里不写总结。
 # 检查项:
-#   ① knowledge/ 各文件条数 vs knowledge/INDEX.md 的声明
 #   ② A2 覆盖度(解析 state/<目标>/notes.md 的 "### 2.3" 表;不要求新语法,用表里现有措辞分类)
 #   ③ 每个 finding 的包:advisory 骨架 + **至少 1 处图链且路径可解析** + shots.json/.provenance
 # 退出码: 有 FAIL → 1;全 PASS → 0
@@ -34,56 +33,6 @@ fail = 0
 def ok(m):   print("OK   " + m)
 def bad(m):
     global fail; fail += 1; print("FAIL " + m)
-
-# ---------- ① knowledge 条数 ----------
-idx = open(os.path.join(root, "knowledge/INDEX.md"), encoding="utf-8").read()
-rows = re.findall(r"^\|\s*`([A-Za-z0-9_.-]+\.md)`\s*\|.*?\|\s*(\d+)\s*\|", idx, re.M)
-if not rows:
-    bad("knowledge/INDEX.md 里没解析出「文件|条数」行")
-for name, declared in rows:
-    p = os.path.join(root, "knowledge", name)
-    if not os.path.isfile(p):
-        bad(f"knowledge/{name} 不存在(INDEX 有登记)"); continue
-    body = open(p, encoding="utf-8").read()
-
-    # intel-log 的条目是 "- 20xx-..";其余是 "## "
-    got = len(re.findall(r"^- 20\d\d", body, re.M)) if name == "intel-log.md" else len(re.findall(r"^## ", body, re.M))
-    if got == int(declared): ok(f"knowledge/{name}: {got} 条(与 INDEX 一致)")
-    else: bad(f"knowledge/{name}: INDEX 声明 {declared} 条,实际 {got} 条")
-
-# KB 与证据解耦: knowledge/*.md 里不得出现 state/ 路径(政策原文里的 `state/` 字样除外)
-kdir = os.path.join(root, "knowledge")
-kfiles = [os.path.join(kdir, x) for x in sorted(os.listdir(kdir)) if x.endswith(".md")]
-dirty = [os.path.basename(f) for f in kfiles if "state/" in open(f, encoding="utf-8").read().replace("`state/`", "")]
-if dirty: bad(f"KB 引用了 state/ 路径(须与证据解耦,只写'来源: <目标名> <日期>'): {dirty}")
-else: ok(f"KB 解耦: knowledge/ 全部 {len(kfiles)} 个文件无 state/ 路径引用")
-# KB 应"即查即用":不该出现 `<目标名>/artifacts/…` 这类目标内路径(存量先只警告,见 LOOP ① 知识)
-_legacy = sum(len(re.findall(r"[A-Za-z0-9_.-]+/artifacts/", open(f, encoding="utf-8").read())) for f in kfiles)
-if _legacy:
-    # KB 顶部政策已声明:这些路径只是**来源标注**(证据随目标清理,不要求长期存在)⇒ 不影响条目可用性;
-    # 新条目仍用「来源: <目标名>」标签,不再新增路径。
-    print(f"  OK   KB 来源标注: {_legacy} 处目标内 `artifacts/` 路径(按 KB 政策=来源标签,非依赖)")
-
-# ---------- ①e KB 结构体检(并发/误改防护) ----------
-# 判据: 围栏成对 / 无重复小标题 / 无 NUL 字节 / 无 CRLF / 无合并冲突标记 / 非截断(末行有换行)
-# 出处: 2026-10-04 用户对"多会话并发写 knowledge/ 可能改坏"的关切;项挂在既有闸门上,不新增命令
-_kbm = os.path.join(root, "knowledge")
-if os.path.isdir(_kbm):
-    _kbp = []
-    for _n in sorted(os.listdir(_kbm)):
-        if not _n.endswith(".md"): continue
-        _b = open(os.path.join(_kbm, _n), "rb").read(); _t = _b.decode("utf-8", errors="replace")
-        _ln = _t.split("\n"); _hh = re.findall(r"(?m)^## (.+)$", _t)
-        _iss = []
-        if sum(1 for _l in _ln if _l.strip().startswith("```")) % 2: _iss.append("围栏奇数")
-        if [h for h in set(_hh) if _hh.count(h) > 1]: _iss.append("重复小标题")
-        if b"\x00" in _b: _iss.append("含NUL")
-        if b"\r\n" in _b: _iss.append("CRLF")
-        if re.search(r"(?m)^(<<<<<<<|=======|>>>>>>>)", _t): _iss.append("冲突标记")
-        if not _t.endswith("\n"): _iss.append("末行无换行")
-        if _iss: _kbp.append(f"{_n}: {'/'.join(_iss)}")
-    if _kbp: bad(f"KB 结构体检: {'; '.join(_kbp)}")
-    else: ok(f"KB 结构体检: {len([n for n in os.listdir(_kbm) if n.endswith('.md')])} 个文件无围栏/标题/NUL/CRLF/冲突/截断问题")
 
 # ---------- ①b 引用完整性(断链必须就地标注) ----------
 KIND = ("已释放", "需按配方重建", "重下见", "SOURCE_URL", "已随目标清理", "公式重建")
