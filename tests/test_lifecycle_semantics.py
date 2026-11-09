@@ -10,7 +10,7 @@ import pytest
 from fwcore import db as _db
 from fwcore.domain import Domain, InvariantViolation, NotFound
 from fwcore.limits import Limits
-from fwcore.models import ScriptedAdapter
+from fwcore.models import Reply, ScriptedAdapter
 from fwcore.policy import Policy
 from fwcore.research import Research
 from fwcore.runtime import Runner
@@ -311,3 +311,32 @@ def test_authz_root_check_does_not_sandbox_process(tmp_path):
                                   {"command": f"sh -c 'ls {outside} >/dev/null && echo reached'"})
     assert out["status"] == "ok", out
     assert "reached" in out["stdout_tail"]
+
+
+def test_advance_stops_after_new_finding(tmp_path):
+    """A newly recorded vulnerable conclusion is a stop condition, not another round."""
+    con, dom, root = _setup(tmp_path)
+    hid = dom.add_hypothesis("t1", "new finding")
+
+    class FindingModel(ScriptedAdapter):
+        def __init__(self):
+            super().__init__(script=[])
+            self.model_calls = 0
+
+        def chat(self, messages, tools):
+            self.model_calls += 1
+            tid = con.execute("SELECT id FROM targets WHERE name='t1'").fetchone()["id"]
+            con.execute(
+                "INSERT INTO conclusions(id,target_id,hypothesis_id,verdict,scope_note,created_at)"
+                " VALUES('C-test-finding',?,?,'vulnerable','test scope','2026-01-01')",
+                (tid, hid),
+            )
+            return Reply(content="FINAL: found", tool_calls=[])
+
+    model = FindingModel()
+    r = Runner(con, root, model, limits=Limits(max_model_calls=4),
+               policy=Policy(allow_high_risk=True))
+    res = r.advance("t1", "find it")
+    assert res.finding is True
+    assert model.model_calls == 1, "advance must stop after the finding, not run another round"
+    assert res.state == "finished"

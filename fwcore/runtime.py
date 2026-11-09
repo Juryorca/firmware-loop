@@ -62,12 +62,14 @@ class RunResult:
     blockers: list[str]
     handback: str | None
     history: list[dict]
+    finding: bool = False
 
     # 兼容 dict 访问(旧测试/CLI 用 res["state"] 等)
     def as_dict(self) -> dict:
         return {"run_id": self.run_id, "state": self.state, "steps": self.steps, "rounds": self.rounds,
                 "final": self.final, "ready": self.ready, "blockers": self.blockers,
-                "handback": self.handback, "history": self.history}
+                "handback": self.handback, "history": self.history,
+                "finding": self.finding}
 
     def __getitem__(self, k: str):
         return self.as_dict()[k]
@@ -1536,8 +1538,9 @@ class Runner:
             self.close()
 
     def advance(self, target: str, goal: str | None = None, *, max_rounds: int | None = None,
-                run_id: str | None = None, history: list[dict] | None = None) -> RunResult:
-        """持续推进,直到:收尾前置全清 / 需要用户输入 / 用完轮次预算。"""
+                run_id: str | None = None, history: list[dict] | None = None,
+                user_client_id: str | None = None) -> RunResult:
+        """持续推进,直到:新 finding / 收尾前置全清 / 需要用户输入 / 用完轮次预算。"""
         rid = run_id or self.start(target, goal)
         if run_id:
             self._claim_run(rid)                  # 接管同一 run(并发 resume 防护)
@@ -1547,14 +1550,45 @@ class Runner:
         # 之前所有工具结果/结论都"消失"(resume 一直是这么做的,advance 漏了)
         hist = list(history) if history is not None else (
             self._load_history(rid) if run_id else [])
+        if run_id and goal:
+            # Same append-only/user-message semantics as resume(), but before
+            # the auto-advance loop starts so the first turn sees the command.
+            try:
+                self._conversation_write(rid, "user", goal, client_id=user_client_id,
+                                         meta={"source": "advance"})
+            except ConversationPersistError as e:
+                self._set_paused(rid, f"conversation_error: {e}")
+                raise
         try:
             return self._advance_loop(rid, target, goal, hist, max_rounds)
         finally:
             self.close()
 
+    def _finding_count(self, target: str) -> int:
+        t = self.domain.target(target)
+        return int(self.con.execute(
+            "SELECT COUNT(*) n FROM conclusions WHERE target_id=? AND verdict='vulnerable'",
+            (t.id,)).fetchone()["n"] or 0)
+
+    def _stop_on_finding(self, res: RunResult, before: int, target: str) -> RunResult:
+        """A new vulnerable conclusion is a first-class stop reason.
+
+        The old advance loop only stopped on closure/handback; it could continue
+        past a finding while unrelated blockers were still open.  Record the
+        finding on the result so the UI can distinguish this from a normal
+        round finish without adding another handback enum.
+        """
+        if self._finding_count(target) > before:
+            res.finding = True
+        return res
+
     def _advance_loop(self, rid: str, target: str, goal: str | None,
                       hist: list[dict], max_rounds: int | None) -> RunResult:
+        finding_before = self._finding_count(target)
         res = self.turn(rid, target, goal, hist)
+        res = self._stop_on_finding(res, finding_before, target)
+        if res.finding:
+            return res
         guard = 0
         idle = 0
         t_start = time.time()
@@ -1578,6 +1612,9 @@ class Runner:
             res2 = self.turn(rid, target,
                              "继续推进未收口项:\n" + "\n".join(f"- {b}" for b in _blockers_of(res)),
                              res.history)
+            res2 = self._stop_on_finding(res2, finding_before, target)
+            if res2.finding:
+                return res2
             # 空闲轮:既没推进研究(轮次没涨)也没产生新的执行动作 ⇒ 连续 2 次就停(不是结论)
             idle = idle + 1 if res2.rounds == rounds_before else 0
             res = res2

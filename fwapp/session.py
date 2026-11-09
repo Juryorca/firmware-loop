@@ -507,6 +507,9 @@ class AgentSession:
                 self._publish_result(res)
                 return
             res = runner.run(rid, target, goal=text)
+        elif text.strip() in ("继续", "继续推进", "continue"):
+            self._cancel_event.clear()
+            res = runner.advance(target, goal=text, run_id=rid, user_client_id=client_id)
         else:
             res = runner.resume(rid, goal=text, user_client_id=client_id)
         self._publish_result(res)
@@ -514,16 +517,23 @@ class AgentSession:
     def _do_continue(self, runner: Runner, target: str | None = None,
                      run_id: str | None = None) -> None:
         rid = run_id or self.run_id
+        target = target or self.target
         if not rid:
             self.emit("error", "当前没有可继续的研究会话。")
             return
+        if not target:
+            self.emit("error", "当前没有目标，不能继续研究。")
+            return
         self._cancel_event.clear()
-        res = runner.resume(rid)    # 不伪造新的用户消息
+        # `/continue` is the auto-continue entry: Runner.advance stops on a
+        # new finding, a handback, budget/pause, or two idle rounds.
+        res = runner.advance(target, run_id=rid)
         self._publish_result(res)
 
     def _publish_result(self, res) -> None:
         data = {"run": res.run_id, "state": res.state, "handback": res.handback,
-                "blockers": list(res.blockers or []), "final": (res.final or "")[:4000]}
+                "blockers": list(res.blockers or []), "final": (res.final or "")[:4000],
+                "finding": bool(getattr(res, "finding", False))}
         self.emit("turn_done", data["final"], **data)
 
     # ---------------- 只读快照 ----------------
