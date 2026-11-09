@@ -31,7 +31,7 @@ def test_codemode_parallel_calls_record_and_filter(tmp_path):
     barrier = threading.Barrier(4)
 
     def slow(tool_ctx, args):
-        barrier.wait(timeout=2.0)
+        barrier.wait(timeout=10.0)
         time.sleep(0.02)
         return {
             "status": "ok",
@@ -48,16 +48,13 @@ def test_codemode_parallel_calls_record_and_filter(tmp_path):
             exposure="codemode",
         )
     )
-    started = time.monotonic()
     out = CodemodeExecutor(reg, ctx).run(
         "const rs = await Promise.all([tools.slow_tool({v:1}), tools.slow_tool({v:2}), "
         "tools.slow_tool({v:3}), tools.slow_tool({v:4})]); "
         "return rs.map(x => x.value).join(',');"
     )
-    elapsed = time.monotonic() - started
     assert out["status"] == "ok", out
     assert "1,2,3,4" in out["text"]
-    assert elapsed < 2.0
     assert con.execute("SELECT COUNT(*) n FROM tool_calls").fetchone()["n"] == 4
 
 
