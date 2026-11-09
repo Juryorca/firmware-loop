@@ -115,6 +115,9 @@ globalThis.image = function(v) {
     item = {type: "image", data: item.slice(comma + 1), mimeType: header};
   } else if (item && item.image_url) {
     item = {type: "image", data: item.image_url.data || item.image_url, mimeType: item.image_url.mimeType || "image/png"};
+  } else if (item && item.path && item.mimeType && !item.type) {
+    // MCPBridge.images entries are summaries: {path, mimeType, bytes, sha256}.
+    item = {...item, type: "image"};
   }
   if (!item || item.type !== "image") throw new Error("image() expects an image block or data URL");
   __outputs.push({...item, type: "image"});

@@ -107,7 +107,7 @@ def test_codemode_forwards_image_without_base64_text(tmp_path):
             lambda c, a: {
                 "status": "ok",
                 "images": [
-                    {"type": "image", "path": str(image_path), "mimeType": "image/png"}
+                    {"path": str(image_path), "mimeType": "image/png", "bytes": 24}
                 ],
             },
             exposure="codemode",
