@@ -33,7 +33,8 @@
 
 ## Knowledge Base：按需检索的研究知识
 
-- 可复用研究知识在 SQLite 中，**不常驻本提示词**；不要假设你知道全部知识。
+- 可复用研究知识**只**在 SQLite 中，**不常驻本提示词**；不要假设你知道全部知识。
+- 工作树不再有 `knowledge/*.md`、Markdown seed 或 Markdown fallback；所有检索/写入/修订都走 SQLite Knowledge API。备份与恢复约定见 `docs/KNOWLEDGE.md`。
 - 需要相似漏洞形态、误报判据或跨目标经验时，调用 `knowledge_search(query=..., kind=...)`；需要完整正文时调用 `knowledge_get(entry_id=...)`。
 - `kind` 区分 `pattern`（正向形态）、`misreport`（反向误报）和 `guideline`（操作判据），同时看判据、排除边界和来源。
 - 研究知识只作参考，**不能直接作为当前目标的证据**；当前目标必须有本目标的 observation/evidence。
