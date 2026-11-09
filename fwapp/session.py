@@ -84,6 +84,21 @@ def _json(raw, default):
         return default
 
 
+def _is_continue_command(text: str) -> bool:
+    """Recognize natural continuation commands, not only exact one-word input.
+
+    Users routinely type "继续 先做 X" or "继续推进，顺便检查 Y".  These are
+    still continuation commands; treating them as ordinary resume turns makes
+    the model announce "next round" but the runtime only runs one turn.
+    """
+    s = (text or "").strip()
+    if not s:
+        return False
+    return (s in ("继续", "继续推进", "continue")
+            or s.startswith("继续")
+            or s.casefold().startswith("continue"))
+
+
 class AgentSession:
     """一个 target × model 的交互会话;同一时间只跑一个 turn。"""
 
@@ -507,7 +522,7 @@ class AgentSession:
                 self._publish_result(res)
                 return
             res = runner.run(rid, target, goal=text)
-        elif text.strip() in ("继续", "继续推进", "continue"):
+        elif _is_continue_command(text):
             self._cancel_event.clear()
             res = runner.advance(target, goal=text, run_id=rid, user_client_id=client_id)
         else:

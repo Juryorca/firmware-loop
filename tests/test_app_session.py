@@ -13,6 +13,7 @@ from fwapp.args import AppOptions
 from fwapp.config import resolve
 from fwapp.modes.print import run_print
 from fwapp.runtime import AppRuntime
+from fwapp.session import _is_continue_command
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.models import Reply, ScriptedAdapter
@@ -37,6 +38,13 @@ def wait_turn(sess, timeout=10.0):
             return events
         time.sleep(0.05)
     raise AssertionError(f"turn 未结束;busy={sess.busy} pending={sess.pending} events={events}")
+
+
+def test_continue_command_accepts_prefixed_text():
+    for text in ("继续", "继续 先做静态检查", "继续推进，顺便看 X", "continue 先看日志"):
+        assert _is_continue_command(text), text
+    for text in ("那就把ida关一下？", "不要继续", "", "  "):
+        assert not _is_continue_command(text), text
 
 
 def test_submit_turn_uses_runner_and_records_tool(tmp_path):
