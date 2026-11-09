@@ -4,6 +4,10 @@
 # 语义(既定语): 会话退出时把**本暂存区里白名单外的一切**清掉,包括 IDB/数据库副本
 #   (它们是本会话拷进暂存区的副本,不是原始研究数据);白名单管线工具保留。
 # 与 ida_stop.sh 的分工: stop 只停进程、默认不删 IDB(可能还有别的会话在用)。
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,6p' "$0" | sed 's/^# //'
+  exit 0
+fi
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 ALLOW='start_mcp.py|keepalive.py|idalog.txt'

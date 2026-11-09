@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # 用法: ida_open.sh <Linux二进制路径> [会话名]   会话名缺省 = 文件本名
 # idb_open 开库: 每库一个独立 idalib worker(真隔离);幂等: 同名会话已开则直接返回。
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,3p' "$0" | sed 's/^# //'
+  exit 0
+fi
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ida_mcp_lib.sh"

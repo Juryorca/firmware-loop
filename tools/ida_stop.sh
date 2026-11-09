@@ -4,6 +4,10 @@
 #         不动其它实例的进程,不删 IDB/研究数据。
 #   --all    : 额外按镜像名 taskkill(会波及同机其它实例;显式才做)。
 #   --purge  : 删除暂存目录里的 IDB/数据库(默认**不删**,那是共享研究数据)。
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,6p' "$0" | sed 's/^# //'
+  exit 0
+fi
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 

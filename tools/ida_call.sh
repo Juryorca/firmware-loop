@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # 用法: ida_call.sh <tool_name> '<json_args>'   json 里必须含 database=<会话id>(ida_list.sh 可查)
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,2p' "$0" | sed 's/^# //'
+  exit 0
+fi
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/ida_mcp_lib.sh"

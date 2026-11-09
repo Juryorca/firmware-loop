@@ -2,6 +2,10 @@
 # 用法: ida_start.sh [初始二进制的Linux路径]
 # 启动 idalib-mcp supervisor(headless);幂等: 已在则直接返回。
 # 全部路径/端口/日志来自 config(tools/ida_env.sh ← fwcore/winenv.py)。
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,4p' "$0" | sed 's/^# //'
+  exit 0
+fi
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 

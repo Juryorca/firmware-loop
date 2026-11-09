@@ -45,6 +45,22 @@ def test_script_reads_state_config_when_env_absent(tmp_path):
                                      "http://127.0.0.1:9999/mcp"]
 
 
+def test_wrapper_help_is_self_contained():
+    """普通 CLI 的用法应能直接从 --help 得到，不依赖配置或 skill。"""
+    scripts = (
+        "ida_call.sh", "ida_clean.sh", "ida_list.sh", "ida_open.sh",
+        "ida_start.sh", "ida_stop.sh", "ida_tools.sh",
+    )
+    for name in scripts:
+        out = subprocess.run(
+            ["bash", f"tools/{name}", "--help"],
+            env=_env(), capture_output=True, text=True, timeout=20, check=False,
+        )
+        output = out.stdout + out.stderr
+        assert out.returncode == 0, (name, out.returncode, output)
+        assert name in output or "用法" in output, (name, output)
+
+
 def test_stop_works_with_spaces_in_stage_path(tmp_path):
     stage = tmp_path / "ida stage with spaces"
     stage.mkdir()

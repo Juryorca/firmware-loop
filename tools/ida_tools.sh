@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # 用法: ida_tools.sh —— 列出可用的 MCP 工具与参数说明
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,2p' "$0" | sed 's/^# //'
+  exit 0
+fi
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 BASE_URL="$FW_IDA_URL"
 H=$(curl -s --noproxy '*' --max-time 10 -i -X POST "$BASE_URL" \
