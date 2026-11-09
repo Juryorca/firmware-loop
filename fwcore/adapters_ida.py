@@ -106,10 +106,9 @@ class IdAdapter(Adapter):
     def ensure(self, ctx: ToolContext) -> dict | None:
         """幂等启动 supervisor;配置/启动失败必须**显式**返回错误(不能静默继续)。"""
         cfg = self.cfg
-        if _probe_enabled() and _supervisor_up(ctx, cfg):
-            self._started = True
-            return None
-
+        # Config validity must be checked before probing a possibly shared
+        # supervisor: a stale/invalid cfg (e.g. no staging dir) should be
+        # reported as a configuration problem, not masked by a live endpoint.
         problems = cfg.problems()
         if problems:
             # 环境配置问题 ≠ IDA 分析失败:报清楚缺哪个文件/目录/挂载点
@@ -118,6 +117,9 @@ class IdAdapter(Adapter):
                     "error": f"IDA 环境配置不可用: {self.last_error}",
                     "meta": {"capability": "debug.ida", "provider": "ida:supervisor",
                              "config_source": cfg.source, "config_problems": problems}}
+        if _probe_enabled() and _supervisor_up(ctx, cfg):
+            self._started = True
+            return None
 
         script = os.path.join(self.root, "tools", "ida_start.sh")
         if not os.path.isfile(script):
