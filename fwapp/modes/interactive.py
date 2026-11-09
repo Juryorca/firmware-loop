@@ -619,12 +619,19 @@ class FwApp(App):
             lines.append("服务器: " + ", ".join(st["configured"]))
         else:
             lines.append("服务器: 未配置")
-        if st["health"]:
-            health = st["health"]
-            lines.append(f"连接: {health.get('servers') or '无'} · "
-                         f"工具数: {health.get('registered') or {}}")
-        if st["skipped"]:
+        health = st["health"]
+        if health:
+            servers = health.get("servers") or {}
+            registered = health.get("registered") or {}
+            if not servers and not health.get("config_error"):
+                # worker 里的 MCP bridge 正在 initialize/tools.list；不要显示成“无”。
+                lines.append("连接: 启动中…（MCP 客户端正在初始化）")
+            else:
+                lines.append(f"连接: {servers or '无'} · 工具数: {registered or {}}")
+        elif st["skipped"]:
             lines.append("未启动: " + str(st["skipped"]))
+        elif st["configured"]:
+            lines.append("未启动: 会话 worker 尚未就绪")
         self._notice("\n".join(lines))
 
     def _cmd_skills(self, arg: str) -> None:
