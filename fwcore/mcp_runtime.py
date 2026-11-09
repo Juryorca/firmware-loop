@@ -70,7 +70,7 @@ def _tool_exposure(spec: ServerSpec, tool: str) -> str:
     for pattern, exposure in spec.tool_exposure.items():
         if "*" in pattern and fnmatch.fnmatchcase(tool, pattern):
             return exposure
-    return spec.exposure or "direct"
+    return spec.exposure or "codemode"
 
 
 def _bounded_mcp_structured(value):
@@ -163,7 +163,8 @@ class MCPBridge:
             external = True if spec.external is None else bool(spec.external)
             collisions: list[str] = []
             for t in tools:
-                if _tool_exposure(spec, t["name"]) == "hidden":
+                exposure = _tool_exposure(spec, t["name"])
+                if exposure == "hidden":
                     hidden_tools.append(t["name"])
                     continue
                 name = tool_name(spec.name, t["name"])
@@ -192,6 +193,8 @@ class MCPBridge:
                         risk="high",  # MCP 工具走"授权内允许"(requires=mcp 另有一道门)
                         requires="mcp",  # 真实授权门:没有 allow_mcp 就拒绝
                         external=external,  # 由配置声明决定;未声明 ⇒ external(默认拒绝)
+                        exposure=exposure,
+                        namespace=spec.name,
                     )
                 )
                 names.append(final)
@@ -204,6 +207,7 @@ class MCPBridge:
                 "external": external,
                 "external_declared": spec.external is not None,
                 "resources": bool(client.supports_resources),
+                "exposure": {t["name"]: _tool_exposure(spec, t["name"]) for t in tools},
             }
             if hidden_tools:
                 st["hidden_tools"] = hidden_tools
@@ -285,6 +289,8 @@ class MCPBridge:
                     risk="high",
                     requires="mcp",
                     external=external,
+                    exposure=_tool_exposure(spec, t["name"]),
+                    namespace=spec.name,
                 )
             )
             names.append(final)

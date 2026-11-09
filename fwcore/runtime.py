@@ -471,6 +471,28 @@ class Runner:
         events.reverse()
         return {"derived": d, "recent_events": events}
 
+    def _restore_tool_activation(self, history: list[dict]) -> None:
+        """Rebuild deferred-tool activation from tool_search results in history.
+
+        Tool activation is a model-visible tool-set decision, so it lives in the
+        normal transcript/checkpoint path.  Removing a tool or changing its
+        exposure invalidates the old activation through activate_deferred().
+        """
+        names: list[str] = []
+        for msg in history:
+            if msg.get("role") != "tool" or msg.get("name") != "tool_search":
+                continue
+            try:
+                data = json.loads(msg.get("content") or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            loaded = data.get("loaded") if isinstance(data, dict) else None
+            if isinstance(loaded, list):
+                names.extend(str(x) for x in loaded if isinstance(x, str))
+        self.registry.reset_active_deferred()
+        if names:
+            self.registry.activate_deferred(names)
+
     def _load_history(self, rid: str) -> list[dict]:
         """从最新检查点恢复历史(含旧版坏 JSON 修复);损坏就返回空并记事件。"""
         ck = self.con.execute(
@@ -863,6 +885,7 @@ class Runner:
             # tools/list_changed 可能只在请求时被读到；每个 turn 开头主动刷新一次，
             # 避免模型长期拿旧工具清单。刷新失败保留旧工具。
             self.mcp_bridge.refresh_tools(force=True)
+        self._restore_tool_activation(history)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
         # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
         row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
@@ -1005,7 +1028,7 @@ class Runner:
                     last_prompt_tokens=self._last_usage.get("prompt_tokens"),
                     last_cached_tokens=self._last_usage.get("cached_tokens"),
                     system=_sys, state=_state,
-                    schema=json.dumps(self.registry.describe(), ensure_ascii=False))
+                    schema=json.dumps(self.registry.describe_model(), ensure_ascii=False))
                 _state = _state + "\n\n" + _status.render()
                 _note = self._prepare_state.get("context_note")
                 if _note:
@@ -1040,7 +1063,7 @@ class Runner:
                     break
                 _ctx = _context_stats(_sys + _state, history)
                 try:
-                    reply = self._model_call(rid, msgs, self.registry.describe(), run_calls)
+                    reply = self._model_call(rid, msgs, self.registry.describe_model(), run_calls)
                     # Pi 式 append-only context:这次请求实际发送的动态状态
                     # 保留在历史里,下一次请求的前缀才能继续命中。
                     # 它不进入 conversation/transcript(不冒充用户消息),但会随

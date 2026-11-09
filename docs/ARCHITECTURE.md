@@ -128,6 +128,14 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **文件读取**（`fs_read`）：保留头部 `2000` 行或 `50 KiB`，支持 `offset/limit`
   分段读；`full_output_path` 这类框架临时文件可被 `fs_read` 读回，否则路径没有意义。
 - **manifest / toolkit**：`output_tail` / `text` 走 `truncate_tail`（2000 行/50 KiB）。
+- **Codemode / Tool exposure**：工具带 `exposure`：`direct` 直接进入模型 Schema，
+  `deferred` 由 `tool_search` 激活，`codemode` 只通过 `codemode` 脚本发现/调用，
+  `hidden` 不暴露。MCP 默认 `codemode`；`toolExposure` 支持精确名和 `*` 通配。
+  `codemode` 使用独立 QuickJS 沙箱 worker：脚本通过 `tools.<name>` 调用现有
+  `Registry`（授权/记录/持久化仍走原路径），提供 `searchTools`/`describeTool`/
+  `describeNamespace`/`ALL_TOOLS`/`text()`/`image()`，只把显式输出交给模型；
+  worker 有内存、超时、输出上限，进程退出时清理。`tool_search` 用本地 BM25
+  只检索 `deferred` 工具并写回历史；checkpoint/resume 从工具结果恢复激活集合。
 - **MCP 配置/发现**：复用 Pi 的 `mcpServers` 契约，不另造检测格式：用户级
   `~/.pi/agent/mcp.json` → 项目 `<root>/.pi/mcp.json` → 兼容目标级 `state/mcp.json`；
   显式 `FW_MCP_CONFIG` 覆盖以上来源。项目只覆盖 `enabled`/`exposure`/`toolExposure`，
@@ -161,8 +169,9 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   read `2000` 行 / `50 KiB` 头部；MCP 模型可见文本 `20 KiB` 中间截断；
   structured/full read `1 MiB`；compaction 单条 tool result `2000` 字符。
 - **Pi MCP 的 script/full 分层**：Pi 把完整 `CallToolResult` 留给 codemode，
-  模型只看转换后的 content。fwcore 没有 codemode，因此模型可见 structured
-  也只能留摘要，完整 JSON 落临时文件并在 `structured_full_output_path` 指回。
+  模型只看脚本显式输出的转换结果。fwcore 的 Codemode 脚本同样拿到完整工具结果；
+  普通 direct 工具结果的可见 structured 仍留摘要，完整 JSON 落临时文件并在
+  `structured_full_output_path` 指回。
 - **本地工程边界**（安全/显示/兼容，不是 Pi）：MCP transport 单条消息 `16 MiB`、
   Skill 文件 `512 KiB`、错误摘要 `160/600` 字符、legacy 修复 excerpt `1500`、
   MCP observation `2000`、图片单张 `4 MiB`/单结果 `8` 张（含 embedded resource）、
@@ -227,4 +236,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 75 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 76 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

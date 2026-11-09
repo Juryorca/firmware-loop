@@ -91,7 +91,7 @@ Pi 会话工具调用统计(10 个 firmware-loop 会话):
 | Pi `bash` | Pi harness | 任意 shell/脚本执行 | `shell_exec` | `fwcore/tools.py` ToolSpec;`Runner.turn` 执行 | `test_shell_exec_records_statuses` | 完整 | 高风险需授权;无 Pi 的 shell 细节 |
 | Pi `read` | Pi harness | 读文件/摘要 | `fs_read` | 同上 | `test_runtime_core` 等 | 完整 | — |
 | Pi `write`/`edit` | Pi harness | 低风险写文件/结构化编辑 | **无独立工具** | 只能 `shell_exec` 或外部编辑器 | 无专用测试 | **部分** | 旧 249+172 次调用;fwcore 缺 write/edit schema,模型只能高风险 shell |
-| Pi `codemode` | Pi 扩展 | JS 批量编排工具 | 无 | fwcore 多 tool-call 循环 | 旧会话 338 次 | 有意废弃 | 不复制 Pi Extension 生态;需在提示词说明多工具替代 |
+| Pi `codemode` | Pi 扩展 | JS 批量编排工具 | `fwcore.codemode` QuickJS worker | 现有 Registry + Codemode | 旧会话 338 次 | 已实现 | 复用 Registry/授权/记录；不复制 Extension API |
 | `pi-lens`/`pi-code-review`/`pi-fuel-gauge` | Pi 用户包 | 开发诊断/审查/上下文显示 | 无(开发侧外部) | 不在 fwcore | — | 有意废弃 | 不属于研究产品;不影响 fwcore 研究 |
 | binwalk / unblob | 旧 tools/环境 | 固件提取 | `fw_extract` | `tools/registry/fw_extract.json` → `tools/fw_extract.sh` | `tests/test_fw_extract_tool.py` | 完整 | — |
 | qemu 运行 | 旧 `emu_run.sh` | 用户态/整机仿真 | `emu_run` | `tools/registry/emu_run.json` | 现有工具测试 | 完整 | — |

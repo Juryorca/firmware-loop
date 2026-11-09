@@ -27,8 +27,13 @@ if TYPE_CHECKING:  # 只用于类型,避免循环导入
 
 from . import db as _db
 from .domain import Domain, new_id
-from .output import (DEFAULT_FULL_READ_BYTES, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,
-                     OutputAccumulator, truncate_head)
+from .output import (
+    DEFAULT_FULL_READ_BYTES,
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    OutputAccumulator,
+    truncate_head,
+)
 from .policy import Policy
 
 
@@ -46,6 +51,11 @@ class ToolSpec:
     manifest: object | None = None
     # adapter_instance:该工具的适配器实例(拥有它的 Registry 负责 close;见 toolreg)
     adapter_instance: object | None = None
+    # exposure 是 Pi 的工具暴露语义：direct / deferred / codemode / hidden。
+    # 默认 direct 兼容现有内置工具；MCPBridge 会按配置覆盖。
+    exposure: str = "direct"
+    # MCP server/tool namespace；codemode.describeNamespace 和 tool_search 使用。
+    namespace: str | None = None
 
 
 @dataclass
@@ -67,6 +77,8 @@ class Registry:
     registration: dict = field(default_factory=dict)
     # 已 close 过的特色适配器实例 id(close_feature_adapters 幂等用)
     closed_adapters: set = field(default_factory=set)
+    # deferred 工具被 tool_search 激活后的集合；由 Runner/checkpoint 恢复。
+    active_deferred: set[str] = field(default_factory=set)
 
     NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -79,11 +91,71 @@ class Registry:
         self.specs[spec.name] = spec
 
     def describe(self) -> list[dict]:
-        """给模型的工具清单(名称 / 说明 / JSON Schema / 风险级)。"""
+        """全部工具的检查/兼容清单（不按 exposure 过滤）。"""
         return [
-            {"name": s.name, "description": s.description, "input_schema": s.input_schema, "risk": s.risk}
+            {"name": s.name, "description": s.description, "input_schema": s.input_schema,
+             "risk": s.risk, "exposure": s.exposure, "namespace": s.namespace}
             for s in sorted(self.specs.values(), key=lambda x: x.name)
         ]
+
+    def describe_model(self) -> list[dict]:
+        """模型本轮可见的工具：direct + 已激活 deferred；排除 codemode/deferred/hidden。"""
+        visible: list[dict] = []
+        for spec in sorted(self.specs.values(), key=lambda x: x.name):
+            exposure = spec.exposure or "direct"
+            if exposure == "direct" or (exposure == "deferred" and spec.name in self.active_deferred):
+                visible.append({"name": spec.name, "description": spec.description,
+                                "input_schema": spec.input_schema, "risk": spec.risk})
+        return visible
+
+    def callable_specs(self) -> list[ToolSpec]:
+        """Codemode 脚本可调用的工具（hidden 和 codemode 自身除外）。"""
+        return [s for s in sorted(self.specs.values(), key=lambda x: x.name)
+                if s.name != "codemode" and (s.exposure or "direct") != "hidden"]
+
+    def activate_deferred(self, names: list[str]) -> list[str]:
+        """只激活存在且仍为 deferred 的工具。
+
+        ``codemode`` tools are discovered by script ``searchTools``; they are
+        intentionally not added to the model schema by ``tool_search``.
+        """
+        activated: list[str] = []
+        for name in names:
+            spec = self.specs.get(name)
+            if spec is None:
+                continue
+            if (spec.exposure or "direct") == "deferred":
+                self.active_deferred.add(name)
+                activated.append(name)
+        return activated
+
+    def reset_active_deferred(self) -> None:
+        self.active_deferred.clear()
+
+    def search_metadata(self) -> list[dict]:
+        """tool_search candidates: deferred only.
+
+        Codemode scripts use callable_metadata() and can search all callable
+        tools, including codemode tools, with searchTools().
+        """
+        out: list[dict] = []
+        for spec in sorted(self.specs.values(), key=lambda x: x.name):
+            exposure = spec.exposure or "direct"
+            if exposure != "deferred":
+                continue
+            out.append({
+                "name": spec.name, "description": spec.description,
+                "input_schema": spec.input_schema, "namespace": spec.namespace,
+                "exposure": exposure,
+            })
+        return out
+
+    def callable_metadata(self) -> list[dict]:
+        return [{
+            "name": spec.name, "description": spec.description,
+            "input_schema": spec.input_schema, "namespace": spec.namespace,
+            "exposure": spec.exposure or "direct",
+        } for spec in self.callable_specs()]
 
     def call(self, ctx: ToolContext, name: str, args: dict, *, call_key: str | None = None,
              run_id: str | None = None) -> dict:
@@ -937,4 +1009,11 @@ def default_registry() -> Registry:
          "required": ["kind", "title", "body_md"]}, _kb_propose))
     from .skills import register_tools as _register_skill_tools
     _register_skill_tools(r, "")
+    # Pi Codemode + deferred tool discovery. Register lazily to avoid a cycle
+    # with tools.py (the modules import ToolSpec only when called).
+    from .codemode import register_codemode
+    from .tool_search import register_tool_search
+
+    register_tool_search(r)
+    register_codemode(r)
     return r

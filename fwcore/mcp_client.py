@@ -67,6 +67,7 @@ class MCPClient:
         self.tools_changed = False
         self._stderr_tail = bytearray()
         self._stderr_thread: threading.Thread | None = None
+        self._call_lock = threading.Lock()
 
     # ---------- 生命周期 ----------
     def __enter__(self) -> Self:
@@ -409,7 +410,12 @@ class MCPClient:
         return result if isinstance(result, dict) else {}
 
     def call_tool(self, name: str, args: dict | None = None, timeout: float | None = None) -> dict:
-        result = self.request("tools/call", {"name": name, "arguments": args or {}}, timeout=timeout)
+        # One stdio client has one request/response stream.  Codemode may call a
+        # server from several worker threads; serialize requests so responses
+        # cannot be interleaved.
+        with self._call_lock:
+            result = self.request("tools/call", {"name": name, "arguments": args or {}},
+                                  timeout=timeout)
         if not isinstance(result, dict):
             raise MCPError(f"{self.spec.name}: tools/call 结果不是 object")
         content = result.get("content")

@@ -3,7 +3,7 @@ name = "fwcore"
 version = "0.3.0"
 description = "Firmware research agent framework core: authoritative domain state, open tool registry, resumable runtime"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["quickjs>=1.19"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
