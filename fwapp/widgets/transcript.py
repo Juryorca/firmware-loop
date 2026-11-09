@@ -50,9 +50,16 @@ class TranscriptView(VerticalScroll):
             return True
 
     def append(self, widget) -> None:
+        # `mount()` lays out asynchronously. Scrolling immediately uses the old
+        # max_scroll_y, so the newly added notice/message can land below the
+        # visible area. Re-check after the next refresh.
         stick = self.at_bottom()
         self.mount(widget)
         if stick:
+            self.call_after_refresh(self._scroll_to_end)
+
+    def _scroll_to_end(self) -> None:
+        if self.is_attached:
             self.scroll_end(animate=False)
 
 

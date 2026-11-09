@@ -254,8 +254,7 @@ def test_tui_escape_cancels_running_turn(tmp_path):
                 (app.sess.run_id,)).fetchone()
             assert row["state"] == "paused"
             assert (row["handback_reason"] or "").startswith("user_stop")
-            tui = app
-            notices = [str(w.render()) for w in tui.query(NoticeWidget)]
+            notices = [str(w.render()) for w in app.query("NoticeWidget")]
             assert sum("正在停止" in n for n in notices) == 1
             assert not any("回复未完整生成" in n or "已停止:" in n or "本轮已暂停" in n
                            for n in notices)
@@ -687,12 +686,11 @@ def test_model_error_clears_busy_status(tmp_path):
             status = str(app.query_one(StatusBar).render())
             assert "正在处理" not in status
             assert "已暂停" in status or "paused" in status
-            users = [w for w in app.query(MessageWidget) if getattr(w, "role", "") == "user"]
+            users = [w for w in app.query("MessageWidget") if getattr(w, "role", "") == "user"]
             assert users and all(w.size.height <= 3 for w in users)
-            assistants = [w for w in app.query(MessageWidget) if getattr(w, "role", "") == "assistant"]
+            assistants = [w for w in app.query("MessageWidget") if getattr(w, "role", "") == "assistant"]
             assert all(getattr(w, "_text", "").strip() for w in assistants)
-            tui = app
-            notices = [str(w.render()) for w in tui.query(NoticeWidget)]
+            notices = [str(w.render()) for w in app.query("NoticeWidget")]
             assert not any("已已" in n for n in notices)
             assert any("cannot read from timed out object" in n for n in notices)
             await pilot.press("ctrl+q")
@@ -740,8 +738,7 @@ def test_model_error_does_not_block_next_submit(tmp_path):
             await pilot.pause(0.5)
             assert app.sess.busy is False
             assert calls["n"] >= 2
-            tui = app
-            assert any("已恢复" in getattr(w, "_text", "") for w in tui.query(MessageWidget))
+            assert any("已恢复" in getattr(w, "_text", "") for w in app.query("MessageWidget"))
             await pilot.press("ctrl+q")
 
     try:
@@ -796,3 +793,111 @@ def test_status_bar_cache_uses_latest_request_like_pi():
     text = format_snapshot(s).plain
     assert "缓存 95%" in text
     assert "缓存 75%" not in text
+
+
+def test_transcript_auto_scrolls_after_appended_notice(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await pilot.pause(0.3)
+            tv = app.query_one(TranscriptView)
+            tv.remove_children()
+            for i in range(50):
+                tv.append(MessageWidget("notice", f"line {i}"))
+            await pilot.pause(0.3)
+            tv.scroll_end(animate=False)
+            await pilot.pause(0.1)
+            assert tv.at_bottom()
+            tv.append(NoticeWidget("MCP: " + "x" * 400))
+            await pilot.pause(0.2)
+            assert tv.at_bottom()
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_selected_text_is_copied_automatically(tmp_path, monkeypatch):
+    from textual import events
+
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.2)
+            monkeypatch.setattr(app.screen, "get_selected_text", lambda: "selected text")
+            app.on_text_selected(events.TextSelected())
+            assert app.clipboard == "selected text"
+
+            app.copy_to_clipboard("keep")
+            monkeypatch.setattr(app.screen, "get_selected_text", lambda: "")
+            app.on_text_selected(events.TextSelected())
+            assert app.clipboard == "keep"
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_mouse_selection_auto_copies_to_clipboard(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 20)) as pilot:
+            await pilot.pause(0.2)
+            tv = app.query_one(TranscriptView)
+            tv.remove_children()
+            notice = NoticeWidget("alpha beta gamma")
+            tv.append(notice)
+            await pilot.pause(0.3)
+            await pilot.mouse_down(notice, offset=(0, 0))
+            await pilot.mouse_up(notice, offset=(10, 0))
+            await pilot.pause(0.2)
+            assert "alpha" in app.clipboard
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_mcp_command_auto_scrolls_to_bottom(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await pilot.pause(0.3)
+            tv = app.query_one(TranscriptView)
+            tv.remove_children()
+            for i in range(50):
+                tv.append(MessageWidget("notice", f"line {i}"))
+            await pilot.pause(0.3)
+            tv.scroll_end(animate=False)
+            await pilot.pause(0.1)
+            assert tv.at_bottom()
+            ed = app.query_one(PromptEditor)
+            ed.text = "/mcp"
+            await pilot.press("enter")
+            await pilot.pause(0.3)
+            assert app.query("NoticeWidget")
+            assert tv.at_bottom()
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()

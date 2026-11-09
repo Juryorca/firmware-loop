@@ -188,5 +188,5 @@ class StatusBar(Static):
 
 HINTS = (
     "Enter 发送 · Shift+Enter 换行 · Esc 停止 · "
-    "Ctrl+O 工具 · F2 研究 · / 命令"
+    "Ctrl+O 工具 · F2 研究 · / 命令 · 拖选复制"
 )

@@ -516,6 +516,12 @@ class FwApp(App):
         editor.text = "/" + cmd.name + (" " if cmd.arg_hint else "")
         editor.focus()
 
+    def on_text_selected(self, event: events.TextSelected) -> None:
+        """Copy the current mouse selection automatically (Textual selection)."""
+        selected = self.screen.get_selected_text()
+        if selected:
+            self.copy_to_clipboard(selected)
+
     def on_text_area_changed(self, event) -> None:      # 命令补全跟随输入
         with contextlib.suppress(Exception):
             editor = self.query_one(PromptEditor)
