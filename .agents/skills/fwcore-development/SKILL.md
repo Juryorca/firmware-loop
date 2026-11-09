@@ -31,7 +31,7 @@ Pi 已经实现过 MCP、工具生命周期、TUI/会话、checkpoint、缓存�
 
 ### MCP 的具体口径
 
-Pi 的 canonical 参考是 `docs/mcp.md`、`dist/extensions/mcp/config.js`(`loadMcpConfig`)、
+Pi 的 canonical 参考是 Pi 包内 `docs/mcp.md`、`dist/extensions/mcp/config.js`(`loadMcpConfig`)、
 `dist/extensions/mcp/runtime.js`(连接/重连/关闭)和 `dist/extensions/mcp/ui.js`(`/mcp` 状态)。
 改 MCP 前至少对照:全局/项目配置来源与 project trust、项目只覆盖 `enabled`/`exposure`/`toolExposure`、
 stdio 与 HTTP、后台连接、`/mcp` 状态、`mcp__<server>__<tool>` 命名、

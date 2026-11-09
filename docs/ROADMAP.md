@@ -10,7 +10,7 @@
   `notes.md` 是可选历史/人工摘要，不承担研究状态；对外材料在 `report/`，原件在 `intel/`。
 - **模型协议**:`finish_reason`/`usage` 贯通;每次调用 `model.call` 记账;FINAL 任意行首;重复内容与无工具空转看护;
   thinking 模式默认回传 `reasoning_content`。
-- **工具**:统一 manifest(`tools/registry/*.json`,8 个)+ 内置 `state_*`/`shell_exec`/`fs_*` + IDA feature 适配器 + MCP;
+- **工具**:统一 manifest(`tools/registry/*.json`,9 个)+ 内置 `state_*`/`shell_exec`/`fs_*` + IDA feature 适配器 + MCP;
   工具 exposure 四态(`direct`/`deferred`/`codemode`/`hidden`)，MCP 默认 `codemode`；
   MCP 支持后台连接、进程/HTTP 断线后的有界重连、工具列表恢复；HTTP 只读请求
   408/429/5xx 重试，`tools/call` 不重试；

@@ -34,6 +34,15 @@ def test_test_file_count_in_docs():
     assert f"pytest({n} 文件)" in road, f"ROADMAP 的测试文件数不是 {n}"
 
 
+def test_registry_manifest_count_in_docs():
+    """tools/registry/*.json 数量变化时，架构/ROADMAP 的清单数字必须同步。"""
+    n = len(glob.glob(os.path.join(ROOT, "tools", "registry", "*.json")))
+    arch = _read("docs/ARCHITECTURE.md")
+    road = _read("docs/ROADMAP.md")
+    assert f"仓库工具 manifest({n} 个)" in arch, f"ARCHITECTURE 的 manifest 数量不是 {n}"
+    assert f"`tools/registry/*.json`,{n} 个" in road, f"ROADMAP 的 manifest 数量不是 {n}"
+
+
 def test_verify_step_list_matches_script():
     """verify 的关键步骤名必须出现在文档的验证清单里(步骤增删要同步文档)。"""
     script = _read("tools/fwcore_verify.sh")

@@ -93,7 +93,7 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 
 ## 6. 对话持久化
 
-`conversation_entries`(schema v16)是**面向用户**的 append-only 对话,
+`conversation_entries`(schema v16 引入，当前全局 schema v17)是**面向用户**的 append-only 对话,
 与 `checkpoints`(模型执行历史)分工明确:
 
 | 表 | 内容 | 谁用 |
@@ -122,7 +122,7 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
   先把 tool 结果写进 checkpoint,恢复后从 `tool_calls` 补记录,**不重跑工具**。
 - **Transcript 补齐**:conversation 为准;缺失的 assistant 从 checkpoint、缺失的
   tool 从 `tool_calls` 幂等合并,按 tool_call_id/parent 顺序恢复,不重复注入上下文。
-- `conversation_entries` 是开发期 schema v16 基线;已有旧库需先运行
+- `conversation_entries` 是开发期 v16 引入的对话基线；当前全局 schema 为 v17，已有旧库需先运行
   `tools/db_rebaseline.py`(会做一致性备份)。
 - 不复制 Pi 的 Extension / Plan Mode / Subagent;保持单 Agent。
 - TUI 依赖 `textual>=8`(`pip install -e ".[tui]"`);缺失时交互模式给出安装提示,

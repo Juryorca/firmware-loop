@@ -32,7 +32,7 @@ fwcore/  db.py(SCHEMA v17/WAL/BEGIN IMMEDIATE)  domain.py(唯一写入口+不变
          policy.py(Authz)  limits.py(边界)  watchdog.py  migrate_all.py  cli.py
 fwapp/  应用层(TUI/print,薄组合;见 docs/APP.md)
 scripts/ 演练与 e2e        eval/ 答案隔离评测
-tools/registry/*.json  仓库工具 manifest(8 个); .agents/skills/*/SKILL.md
+tools/registry/*.json  仓库工具 manifest(9 个); .agents/skills/*/SKILL.md
 ```
 
 ## 3. 存储:DB 是权威,文件是叙述/材料(不是双写)
