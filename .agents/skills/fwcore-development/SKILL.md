@@ -1,15 +1,48 @@
 ---
 name: fwcore-development
-description: fwcore(自主固件漏洞研究 Agent)的项目级开发方法:如何读现状、选工作项、查根因、维护 ROADMAP、按阶段提交。
+description: fwcore(自主固件漏洞研究 Agent)的项目级开发方法:编码前做 Pi 参考实现审计、读现状、选工作项、查根因、维护 ROADMAP、按阶段提交。
 audience: development
 ---
 
 # fwcore 开发方法
 
 `fwcore` 是独立产品:`fwcore/`(runtime/domain/tools/research) + `fwapp/` 应用层、`tools/registry/*.json`、
-`eval/`、`tests/`。Pi/DS 只是外部开发工具,**不在产品依赖里**(`.pi/` 已 gitignore)。
+`eval/`、`tests/`。Pi/DS **不进入产品运行时依赖**(`.pi/` 已 gitignore),但 Pi 是**参考实现**:
+“不是依赖”不等于“可以不看、另造一套”。凡 Pi 已解决的运行时问题,先对照 Pi 的文档与源码。
+
+## 0. 参考实现审计(编码前硬门)
+
+Pi 已经实现过 MCP、工具生命周期、TUI/会话、checkpoint、缓存、扩展等运行时能力。
+遇到“检测 / 连接 / 注册 / 状态 / 生命周期 / 配置”需求,写代码前先留下三行审计:
+
+1. **参考**:Pi 的文档路径 + 源码文件/函数(或明确写出“查过,Pi 无对应实现”的搜索证据);
+2. **复用**:直接沿用的 schema、状态机、命令名、错误语义、关闭顺序;
+3. **差异**:fwcore 为什么必须不同;没有实质差异就写 adapter,不要重写。
+
+三行写进提交信息或 `docs/ROADMAP.md` 的工作记录。**没有审计,不许进实现。**
+
+明确禁止:
+
+- Pi 已有同义配置时,新造配置文件名、字段名或目录;能兼容 `mcpServers` 等既有 schema 就不另立一套;
+- 配置 + 连接状态已经能表达时,再自建一套“检测/健康检查”轮询或第二状态机;
+- 自建工具命名、注册表、错误分类、子进程关闭顺序,而没有对照 Pi 的实现;
+- “先按自己的想法做出来,以后有空再对齐”;
+- 用“fwcore 是 Python、Pi 是 Node”解释协议/生命周期差异——语言不同只能解释**代码不能直接复用**,不能解释**重新发明契约**。
+
+### MCP 的具体口径
+
+Pi 的 canonical 参考是 `docs/mcp.md`、`dist/extensions/mcp/config.js`(`loadMcpConfig`)、
+`dist/extensions/mcp/runtime.js`(连接/重连/关闭)和 `dist/extensions/mcp/ui.js`(`/mcp` 状态)。
+改 MCP 前至少对照:全局/项目配置来源与 project trust、项目只覆盖 `enabled`/`exposure`/`toolExposure`、
+stdio 与 HTTP、后台连接、`/mcp` 状态、`mcp__<server>__<tool>` 命名、
+stdio 关闭顺序(stdin → SIGTERM → SIGKILL 进程组)、HTTP 瞬时错误重试。
+当前 fwcore 的自定义 `state/mcp.json` 入口 + 自制 `probe()`/检测层是**历史实现/兼容债**,
+不是新 MCP 工作的模板;先确认 `mcpServers` schema 与生命周期能否复用,能收敛就收敛,
+保留 target override 或差异必须写明兼容与迁移理由。
 
 ## 1. 开始前(5 分钟)
+
+**若涉及 Pi 已有能力(尤其 MCP/TUI/tools/checkpoint),先完成第 0 节审计,再往下做。**
 
 1. `git log --oneline -5` + `git status`:确认实际 HEAD 与脏文件。
 2. 读 `docs/ROADMAP.md` 的 **当前状态 / 最高价值待办** 两节(历史里程碑只读不跟)。
@@ -30,6 +63,7 @@ audience: development
 
 ## 3. 查根因(不是修补那一行)
 
+- 先查参考实现/标准,再决定改哪一层;不要从症状直接长出一个自有协议;
 - 先复现/度量(真实 SQLite、真实产物),再改代码;
 - 追上下游契约:调用方、被调方、失败路径、历史数据、恢复路径;
 - 找反例:构造能推翻"当前实现假设"的输入(大输出、坏 JSON、跨 run、缺字段、并发);
@@ -41,7 +75,8 @@ audience: development
 阶段结束时更新,不是每个小修都加一行。规则:
 - **当前状态** 只写产品事实(能跑什么、验证到什么强度);
 - **最高价值待办** 每项带:目标 / 依赖 / 验收方式 / 是否需外部授权;
-- 已取消(Pi 适配、Ralph、额外编排)单独一节,不混在待办里;
+- 已取消的**运行时依赖/编排**(把 Pi 当依赖、Ralph、额外编排)单独一节,不混在待办里;
+  但“取消 Pi 依赖”不等于“取消 Pi 参考”:MCP/工具/TUI 等行为对齐仍按第 0 节执行。
 - 历史里程碑保留但要标"历史",不能冒充当前状态;
 - 数字(调用数、覆盖率)必须来自 SQLite/脚本输出,不手写估计。
 
@@ -49,7 +84,7 @@ audience: development
 
 1. 要解决的真实问题是什么;2. 根因;3. 影响范围是否查清;4. 上下游是否覆盖;
 5. 是否有代表性验证(真实规模数据/反例);6. 对自主研究能力有何实际改善;
-7. ROADMAP 同步;8. 下一项最高价值任务是什么。
+7. ROADMAP 同步;8. 下一项最高价值任务是什么;9. 第 0 节参考实现审计已留痕,差异有测试或明确理由。
 
 阶段内发现的关联问题,能一起解决就一起解决,不要留到下一轮。
 
@@ -84,12 +119,16 @@ audience: development
 ## 9. 与其它文档的关系
 
 - `AGENTS.md` + `research-loop` Skill = 研究行为与流程(研究会话用),本 Skill 不复制其规则;
+- Pi 的 `docs/` + `dist/` = 运行时能力的参考实现;Pi 不是运行时依赖,但必须先对照;
 - `docs/ROADMAP.md` = 唯一工程进度清单(本 Skill 只规定怎么维护它);
 - `knowledge/` = 跨目标研究经验;开发教训写在这里,不写进研究 KB。
 
 ## 10. 常用命令
 
 ```bash
+PI_ROOT="${PI_ROOT:-$(npm root -g)/@earendil-works/pi-coding-agent}"
+rg -n "mcp|tui|checkpoint" "$PI_ROOT/docs" "$PI_ROOT/dist" | head -80   # 先找参考实现
+
 git log --oneline -5; git status --short
 bash tools/fwcore_verify.sh                  # 阶段收尾:全量
 python3 -m pytest tests/ -q                  # 定向:先跑受影响的文件
