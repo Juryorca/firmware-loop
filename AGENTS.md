@@ -445,13 +445,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **netlink 面解锁**: `qemu-aarch64-patched`(已装,直接用)→ 判读探针 `tools/qemu-nl-probe/`
 - **派生量重算**: `bash tools/derived_check.sh <目标>` —— 一次算出 A2 覆盖度 /
   每个 finding 的包完整性;覆盖度与材料完成的**断言直接粘它的输出**(有 FAIL 非零退出)
-- IDA(headless 多库并行;用现有 wrapper,不要先研究脚本):
-  `bash tools/ida_start.sh` → `bash tools/ida_open.sh <Linux二进制路径> [会话名]`
-  (`ida_open.sh` 会复制到暂存目录并调用 `idb_open`)
-  → `bash tools/ida_tools.sh` 查 MCP 工具清单
-  → `bash tools/ida_call.sh <tool> '{"database":"<会话名>",...}'` (JSON 必须带 database)
-  → 收尾 `bash tools/ida_stop.sh` + `bash tools/ida_clean.sh`。
-  本机端点用 `curl --noproxy`/`ida_call.sh`,不要用 webfetch;缺配置先 `fw-core ida-env`。
+- IDA(headless):用现有 `tools/ida_*.sh` wrapper;具体命令、`database` 参数与生命周期见 `.agents/skills/firmware-reversing/SKILL.md`「IDA headless wrapper」。
 - 终端截图(声明式,**不接受自由命令**): 先在 finding 包目录写好 `shots.json`,再
   终端截图走 `tools/termshot.sh`(**用法与约束见 `tools/templates/report.md`「截图」一节**),禁手绘、禁改用其他方式。
   脚本必须与 `shots.json` **同目录**(路径 containment)、可执行、argv 走白名单
