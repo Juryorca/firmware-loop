@@ -148,7 +148,7 @@ VR 编号仅存在于内部 INDEX；`notes.md` 可选;跨 finding 引用写 "doc
 ### 通用原则
 - 受众纪律: 对外文件(VR-*、CVE 申请材料)的读者是厂商/第三方,不是操作者。禁止出现
   工作区路径(state/…、artifacts/…)、内部工具名(tools/、parse_signal.py、IDA、tmux)、
-  信号记号(HIT:/MISS:)与内部文件名(AGENTS.md、notes.md、knowledge/);
+  信号记号(HIT:/MISS:)与内部文件名(AGENTS.md、notes.md、state/、artifacts/);
   文本证据不写操作者环境信息,截图用提交人本人真实终端(原生提示符,不匿名化)
 - 内部归档(INDEX/attack-surface/CLOSURE)反向要求: **必须带证据引用** ——
   每条结论附 命令/输出/文件路径/判定记号,保证可追溯、可续跑、可复核

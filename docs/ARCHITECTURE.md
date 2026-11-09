@@ -14,7 +14,7 @@
 | 运行时 | 工具执行、超时/取消、上下文、持久化、恢复 | 判断"这个漏洞是否成立" |
 | 领域层 | 事实与不变量(假设/尝试/观察/证据/结论) | 产生研究判断 |
 
-判据(方法论)在 `.agents/skills/`、`knowledge/`、`AGENTS.md`;内容架构见 `docs/AGENT_ARCHITECTURE.md`;机器可核部分才进代码。
+判据(方法论)在 `.agents/skills/`、SQLite `knowledge_entries`、`AGENTS.md`;内容架构见 `docs/AGENT_ARCHITECTURE.md`;机器可核部分才进代码。
 代码**不得自带新判据**:闸门红 ≠ 结论变,而是"补事实"或"先改判据"。
 
 ## 2. ① 模块(全部有测试)

@@ -20,4 +20,4 @@
 - 研究事实(假设/证据/结论/面)→ SQLite;
 - 真实 run 的逐轮报告 → `state/<目标>/report/`(收尾时);
 - 演练/端到端输出 → `state/_scratch/`(易失,脚本默认写这里);
-- 跨目标经验 → `knowledge/`。
+- 跨目标经验 → SQLite `knowledge_entries`（`knowledge_search` / `knowledge_get`）。

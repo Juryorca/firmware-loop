@@ -121,7 +121,7 @@ stdio 关闭顺序(stdin → SIGTERM → SIGKILL 进程组)、HTTP 瞬时错误�
 - `AGENTS.md` + `research-loop` Skill = 研究行为与流程(研究会话用),本 Skill 不复制其规则;
 - Pi 的 `docs/` + `dist/` = 运行时能力的参考实现;Pi 不是运行时依赖,但必须先对照;
 - `docs/ROADMAP.md` = 唯一工程进度清单(本 Skill 只规定怎么维护它);
-- `knowledge/` = 跨目标研究经验;开发教训写在这里,不写进研究 KB。
+- 跨目标研究经验统一写 SQLite Knowledge（`knowledge_propose` / `knowledge_revise`）；不再写知识 Markdown，开发教训写 `docs/`。
 
 ## 10. 常用命令
 

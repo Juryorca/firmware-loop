@@ -81,6 +81,7 @@ def test_legacy_markdown_runtime_files_absent():
     assert not Path("knowledge/vuln-patterns.md").exists()
     assert not Path("knowledge/misreports.md").exists()
     assert not Path("knowledge/research-knowledge.md").exists()
+    assert not any(Path("knowledge").glob("*.md")) if Path("knowledge").exists() else True
     assert not Path("tools/kb.py").exists()
 
 

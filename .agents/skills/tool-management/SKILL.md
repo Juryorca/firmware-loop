@@ -126,5 +126,5 @@ python3 -m fwcore.pyenvs --select json
 - 把 MCP/Plugin 改成 Bash；
 - 扫描 Home/虚拟环境找工具；
 - 把 Python 环境队列当工具注册表；
-- 工具经验写回 `knowledge/tool-quirks.md`；
+- 工具经验写入 SQLite Knowledge（`knowledge_propose` / `knowledge_revise`，`kind=guideline`，tags 含 `tool-quirk`）；不再写任何知识 Markdown。
 - 仅凭文件存在/配置存在报 ready。

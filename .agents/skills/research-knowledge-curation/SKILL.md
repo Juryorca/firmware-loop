@@ -52,7 +52,7 @@ description: 研究知识与工具经验的使用/沉淀：区分漏洞知识（
 - 修订：`knowledge_revise`，追加版本，不覆盖历史；
 - 不再适用：`knowledge_deprecate`（先确认失效，记录原因/适用范围）；
 - 统计：`knowledge_stats`；
-- 旧 `knowledge/tool-quirks.md` 已迁移到 SQLite 并从工作树移除；Git 历史保留旧版，但**不再作为运行时写入或查询入口**。
+- 所有原 `knowledge/*.md` 已迁移到 SQLite 并从工作树移除；Git 历史保留旧版，**不再有 Markdown 写入、查询或 fallback 入口**。
 
 ## 迁移/去重
 

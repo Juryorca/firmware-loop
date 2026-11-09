@@ -87,10 +87,10 @@
 |---|---|
 | 交付物形态(advisory 骨架 / 格式 / shots.json / CVE 线 / 材料完成判据) | `tools/templates/report.md`、`tools/templates/cve-request.md` |
 | 流程细则(循环 / 清理 / 分诊 / 扫面提取 / 复核他人轮次) | `research-loop` Skill(完整参考 `references/LOOP.md`) |
-| 研究判据与经验(建场 / 强方法两轴 / 形态判读 / 技术经验) | `knowledge_search` / `knowledge_get`;静态参考 `knowledge/methodology.md` |
+| 研究判据与经验(建场 / 强方法两轴 / 形态判读 / 技术经验) | `knowledge_search` / `knowledge_get`（SQLite 唯一知识源；原 Markdown 已迁移） |
 | 可复用缺陷形态 / 勿报判据 | `knowledge_search`(SQLite `knowledge_entries`;旧两份 Markdown 仅原始来源) |
-| 工具经验/怪癖 / SDK 特征 / 已验证利用链 / 情报与实证 | 工具经验用 `knowledge_search(kind="guideline")`；SDK/利用链/情报为 `knowledge/{sdk-bloodlines,exploits-validated,intel-log}.md` 静态参考 |
-| 知识库入口 | `knowledge_search` / `knowledge_get` / `knowledge_propose` / `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`;静态参考 `knowledge/INDEX.md`;准入见本文件「Knowledge Base」 |
+| 工具经验/怪癖 / SDK 特征 / 已验证利用链 / 情报与实证 | 全部用 `knowledge_search` / `knowledge_get`；按 `kind=guideline/pattern/misreport` 过滤 |
+| 知识库入口 | `knowledge_search` / `knowledge_get` / `knowledge_propose` / `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`;准入见本文件「Knowledge Base」 |
 | 权威研究事实(假设/尝试/观察/证据/结论/面) | `state/<目标>/state/fwcore.sqlite3`(用 `state_*` 工具写) |
 | 可选人工叙述/历史摘要（非自动维护） | `state/<目标>/notes.md`；下一步从 DB 读 |
 | 环境 / 工具入口 | 本文件「资源解析…」「环境清单」「工具速查」 |
@@ -163,7 +163,7 @@
 
 
 13. **版本控制(硬)**: 本工作区是 git 仓库,只纳框架/产品本体(`AGENTS.md` / `fwcore/` / `fwapp/` /
-    `tools/` / `knowledge/` / `.agents/` / `tests/` / `eval/` / `docs/`);`state/`、`intel/`、固件与工作副本**不进库**。
+    `tools/` / `.agents/` / `tests/` / `eval/` / `docs/`);`state/`、`intel/`、固件与工作副本**不进库**。
     提交单位按会话类型定:
     - **研究轮次**改框架文件:改前留一个可回滚基线 + 改后一次提交(保证 `git checkout` 能复原);
     - **产品开发会话**:按开发 Skill 的**里程碑提交**(一个可独立验证的工程成果一次),不逐个小修提交、不逐次 push。
@@ -177,13 +177,15 @@
 - `state/<目标>/` — 工作现场: rootfs 工作副本、artifacts/(**内部证据 = agent 自查用,不进对外材料**;**大体积派生物统一放 `artifacts/work/`** ⇒ 释放时整目录删 ✓)、notes.md（可选历史，不自动维护）、report/(advisory + INDEX + 复现包 + 截图);
   目标收尾按守则 7 清理
 - `.agents/skills/` — 按需加载的专项操作知识(标准 `SKILL.md`)
-- `knowledge/` — 静态参考与旧案例原始来源;可查询研究知识在 SQLite `knowledge_entries`
+- `knowledge/` — **已不存在**;研究知识与工具经验统一在 SQLite `knowledge_entries`;历史 Markdown 只在 Git 历史中。
 - **研究流程**:`research-loop` Skill(完整参考 `references/LOOP.md`,按需加载)
 - `tools/templates/` — **交付物模板**(报告/提交材料骨架):产出时**复制模板**再填值
 - `/mnt/d/ida_test/` — Windows IDA 暂存区(会话退出自动清,白名单=管线工具)
 - `/tmp` — 易失;禁止存放任何需要保留的文件
 
 ## Knowledge Base: Research Knowledge(准入 / 归属 / 检索)
+
+> 产品运行/备份/恢复约定见 `docs/KNOWLEDGE.md`；本次全量迁移审计见 `docs/KNOWLEDGE_MIGRATION.md`。
 
 **定位**: 跨 Target、证据驱动、可审核修订的**研究知识**,不是案例档案库,也不是静态 Prompt。
 工具经验与漏洞研究知识共用 SQLite,但**准入标准不同**,不能互相套用。
@@ -221,7 +223,9 @@
 - 正式知识:SQLite `knowledge_entries`(正文 `body_md` + kind/tags/status/source);
 - 版本:`knowledge_entry_versions`,修改不覆盖历史;
 - 检索:FTS5 + 结构化过滤;同时搜 `pattern`(正向)、`misreport`(反向)与 `guideline`(判据/工具经验);
-- 旧 `knowledge/vuln-patterns.md` / `misreports.md` / `tool-quirks.md` 已从当前树移除，只保留 Git 历史；
+- 原 `knowledge/{vuln-patterns,misreports,tool-quirks}.md` 已迁移到 SQLite 并移除；原
+  `knowledge/{methodology,sdk-bloodlines,exploits-validated,intel-log,INDEX}.md` 也已完成迁移并移除。
+  这些文件的原文只保留在 Git 历史中；工作树不再有知识 Markdown。
   **运行时只读 SQLite `knowledge_entries`**，不存在 Markdown 回退；
 - 结构化只保留最小分类/检索信息,不要求每条填十几个字段。
 
@@ -236,8 +240,7 @@
 - 检索义务:组件名/形态/工具现象先查知识库;公开 CVE/公告只进排除清单。
 
 **旧 Markdown 归属**:
-- `knowledge/methodology.md`、`sdk-bloodlines.md`、`exploits-validated.md`、`intel-log.md` = 静态参考,按需 fs_read;
-- `knowledge/INDEX.md` = 静态参考索引/来源说明,不是运行时 Prompt;
+- 知识正文只用 SQLite `knowledge_entries` / `knowledge_entry_versions`；不再有静态知识 Markdown、索引或 fallback。
 - 旧 raw source（`vuln-patterns.md`、`misreports.md`、`tool-quirks.md`）已移出当前树，Git 历史保留。
 
 ## 报告产出(硬性要求)
@@ -279,7 +282,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
     **载体**: 跑循环期间 = 权威状态 `surfaces` 表(入口点 × 属性 × disposition);
     收尾时导出 `report/attack-surface.md`。无论在哪,都不许是自由文本。
   ⚠️ **差分单独不改变 disposition**: 差分只覆盖厂商改过的点;一个面的结论若**全部来自差分**,该面**仍是未判定**
-  —— 判“面干净”必须做与差分无关的审计(入口→sink 遍历 / 解析器边界 / 鉴权覆盖)。见 `knowledge/methodology.md`「差分的正确定位」。
+  —— 判“面干净”必须做与差分无关的审计(入口→sink 遍历 / 解析器边界 / 鉴权覆盖)。见 `knowledge_search("差分的正确定位")`。
   ⚠️ **派生量“算”不“写”**: 覆盖度 / knowledge 条数 / 材料完成 这类**能从权威处算出来**的值,
   一律**用 `bash tools/derived_check.sh <目标>` 的输出**(或只写指针),**散文里不写总结性断言**
   ("均已判定 / 全部覆盖 / 无一遗漏"之类)—— 手写派生量必漂(历史: §13 "C3 ✓"、§13 "修复完整"、§16 "均已判定")。
@@ -302,7 +305,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 ### C. Reporting & Knowledge
 - C1 每个发现一份 advisory(VR-<n>),结构完整自洽,不引用已删除的模板
 - C2 report/INDEX.md 汇总
-- C3 knowledge/ 同步 + 一键复现脚本验证通过
+- C3 可复用经验写入/修订 SQLite Knowledge（不再同步任何 Markdown）+ 一键复现脚本验证通过
 
 ### D. Closure Statement(收尾声明,结束前必写)
 - Closure reason: coverage complete / diminishing returns / user terminated / blocker
@@ -350,7 +353,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 纪律: 技术尝试与失败原因逐条记录;全部方向穷尽仍加密 → 挂起等待人工(请求真机或已解密固件)。
 
 ### 容器 / 模拟环境(事实状态 2026-09-27)
-- **docker 29.1.3 可用**;容器补的是 **qemu-user 缺的那层**(真 `/dev`、真挂载、多进程;跑发行版镜像时才有真 init/systemd)⇒ **按面缺哪层补哪层**,不是"越真越好"(见 `knowledge/methodology.md`「模拟方式按"缺哪层补哪层"选」)。
+- **docker 29.1.3 可用**;容器补的是 **qemu-user 缺的那层**(真 `/dev`、真挂载、多进程;跑发行版镜像时才有真 init/systemd)⇒ **按面缺哪层补哪层**,不是"越真越好"(见 `knowledge_search("模拟方式 缺哪层补哪层")`)。
 - **用完必清**:容器 `docker rm -f <自己名字>` + 镜像 `docker rmi <自己构建的>`;**禁** `docker system prune -a`(本机有别的项目的镜像)。
 - **挂载隔离**:只挂本目标目录;禁挂 `/`、`/home`、`/etc`、`/mnt/c`、`/mnt/d`;容器内脚本禁止对宿主路径 `rm -rf`。
 - **user-mode 侧先用补丁版**: 解 netlink 白名单的 **`qemu-aarch64-patched`** 通过 `state/tools.json` 的 `path` 定位；`qemu_user` 在 aarch64 且该元数据存在时会自动优先它。⇒ NFQUEUE/`SOCK_DIAG`/`XFRM`/`GENERIC` 类 daemon 在 qemu-user 下也能跑,**别为这些面去起容器**;容器留给它真正独有的东西(真 `/dev`、真挂载、多进程 —— `--privileged` 只为 `CAP_SYS_ADMIN`)。判读探针 `tools/qemu-nl-probe/`。
@@ -433,9 +436,9 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 
 ## 工具速查
 - 环境预检: bash tools/check.sh(开工必跑,有 FAIL 先报告)
-- **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|revise|deprecate`;模型用 `knowledge_search/get/propose/stats/revise/deprecate`。旧 `tools/kb.py` 已移除；静态来源文件只作历史/原始来源，不是知识权威。
+- **Research Knowledge**: `python3 -m fwcore knowledge stats|search|get|revise|deprecate`;模型用 `knowledge_search/get/propose/stats/revise/deprecate`。旧 `tools/kb.py` 已移除；知识只在 SQLite，工作树不再有知识 Markdown。
 - **默认工具集完整性**: `python3 -m fwcore toolset`(区分仓库资产/外部依赖/能力/服务);只读探针,不启动有副作用的服务。
-- **批量静态/动态工具**: `tools/ghidra_scripts/{ProfileFuncs,DumpFuncsWithStr,DumpDecomp}.java`(函数画像/反编译批处理;Ghidra base = IDA base + 0x100000) + `tools/cgi_fuzz.sh`(对厂商 CGI 有界变异 fuzz,判据 = qemu `uncaught signal`/SIGSEGV;用法见文件头)→ 用法与坑见 `knowledge/methodology.md`「函数画像 × 动作表 join」
+- **批量静态/动态工具**: `tools/ghidra_scripts/{ProfileFuncs,DumpFuncsWithStr,DumpDecomp}.java`(函数画像/反编译批处理;Ghidra base = IDA base + 0x100000) + `tools/cgi_fuzz.sh`(对厂商 CGI 有界变异 fuzz,判据 = qemu `uncaught signal`/SIGSEGV;用法见文件头)→ 用法与坑见 `knowledge_search("函数画像 动作表 join")`
 - **JS 页面取件**: `mcp__chrome_devtools__navigate_page` → `take_snapshot` / `list_network_requests` ⇒ 真实下载 URL(curl 拿不到时);见「环境清单 → 取件 / JS 页面」
 - **提交(用户要求时)**: 先 `python3 tools/chrome-live-probe.py`(OFF ⇒ 提醒用户开 `chrome://inspect/#remote-debugging`)→ `mcp__chrome_live__*` 填表 → **不点提交** → 贴待确认清单;见「环境清单 → 提交」
 - **netlink 面解锁**: `qemu-aarch64-patched`(已装,直接用)→ 判读探针 `tools/qemu-nl-probe/`

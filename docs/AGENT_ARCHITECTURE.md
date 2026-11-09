@@ -160,7 +160,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | 当前 Target/面/假设/尝试/观察/证据/结论 | SQLite research tables | 随目标 | 否；走 `state_prompt` 尾部 |
 | 运行/预算/checkpoint/工具调用/事件 | SQLite runtime tables | 随 run | 否；尾部状态/工具结果 |
 | 长期研究知识 | `knowledge_entries` | 跨目标、长期 | 否；按需检索 |
-| 静态规则/参考 | `AGENTS.md`、`knowledge/*.md`、Skills | Git 版本化 | 仅 AGENTS 常驻 |
+| 静态规则/参考 | `AGENTS.md`、Skills | Git 版本化 | 仅 AGENTS 常驻；知识不再有 Markdown 来源 |
 
 ## 8. 新增资产的流程
 
@@ -226,8 +226,8 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | `opencode.json` | 旧 OpenCode 配置 | 已删除 | 不再加载 |
 | `knowledge/vuln-patterns.md` | 旧正向案例来源 | 已移出当前树；Git 历史保留 | 不再加载 |
 | `knowledge/misreports.md` | 旧反向案例来源 | 已移出当前树；Git 历史保留 | 不再加载 |
-| `knowledge/methodology.md` 等 | 静态方法参考 | 静态参考 | 按需 fs_read |
-| `knowledge/tool-quirks.md` | 旧工具经验 Markdown | SQLite `knowledge_entries`（94 条，已合并/退休） | `knowledge_search` / `knowledge_get`，Git 历史保留 |
+| `knowledge/methodology.md` 等五份 Markdown | 旧静态参考 | **已迁移到 SQLite 并删除；Git 历史保留** | `knowledge_search` / `knowledge_get` |
+| `knowledge/tool-quirks.md` | 旧工具经验 Markdown | **已迁移到 SQLite 并删除；Git 历史保留** | `knowledge_search` / `knowledge_get` |
 | `.pi/guards/*` | Pi 工具调用护栏 | 尚未迁入 fwcore runtime | 明确遗留 |
 | `.pi/dev-notes.md` | 开发笔记 | 不进入产品 | 本地保留 |
 
