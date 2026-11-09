@@ -39,7 +39,7 @@ def test_codemode_parallel_calls_record_and_filter(tmp_path):
             active += 1
             max_active = max(max_active, active)
         try:
-            time.sleep(0.2)
+            time.sleep(0.5)
             return {
                 "status": "ok",
                 "value": args.get("v"),
@@ -66,7 +66,8 @@ def test_codemode_parallel_calls_record_and_filter(tmp_path):
     assert out["status"] == "ok", out
     assert "1,2,3,4" in out["text"]
     assert max_active >= 2, f"tools were serialized (max_active={max_active})"
-    assert con.execute("SELECT COUNT(*) n FROM tool_calls").fetchone()["n"] == 4
+    n = con.execute("SELECT COUNT(*) n FROM tool_calls").fetchone()["n"]
+    assert n == 4, f"expected 4 recorded nested calls, got {n}: {out}"
 
 
 def test_codemode_search_describe_and_error_catch(tmp_path):
