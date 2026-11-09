@@ -52,6 +52,9 @@ docs/KNOWLEDGE_MIGRATION.md
 FTS 行:                  168
 ```
 
+> 以上是 2026-11-09 迁移完成时的快照；后续研究可以继续 `knowledge_propose` 新增条目。
+> 当前数量以 `python3 -m fwcore knowledge stats` 为准，不要拿本快照当实时计数。
+
 ## 备份与恢复
 
 不要直接复制正在写入的 WAL 数据库；使用 SQLite backup API。

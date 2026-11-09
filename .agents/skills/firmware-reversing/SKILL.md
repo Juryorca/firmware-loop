@@ -28,7 +28,8 @@ description: 固件静态逆向与入口建模：rootfs 枚举、IDA/Ghidra、CG
 
 ## IDA headless wrapper（按需使用，不必研究脚本）
 
-本工作区已有 wrapper；直接用，不要先 `head`/`sed` 读 `tools/ida_*.sh`：
+本工作区已有 wrapper；直接用。只查参数时先运行对应脚本的 `--help`（不依赖配置），
+不要先 `head`/`sed` 读 `tools/ida_*.sh`：
 
 ```bash
 bash tools/ida_start.sh

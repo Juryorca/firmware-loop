@@ -27,6 +27,9 @@ python3 -m fwcore ida-env --sh       # 给 shell:export 语句(路径含空格�
 python3 -m fwcore run <target> ...   # Adapter/探针/脚本共用同一份配置
 ```
 
+各 wrapper 的用法可用 `bash tools/ida_stop.sh --help` 这类方式查看；`ida_env.sh` 是被
+source 的配置前置，不是独立 CLI。
+
 `state/ida.json` 示例:
 
 ```json

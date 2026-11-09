@@ -277,8 +277,9 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 ### 13.2b tool-quirks → 94 条工具经验
 
-`knowledge/tool-quirks.md` 的 94 个 `##` section 已按完整正文迁入 `knowledge_entries`
-（`kind=guideline`, `source=knowledge/tool-quirks.md`, tags 含 `tool-quirk` + 工具名）：
+迁移时，`knowledge/tool-quirks.md` 的 94 个 `##` section 已按完整正文迁入 `knowledge_entries`
+（`kind=guideline`, `source=knowledge/tool-quirks.md`, tags 含 `tool-quirk` + 工具名）；
+当前条目数以 `knowledge stats` 为准：
 
 - 88 条新增；
 - 6 条与既有工具判据合并（保留旧 ID，正文补全 + 版本追加）；

@@ -21,6 +21,14 @@ def test_system_prompt_only_contains_agents_and_catalogs(tmp_path):
     assert "FINAL:" in prompt
 
 
+def test_core_prompt_has_no_tool_manual():
+    """常驻 core prompt 只定义身份/协议；IDA 等工具用法属于 manifest/skill。"""
+    prompt = core_prompt()
+    assert "IDA headless" not in prompt
+    assert "tools/ida_start.sh" not in prompt
+    assert "tools/ida_call.sh" not in prompt
+
+
 def test_missing_agents_is_reported_not_faked(tmp_path):
     prompt = build_system_prompt(str(tmp_path))
     assert "未找到根目录 AGENTS.md" in prompt

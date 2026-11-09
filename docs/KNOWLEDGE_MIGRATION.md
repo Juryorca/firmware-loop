@@ -1,6 +1,9 @@
 # Knowledge Markdown → SQLite 迁移审计
 
 > 迁移完成日期: 2026-11-09 · 状态: 完成 · 运行时知识权威: SQLite `knowledge_entries`
+>
+> 本文的条目/版本/FTS 数字是**迁移时快照**；迁移后新增知识不回填本文。
+> 当前数量以 `python3 -m fwcore knowledge stats` 为准。
 
 ## 结论与计数
 
