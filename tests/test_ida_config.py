@@ -88,6 +88,18 @@ def test_scripts_have_no_hardcoded_paths_or_ports():
     assert not bad, bad
 
 
+def test_ida_query_manifest_exposes_usage_contract():
+    """模型可见的 manifest 必须带最小调用契约，而不是只有一句“透传参数”。"""
+    with open("tools/registry/ida_query.json", encoding="utf-8") as f:
+        data = json.load(f)
+    desc = data["description"]
+    assert "tools/ida/README.md" in desc
+    assert "ida_call.sh" in desc and "database" in desc
+    args = data["input_schema"]["properties"]["args"]["description"]
+    assert "database" in args and "ida_tools.sh" in args
+    assert data["input_schema"]["examples"][0]["args"] == "idb_list '{}'"
+
+
 def test_stop_only_kills_own_supervisor_and_matching_workers(tmp_path):
     stage = tmp_path / "stage"
     stage.mkdir()

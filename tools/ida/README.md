@@ -62,6 +62,11 @@ bash tools/ida/ida_clean.sh
 
 ## 文档边界
 
-本文件是工具套件的 README；研究流程（何时用 IDA、入口→参数→sink、证据登记）在
-`.agents/skills/firmware-reversing/SKILL.md`。常驻 system prompt 只保留身份、协议和稳定规则，
-不复制本文件。
+分三层，避免把整份生命周期塞进每次模型请求：
+
+- 模型可见的**最小调用契约**在 `tools/registry/ida_query.json`：工具用途、`args` 语法、`database` 要求和示例。
+- 本 README 是**完整工具手册**：配置、生命周期、退出码、清理边界和故障处理。
+- 研究流程（何时用 IDA、入口→参数→sink、证据登记）在
+  `.agents/skills/firmware-reversing/SKILL.md`。
+
+常驻 system prompt 只保留身份、协议和稳定规则，不复制本文件。

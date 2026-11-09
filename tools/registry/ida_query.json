@@ -1,22 +1,29 @@
 {
   "name": "ida_query",
-  "description": "调用 Windows IDA(经 WSL,自动启动 supervisor)做反编译/函数画像;输出被结构化成字段",
+  "description": "调用 Windows IDA（经 WSL，自动启动 supervisor）做反编译/函数画像。本工具只负责调用；启动、开库、停止和清理的生命周期见 tools/ida/README.md。args 使用 ida_call.sh 的原始参数串：<tool> '<json>'；查询已打开的数据库时 JSON 必须带 database=<会话名>。",
   "input_schema": {
     "type": "object",
     "properties": {
       "args": {
         "type": "string",
-        "description": "透传给 ida_call.sh 的参数串"
+        "description": "传给 ida_call.sh 的原始参数串，格式：<tool> '<json>'。例：idb_list '{}'；查询指定数据库时用 '{\"database\":\"<会话名>\",...}'。工具名先用 tools/ida/ida_tools.sh 查询；会话先按 tools/ida/README.md 打开。"
       },
       "arch": {
-        "type": "string"
+        "type": "string",
+        "description": "目标架构标签（仅用于调度/记录，不改变 IDA 端分析）。"
       },
       "timeout": {
-        "type": "number"
+        "type": "number",
+        "description": "本次调用的超时秒数；不传则用 manifest 默认值。"
       }
     },
     "required": [
       "args"
+    ],
+    "examples": [
+      {
+        "args": "idb_list '{}'"
+      }
     ]
   },
   "kind": "feature",
