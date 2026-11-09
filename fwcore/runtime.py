@@ -1444,11 +1444,15 @@ class Runner:
             return
 
         bridge = self.mcp_bridge
-        if bridge is not None and not getattr(bridge, "closed", False):
-            return
-        reopened = bridge is not None
         pgids = (os.path.join(self.root, "state", "artifacts", rid, ".pgids")
                  if rid else None)
+        if bridge is not None and not getattr(bridge, "closed", False):
+            # eager 启动的 bridge 可能在首个 run 之前就已启动；这里补登记
+            # 进程组，硬崩溃后 watchdog 才能按 .pgids 回收。
+            if pgids:
+                bridge.attach_pgids(pgids)
+            return
+        reopened = bridge is not None
         if bridge is None:
             self.mcp_bridge = bridge_from_config(self.registry, self.root, self._mcp_config_paths,
                                                  timeout=self._mcp_timeout,

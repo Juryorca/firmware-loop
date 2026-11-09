@@ -19,8 +19,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers
-from .mcp_content import (MCP_OUTPUT_MAX_BYTES, bound_parts, content_parts,
-                          parts_images, resource_parts)
+from .mcp_content import (
+    MCP_OUTPUT_MAX_BYTES,
+    bound_parts,
+    content_parts,
+    parts_images,
+    resource_parts,
+)
 from .output import limit_structured_for_model
 from .tools import Registry, ToolSpec
 
@@ -194,9 +199,7 @@ class MCPBridge:
         for t in tools:
             base = tool_name(server, t["name"])
             owner = self.claimed.get(base)
-            if owner is None and base not in self.registry.specs:
-                final = base
-            elif owner == (server, t["name"]):
+            if (owner is None and base not in self.registry.specs) or owner == (server, t["name"]):
                 final = base
             else:
                 final = disambiguated_name(server, t["name"])
@@ -467,6 +470,15 @@ class MCPBridge:
             return _attach_common(result)
 
         return _handler
+
+    def attach_pgids(self, path: str) -> None:
+        """eager 启动时还没有 run；首个 run 到来后补登记已存在的 MCP 进程组。"""
+        if not path:
+            return
+        self.pgids_path = path
+        for client in self.clients.values():
+            client.pgids_path = path
+            client.register_pgid()
 
     def close(self) -> None:
         """幂等:重复调用安全(关闭后 clients 为空、closed=True)。"""

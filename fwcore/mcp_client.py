@@ -145,16 +145,20 @@ class MCPClient:
                 target=self._drain_stderr, args=(err_stream,), daemon=True,
                 name=f"fwcore-mcp-stderr-{self.spec.name}")
             self._stderr_thread.start()
-        if self.pgids_path:
-            # 登记到 run 的 .pgids:硬崩溃后 claim/recover/看护能按 starttime 核验并清掉孤儿 MCP
-            try:
-                from .watchdog import _proc_starttime
-                os.makedirs(os.path.dirname(self.pgids_path), exist_ok=True)
-                with open(self.pgids_path, "a", encoding="utf-8") as f:
-                    f.write(f"{os.getpgid(self._proc.pid)} "
-                            f"{_proc_starttime(self._proc.pid) or 0}\n")
-            except OSError:
-                pass
+        self.register_pgid()
+
+    def register_pgid(self) -> None:
+        """把当前进程组登记到 .pgids；也供 eager 启动后绑定 run 时补登记。"""
+        if not self.pgids_path or not self._proc:
+            return
+        try:
+            from .watchdog import _proc_starttime
+            os.makedirs(os.path.dirname(self.pgids_path), exist_ok=True)
+            with open(self.pgids_path, "a", encoding="utf-8") as f:
+                f.write(f"{os.getpgid(self._proc.pid)} "
+                        f"{_proc_starttime(self._proc.pid) or 0}\n")
+        except OSError:
+            pass
 
     def close(self) -> None:
         if not self._proc:
