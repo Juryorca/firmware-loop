@@ -519,6 +519,8 @@ def test_status_bar_uses_user_labels_and_cache():
     assert "运行中" in text
     assert "已归档" in text
     assert "H " not in text and " E " not in text
+    s.state = "finished"
+    assert "本轮完成" in format_snapshot(s).plain
 
 
 def test_sigterm_while_model_blocked_pauses_run(tmp_path):

@@ -135,7 +135,8 @@ def format_snapshot(s: Snapshot) -> Text:
     t.append(" · ", style="#66717F")
     t.append(model_label(s.model), style="#8995A5")
     t.append(" · ", style="#66717F")
-    t.append(state_label(s.state), style=STATE_STYLE.get(s.state, ""))
+    state_text = "本轮完成" if s.state == "finished" and s.blockers else state_label(s.state)
+    t.append(state_text, style=STATE_STYLE.get(s.state, ""))
     lifecycle = getattr(s, "target_status", "active")
     if lifecycle != "active":
         t.append(f" · {target_status_label(lifecycle)}", style="bold #D5B47A")
