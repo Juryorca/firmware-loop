@@ -146,26 +146,3 @@ def test_pool_keeps_parenthetical_title():
     text = "## 假设池\n- **H-12(控制台 pre-auth 认证链 `/api/auth/*`)**: 说明\n"
     pool, _ = parse_pool(text)
     assert pool and "控制台" in pool[0]["title"]
-
-
-def test_connect_adds_target_status_to_legacy_schema_17_db(tmp_path):
-    """旧库可能已有 schema_version=17 但 targets 还没有 status 列。"""
-    import sqlite3
-
-    path = tmp_path / "legacy.sqlite3"
-    con = sqlite3.connect(path)
-    con.executescript(
-        "CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-        "INSERT INTO meta VALUES('schema_version','17');"
-        "CREATE TABLE targets(id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE,"
-        " created_at TEXT NOT NULL);"
-        "INSERT INTO targets VALUES('T-1','legacy','2026-01-01');"
-    )
-    con.close()
-    con = _db.connect(str(path))
-    try:
-        cols = {r[1] for r in con.execute("PRAGMA table_info(targets)")}
-        assert "status" in cols
-        assert con.execute("SELECT status FROM targets WHERE name='legacy'").fetchone()[0] == "active"
-    finally:
-        con.close()

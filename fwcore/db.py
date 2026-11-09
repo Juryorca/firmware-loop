@@ -370,10 +370,6 @@ def _add_col(con: sqlite3.Connection, table: str, col: str, decl: str) -> None:
 # 开发期基线:历史上通过 _stepN 加过的列,一次性列在这里。
 # 新库直接由 SCHEMA 建出全部列;旧库用 `tools/db_rebaseline.py`(先备份)一次性补齐。
 BASELINE_COLUMNS: dict[str, list[tuple[str, str]]] = {
-    # Lifecycle status was added to the baseline after some target DBs already
-    # existed.  Keep it in the explicit baseline so db_rebaseline repairs old
-    # target tables instead of leaving them without a status column.
-    "targets": [("status", "TEXT NOT NULL DEFAULT 'active'")],
     "observations": [("tool_call_id", "TEXT"), ("path", "TEXT"), ("sha256", "TEXT"),
                      ("relation", "TEXT")],
     "surfaces": [("judged_by", "TEXT")],
@@ -420,9 +416,6 @@ def _migrate(con: sqlite3.Connection) -> None:
                 f"    python3 tools/db_rebaseline.py {con.execute('PRAGMA database_list').fetchone()[2]}\n"
                 f"  该脚本会做一致性快照、补齐基线列、校验完整性与关联。")
     con.executescript(script)
-    # Older schema-17 databases may predate targets.status; CREATE TABLE IF NOT
-    # EXISTS does not add columns, so repair this baseline column defensively.
-    _add_col(con, "targets", "status", "TEXT NOT NULL DEFAULT 'active'")
     row = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if row is None or int(row["value"]) == 0:
         con.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version',?)",
