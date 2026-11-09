@@ -808,12 +808,18 @@ def test_transcript_auto_scrolls_after_appended_notice(tmp_path):
             for i in range(50):
                 tv.append(MessageWidget("notice", f"line {i}"))
             await pilot.pause(0.3)
-            tv.scroll_home(animate=False)
+            tv.scroll_end(animate=False)
             await pilot.pause(0.1)
-            assert not tv.at_bottom()
+            assert tv.at_bottom()
             tv.append(NoticeWidget("MCP: " + "x" * 400))
             await pilot.pause(0.2)
             assert tv.at_bottom()
+            tv.scroll_home(animate=False)
+            await pilot.pause(0.1)
+            assert not tv.at_bottom()
+            tv.append(NoticeWidget("while reading above"))
+            await pilot.pause(0.2)
+            assert not tv.at_bottom()
             await pilot.press("ctrl+q")
 
     try:
@@ -887,9 +893,9 @@ def test_mcp_command_auto_scrolls_to_bottom(tmp_path):
             for i in range(50):
                 tv.append(MessageWidget("notice", f"line {i}"))
             await pilot.pause(0.3)
-            tv.scroll_home(animate=False)
+            tv.scroll_end(animate=False)
             await pilot.pause(0.1)
-            assert not tv.at_bottom()
+            assert tv.at_bottom()
             ed = app.query_one(PromptEditor)
             ed.text = "/mcp"
             await pilot.press("enter")

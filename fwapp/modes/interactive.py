@@ -181,7 +181,6 @@ class FwApp(App):
 
     def _notice(self, text: str, level: str = "info") -> None:
         self._append(NoticeWidget(text, level))
-        self.query_one(TranscriptView).follow_end()
 
     def request_exit(self) -> None:
         """供 SIGTERM/SIGHUP 等信号处理函数调用（只置标志，不跨线程操作 UI）。"""

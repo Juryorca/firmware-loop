@@ -35,7 +35,7 @@ def _short(value, limit: int = 90) -> str:
 
 
 class TranscriptView(VerticalScroll):
-    """可滚动的对话区;新内容自动跟随到底部。
+    """可滚动的对话区;仅当用户已在底部时自动跟随新内容。
 
     点击对话区不应把键盘焦点从编辑器抢走；滚动条仍可用鼠标。
     """
@@ -52,8 +52,10 @@ class TranscriptView(VerticalScroll):
         # `mount()` lays out asynchronously. Scrolling immediately uses the old
         # max_scroll_y, so the newly added notice/message can land below the
         # visible area. Re-check after the next refresh.
+        stick = self.at_bottom()
         self.mount(widget)
-        self.follow_end()
+        if stick:
+            self.follow_end()
 
     def follow_end(self) -> None:
         """Schedule a scroll after the next layout pass.
@@ -70,6 +72,15 @@ class TranscriptView(VerticalScroll):
             self.scroll_end(animate=False)
 
 
+
+
+def _find_transcript(widget) -> TranscriptView | None:
+    node = widget.parent
+    while node is not None:
+        if isinstance(node, TranscriptView):
+            return node
+        node = node.parent
+    return None
 
 
 class ThinkingBlock(Vertical):
@@ -95,14 +106,12 @@ class ThinkingBlock(Vertical):
     def append_text(self, delta: str) -> None:
         if not delta:
             return
+        transcript = _find_transcript(self)
+        stick = bool(transcript and transcript.at_bottom())
         self._text += delta
         self._refresh()
-        node = self.parent
-        while node is not None:
-            if isinstance(node, TranscriptView):
-                node.follow_end()
-                return
-            node = node.parent
+        if stick and transcript is not None:
+            transcript.follow_end()
 
     def toggle(self) -> None:
         self._expanded = not self._expanded
@@ -113,13 +122,12 @@ class ThinkingBlock(Vertical):
         event.stop()
 
 class MessageWidget(Vertical):
-    def _follow_transcript(self) -> None:
-        node = self.parent
-        while node is not None:
-            if isinstance(node, TranscriptView):
-                node.follow_end()
-                return
-            node = node.parent
+    def _follow_transcript(self, stick: bool) -> None:
+        if not stick:
+            return
+        transcript = _find_transcript(self)
+        if transcript is not None:
+            transcript.follow_end()
 
     def __init__(self, role: str, text: str, meta: dict | None = None):
         meta = meta or {}
@@ -152,22 +160,27 @@ class MessageWidget(Vertical):
     def append_text(self, delta: str) -> None:
         if not delta:
             return
+        transcript = _find_transcript(self)
+        stick = bool(transcript and transcript.at_bottom())
         self._text += delta
         if isinstance(self.body, Markdown):
             self.body.append(delta)
         else:
             self.body.update(Text(self._text))
-        self._follow_transcript()
+        self._follow_transcript(stick)
 
     def append_reasoning(self, delta: str) -> None:
         if not delta:
             return
+        transcript = _find_transcript(self)
+        stick = bool(transcript and transcript.at_bottom())
         self._reasoning += delta
         if self._thinking_widget is None:
             self._thinking_widget = ThinkingBlock(self._reasoning)
             self.mount(self._thinking_widget, before=self.body)
         else:
             self._thinking_widget.append_text(delta)
+        self._follow_transcript(stick)
 
     def finalize(self, text: str | None = None) -> None:
         if text is not None:
@@ -277,14 +290,12 @@ class ToolWidget(Vertical):
         return t
 
     def update_call(self, call: dict) -> None:
+        transcript = _find_transcript(self)
+        stick = bool(transcript and transcript.at_bottom())
         self.call_data = dict(call)
         self._refresh()
-        node = self.parent
-        while node is not None:
-            if isinstance(node, TranscriptView):
-                node.follow_end()
-                return
-            node = node.parent
+        if stick and transcript is not None:
+            transcript.follow_end()
 
     def toggle(self) -> None:
         self.body.display = not self.body.display
