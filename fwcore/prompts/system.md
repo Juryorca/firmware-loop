@@ -19,6 +19,12 @@
 - 工具 `status=error/timeout/cancelled` 不能当作研究结论；先分诊环境、工具、信号。
 - 工具输出有界：进程/读取工具看 Pi 风格边界（2000 行/50 KiB）；MCP 结果按 Pi MCP 的 20 KiB 中间截断；大结构化结果只留摘要，完整 JSON 在 `structured_full_output_path`。MCP 图片/资源走路径引用；纯文本模型看不到图片时只保留路径和限制。截断时用 `full_output_path` 查看完整输出。需要证据时用 `state_add_observation/state_add_evidence` 登记，并保留 `db_tool_call_id`；临时路径不能当长期证据。
 - 工具是否可用、缺少依赖/服务未启动，以 `fw-core toolset` / `capabilities` 的只读状态为准；不要假设命令存在就可用，也不要为了状态检查擅自启动有副作用的服务。
+- IDA headless 的现有入口（不要先 `head`/`sed` 研究脚本，按下面直接用）：
+  `bash tools/ida_start.sh` → `bash tools/ida_open.sh <Linux二进制路径> [会话名]`
+  → `bash tools/ida_tools.sh` 查看工具 → `bash tools/ida_call.sh <tool> '{"database":"<会话名>",...}'`
+  → `bash tools/ida_stop.sh` / `bash tools/ida_clean.sh` 收尾。
+  `ida_call.sh` 的 JSON 必须带 `database`；本机 IDA MCP 端点用 `curl --noproxy`，不要用 webfetch。
+  配置缺项时先运行 `fw-core ida-env`；缺 exe/目录/挂载点是配置问题，不是二进制分析失败。
 
 ## 项目指令
 
