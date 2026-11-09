@@ -63,10 +63,9 @@ if [ -z "$_stale" ]; then ok "文档口径: 无废弃措辞"; else bad "文档�
 # 提交面:探针可执行 + MCP 配置可解析(配置在用户级,读不到就跳过)
 if [ -x tools/chrome-live-probe.py ]; then ok "提交探针可执行"; else bad "提交探针缺失/不可执行 tools/chrome-live-probe.py"; fi
 if $PY - <<'EOF' >/dev/null 2>&1
-import json,os
-p=os.environ.get("FW_MCP_CONFIG") or "state/mcp.json"
-d=json.load(open(p,encoding="utf-8"))
-assert all("command" in v or "url" in v for v in d["mcpServers"].values())
+from fwcore.mcp_config import discover_mcp_config, load_mcp_config
+cfg = load_mcp_config(discover_mcp_config("."), base_dir=".")
+assert cfg.servers and not cfg.errors
 EOF
 then ok "MCP 配置可解析"
 else info "MCP 配置缺失/不可解析(仅提示)"; fi

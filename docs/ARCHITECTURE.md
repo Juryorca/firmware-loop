@@ -128,6 +128,10 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - **文件读取**（`fs_read`）：保留头部 `2000` 行或 `50 KiB`，支持 `offset/limit`
   分段读；`full_output_path` 这类框架临时文件可被 `fs_read` 读回，否则路径没有意义。
 - **manifest / toolkit**：`output_tail` / `text` 走 `truncate_tail`（2000 行/50 KiB）。
+- **MCP 配置/发现**：复用 Pi 的 `mcpServers` 契约，不另造检测格式：用户级
+  `~/.pi/agent/mcp.json` → 项目 `<root>/.pi/mcp.json` → 兼容目标级 `state/mcp.json`；
+  显式 `FW_MCP_CONFIG` 覆盖以上来源。项目只覆盖 `enabled`/`exposure`/`toolExposure`，
+  完整条目替换；单个坏条目跳过并保留其它服务器；`hidden` 必须真的不注册。
 - **MCP**：单独按 Pi MCP 策略：模型可见文本 `20 KiB` **中间截断**（保留头/尾），
   完整文本写临时 `full_output_path`；`isError` 也走同一路径。完整
   `structuredContent` 写临时 `structured_full_output_path`，模型只保留小摘要。
@@ -223,4 +227,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 74 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 75 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

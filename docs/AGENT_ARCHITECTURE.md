@@ -235,7 +235,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 - 旧案例 51 条与 tool-quirks Markdown 已移出当前树，只在 Git 历史保留；运行时只读 SQLite；
 - 旧 Pi 的 scan/screenshot/continue guard 尚未产品化（工具台账附录 A 记录）；
-- Chrome MCP 只有配置/探针，不在只读检查里自动启动；`write/edit` 未接入 fwcore 工具层；
+- Chrome MCP 走 Pi 兼容配置发现；会话启动时 eager 连接，只读检查不启动服务器；`write/edit` 未接入 fwcore 工具层；
 - Ghidra/QEMU/IDA 已按 provider/adapter 接入，缺依赖状态如实显示；真实付费模型验证不在本轮范围。
 
 ## 13. 旧知识/流程的逐段去向（补充）

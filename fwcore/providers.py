@@ -429,8 +429,8 @@ def _guest_roots(root: str) -> list[str]:
 
 
 def _mcp_paths(root: str) -> list[str]:
-    env = os.environ.get("FW_MCP_CONFIG")
-    return [env] if env else [os.path.join(root, "state", "mcp.json")]
+    from .mcp_config import discover_mcp_config
+    return [s.path for s in discover_mcp_config(root)]
 
 
 def default_capabilities(root: str, home: str | None = None) -> dict[str, Capability]:

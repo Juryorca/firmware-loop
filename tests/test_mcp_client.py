@@ -9,9 +9,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from fwcore.mcp_client import MCPClient, MCPConfigError, MCPError, ServerSpec, load_servers, probe
+from fwcore.mcp_client import (
+    MCPClient,
+    MCPConfigError,
+    MCPError,
+    ServerSpec,
+    load_servers,
+    probe,
+)
 
-FAKE = r'''
+FAKE = r"""
 import json, sys
 
 def send(obj):
@@ -36,9 +43,9 @@ for line in sys.stdin:
             {"type": "text", "text": "echo:" + str(args.get("text"))}]}})
     elif rid is not None:
         send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "no method"}})
-'''
+"""
 
-DEAD = 'import sys; sys.exit(3)\n'
+DEAD = "import sys; sys.exit(3)\n"
 
 
 def _server(tmp_path, body: str, name: str = "fake.py") -> ServerSpec:
@@ -53,14 +60,20 @@ def test_client_initialize_list_and_call(tmp_path):
         info = c.initialize()
         assert info["serverInfo"]["name"] == "fake"
         tools = c.list_tools()
-        assert tools[0]["name"] == "echo" and tools[0]["input_schema"]["required"] == ["text"]
+        assert tools[0]["name"] == "echo" and tools[0]["input_schema"]["required"] == [
+            "text"
+        ]
         out = c.call_tool("echo", {"text": "hi"})
         assert out["text"] == "echo:hi" and out["is_error"] is False
 
 
 def test_probe_reports_reachable_with_tools(tmp_path):
     r = probe(_server(tmp_path, FAKE))
-    assert r["status"] == "reachable" and r["tools"] == ["echo"] and r["evidence"] == "reachable"
+    assert (
+        r["status"] == "reachable"
+        and r["tools"] == ["echo"]
+        and r["evidence"] == "reachable"
+    )
 
 
 def test_probe_reports_unreachable_when_server_dies(tmp_path):
@@ -70,7 +83,10 @@ def test_probe_reports_unreachable_when_server_dies(tmp_path):
 
 
 def test_probe_reports_disabled_and_http_unreachable():
-    assert probe(ServerSpec(name="x", command="true", enabled=False))["status"] == "disabled"
+    assert (
+        probe(ServerSpec(name="x", command="true", enabled=False))["status"]
+        == "disabled"
+    )
     r = probe(ServerSpec(name="y", command="", url="http://127.0.0.1:1/mcp"), timeout=1)
     assert r["status"] == "unreachable"
 
@@ -82,15 +98,35 @@ def test_http_transport_initialize_list_and_call():
             req = json.loads(self.rfile.read(n) or b"{}")
             m, rid = req.get("method"), req.get("id")
             if m == "initialize":
-                out = {"jsonrpc": "2.0", "id": rid, "result": {
-                    "protocolVersion": "2024-11-05", "serverInfo": {"name": "h", "version": "1"},
-                    "capabilities": {}}}
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "serverInfo": {"name": "h", "version": "1"},
+                        "capabilities": {},
+                    },
+                }
             elif m == "tools/list":
-                out = {"jsonrpc": "2.0", "id": rid, "result": {"tools": [
-                    {"name": "echo", "description": "e", "inputSchema": {"type": "object"}}]}}
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {
+                        "tools": [
+                            {
+                                "name": "echo",
+                                "description": "e",
+                                "inputSchema": {"type": "object"},
+                            }
+                        ]
+                    },
+                }
             elif m == "tools/call":
-                out = {"jsonrpc": "2.0", "id": rid, "result": {"content": [
-                    {"type": "text", "text": "echo:http"}]}}
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {"content": [{"type": "text", "text": "echo:http"}]},
+                }
             else:
                 out = {"jsonrpc": "2.0", "id": rid, "result": {}}
             data = json.dumps(out).encode()
@@ -107,7 +143,9 @@ def test_http_transport_initialize_list_and_call():
     th = threading.Thread(target=srv.serve_forever, daemon=True)
     th.start()
     try:
-        spec = ServerSpec(name="http", command="", url=f"http://127.0.0.1:{srv.server_port}/mcp")
+        spec = ServerSpec(
+            name="http", command="", url=f"http://127.0.0.1:{srv.server_port}/mcp"
+        )
         with MCPClient(spec, timeout=5) as c:
             c.initialize()
             assert c.list_tools()[0]["name"] == "echo"
@@ -127,6 +165,7 @@ def test_load_servers_corrupt_config_is_explicit(tmp_path):
 def test_bridge_from_config_reports_config_error(tmp_path):
     from fwcore.mcp_runtime import bridge_from_config
     from fwcore.tools import Registry
+
     p = tmp_path / "bad.json"
     p.write_text("{bad", encoding="utf-8")
     b = bridge_from_config(Registry(), str(tmp_path), [str(p)])
@@ -135,15 +174,24 @@ def test_bridge_from_config_reports_config_error(tmp_path):
     assert "JSON" in st["_config"]["detail"]
 
 
-def test_load_servers_priority_and_skip(tmp_path):
+def test_load_servers_follows_pi_project_precedence(tmp_path):
     own = tmp_path / "mcp.json"
-    own.write_text(json.dumps({"mcpServers": {"a": {"command": "own-a"}, "b": {"command": "own-b"}}}),
-                   encoding="utf-8")
+    own.write_text(
+        json.dumps(
+            {"mcpServers": {"a": {"command": "own-a"}, "b": {"command": "own-b"}}}
+        ),
+        encoding="utf-8",
+    )
     pi = tmp_path / "pi.json"
-    pi.write_text(json.dumps({"mcpServers": {"a": {"command": "pi-a"}, "c": {"command": "pi-c"}}}),
-                  encoding="utf-8")
+    pi.write_text(
+        json.dumps(
+            {"mcpServers": {"a": {"command": "pi-a"}, "c": {"command": "pi-c"}}}
+        ),
+        encoding="utf-8",
+    )
     servers = load_servers([str(own), str(pi)])
-    assert servers["a"].command == "own-a", "本框架配置优先"
+    # Pi: later project entries replace earlier global entries.
+    assert servers["a"].command == "pi-a"
     assert servers["c"].command == "pi-c" and "b" in servers
 
 
@@ -162,8 +210,9 @@ def test_mcp_child_pgid_registered_for_orphan_cleanup(tmp_path):
     from fwcore.watchdog import _proc_starttime
 
     pg = tmp_path / "art" / ".pgids"
-    spec = ServerSpec(name="sleepy", command=sys.executable,
-                      args=["-c", "import time; time.sleep(5)"])
+    spec = ServerSpec(
+        name="sleepy", command=sys.executable, args=["-c", "import time; time.sleep(5)"]
+    )
     c = MCPClient(spec, timeout=5, pgids_path=str(pg))
     c.start()
     try:
@@ -176,7 +225,7 @@ def test_mcp_child_pgid_registered_for_orphan_cleanup(tmp_path):
         c.close()
 
 
-NOISY = r'''
+NOISY = r"""
 import json, sys
 sys.stderr.write("x" * 300000); sys.stderr.flush()
 
@@ -190,7 +239,7 @@ for line in sys.stdin:
               "serverInfo": {"name": "noisy", "version": "1"}, "capabilities": {}}})
     elif m == "tools/list":
         send({"jsonrpc": "2.0", "id": rid, "result": {"tools": []}})
-'''
+"""
 
 
 def test_noisy_stderr_does_not_block_stdio(tmp_path):
@@ -202,7 +251,10 @@ def test_noisy_stderr_does_not_block_stdio(tmp_path):
 
 def test_load_servers_rejects_non_string_url_and_command(tmp_path):
     p = tmp_path / "bad.json"
-    p.write_text(json.dumps({"mcpServers": {"x": {"command": "true", "url": 123}}}), encoding="utf-8")
+    p.write_text(
+        json.dumps({"mcpServers": {"x": {"command": "true", "url": 123}}}),
+        encoding="utf-8",
+    )
     with pytest.raises(MCPConfigError):
         load_servers([str(p)])
     p.write_text(json.dumps({"mcpServers": {"x": {"command": 123}}}), encoding="utf-8")
@@ -214,3 +266,55 @@ def test_http_transport_rejects_non_http_url_before_urllib():
     spec = ServerSpec(name="file", command="", url="file:///etc/passwd")
     with pytest.raises(MCPError):
         MCPClient(spec).request("initialize")
+
+
+FORKED_IGNORING_TERM = r"""
+import os, signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pidfile = os.environ["FAKE_CHILD_PID"]
+child = os.fork()
+if child == 0:
+    with open(pidfile, "w") as f:
+        f.write(str(os.getpid()))
+    while True:
+        time.sleep(0.2)
+while True:
+    time.sleep(0.2)
+"""
+
+
+def test_close_kills_forked_child_that_ignores_sigterm(tmp_path):
+    """Pi closes the whole process group: a cooperative parent is not enough."""
+    import os
+    import time
+
+    pidfile = tmp_path / "child.pid"
+    spec = ServerSpec(
+        name="forked",
+        command=sys.executable,
+        args=["-c", FORKED_IGNORING_TERM],
+        env={"FAKE_CHILD_PID": str(pidfile)},
+    )
+    client = MCPClient(spec, timeout=5)
+    client.start()
+    assert client._proc is not None
+    parent = client._proc.pid
+    for _ in range(100):
+        if pidfile.is_file() and pidfile.read_text().strip():
+            break
+        time.sleep(0.02)
+    else:
+        client.close()
+        raise AssertionError("forked child did not start")
+
+    child = int(pidfile.read_text())
+    client.close()
+    for pid in (parent, child):
+        for _ in range(100):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError(f"process {pid} survived MCP close")

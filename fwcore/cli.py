@@ -396,27 +396,39 @@ def main(argv: list[str] | None = None) -> int:
             out["last_compaction_kind"] = comp is not None and json.loads(comp["payload"]).get("error") is None
             print(json.dumps(out, ensure_ascii=False, indent=2))
         elif args.cmd == "mcp":
-            from .mcp_client import MCPClient, MCPConfigError, load_servers
+            from .mcp_client import MCPClient
             from .mcp_client import probe as mcp_probe
-            cfgs = [os.environ.get("FW_MCP_CONFIG") or
-                    os.path.join(args.root, "state", "mcp.json")]
-            try:
-                servers = load_servers(cfgs)
-            except MCPConfigError as e:
-                print(f"MCP_CONFIG_ERROR: {e}", file=sys.stderr)
-                return 2
+            from .mcp_config import discover_mcp_config, load_mcp_config
+
+            sources = discover_mcp_config(args.root)
+            cfg = load_mcp_config(sources, base_dir=args.root)
+            servers = cfg.servers
+            if cfg.errors:
+                print("MCP_CONFIG_WARN: " + "\n".join(cfg.errors), file=sys.stderr)
             if args.action == "list":
-                print(json.dumps({k: {"transport": v.transport, "enabled": v.enabled}
+                print(json.dumps({k: {"transport": v.transport, "enabled": v.enabled,
+                                      "source": v.source, "scope": v.scope}
                                   for k, v in servers.items()}, ensure_ascii=False, indent=2))
             elif args.action == "probe":
                 names = [args.server] if args.server else list(servers)
-                print(json.dumps([mcp_probe(servers[n]) for n in names if n in servers],
+                missing = [n for n in names if n not in servers]
+                if missing:
+                    print("没有配置的 MCP 服务器: " + ", ".join(missing), file=sys.stderr)
+                    return 2
+                print(json.dumps([mcp_probe(servers[n]) for n in names],
                                  ensure_ascii=False, indent=2))
             else:
                 if not args.server or not args.tool:
                     print("需要 --server 与 --tool", file=sys.stderr)
                     return 2
-                with MCPClient(servers[args.server]) as c:
+                spec = servers.get(args.server)
+                if spec is None:
+                    print(f"没有配置的 MCP 服务器: {args.server}", file=sys.stderr)
+                    return 2
+                if not spec.enabled:
+                    print(f"MCP 服务器 {args.server} 已禁用", file=sys.stderr)
+                    return 2
+                with MCPClient(spec) as c:
                     c.initialize()
                     c.list_tools()
                     print(json.dumps(c.call_tool(args.tool, json.loads(args.args)),

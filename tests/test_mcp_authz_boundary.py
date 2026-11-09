@@ -22,7 +22,7 @@ from fwcore.policy import Authz, Policy
 from fwcore.runtime import Runner
 from fwcore.tools import ToolContext
 
-FAKE = r'''
+FAKE = r"""
 import json, os, sys
 
 def send(o):
@@ -50,7 +50,7 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "id": rid, "result": {"content": [{"type": "text", "text": "ok"}]}})
     elif rid is not None:
         send({"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "no method"}})
-'''
+"""
 
 
 def _setup(tmp_path):
@@ -67,7 +67,9 @@ def _server(tmp_path, *, name="fake", tool="echo", pidfile=None, external=None):
     env = {"FAKE_TOOL": tool}
     if pidfile:
         env["FAKE_PIDFILE"] = str(pidfile)
-    return ServerSpec(name=name, command=sys.executable, args=[str(srv)], env=env, external=external)
+    return ServerSpec(
+        name=name, command=sys.executable, args=[str(srv)], env=env, external=external
+    )
 
 
 def _cfg(tmp_path, *specs, external: bool | None = None):
@@ -83,6 +85,7 @@ def _cfg(tmp_path, *specs, external: bool | None = None):
 
 
 # ---------------- ① 启动前必须授权 ----------------
+
 
 def test_no_authorization_means_no_server_spawned(tmp_path):
     con, dom, root = _setup(tmp_path)
@@ -102,15 +105,27 @@ def test_expired_and_revoked_authorization_do_not_start_mcp(tmp_path):
     pidfile = tmp_path / "pid"
     cfg = _cfg(tmp_path, _server(tmp_path, pidfile=pidfile, external=False))
 
-    az = Authz(roots=[root], expires_at=1.0)             # 早已过期
-    r = Runner(con, root, ScriptedAdapter(script=[]), mcp=True, mcp_config_paths=[cfg],
-               policy=Policy(authorization=az, allow_high_risk=True))
+    az = Authz(roots=[root], expires_at=1.0)  # 早已过期
+    r = Runner(
+        con,
+        root,
+        ScriptedAdapter(script=[]),
+        mcp=True,
+        mcp_config_paths=[cfg],
+        policy=Policy(authorization=az, allow_high_risk=True),
+    )
     r.start("t1")
     assert r.mcp_bridge is None and not pidfile.exists()
 
     az2 = Authz(roots=[root], revoked=True)
-    r2 = Runner(con, root, ScriptedAdapter(script=[]), mcp=True, mcp_config_paths=[cfg],
-                policy=Policy(authorization=az2, allow_high_risk=True))
+    r2 = Runner(
+        con,
+        root,
+        ScriptedAdapter(script=[]),
+        mcp=True,
+        mcp_config_paths=[cfg],
+        policy=Policy(authorization=az2, allow_high_risk=True),
+    )
     r2.start("t1")
     assert r2.mcp_bridge is None and not pidfile.exists()
 
@@ -119,8 +134,14 @@ def test_allow_mcp_false_skips_and_policy_denies(tmp_path):
     con, dom, root = _setup(tmp_path)
     cfg = _cfg(tmp_path, _server(tmp_path, external=False))
     az = Authz(roots=[root], allow_mcp=False)
-    r = Runner(con, root, ScriptedAdapter(script=[]), mcp=True, mcp_config_paths=[cfg],
-               policy=Policy(authorization=az, allow_high_risk=True))
+    r = Runner(
+        con,
+        root,
+        ScriptedAdapter(script=[]),
+        mcp=True,
+        mcp_config_paths=[cfg],
+        policy=Policy(authorization=az, allow_high_risk=True),
+    )
     r.start("t1")
     assert r.mcp_bridge is None
     assert "allow_mcp" in (r.mcp_skipped_reason or "")
@@ -128,28 +149,44 @@ def test_allow_mcp_false_skips_and_policy_denies(tmp_path):
     from fwcore.tools import Registry, ToolSpec
 
     reg2 = Registry()
-    reg2.register(ToolSpec(name="mcp__fake__echo", description="x",
-                           input_schema={"type": "object", "properties": {}},
-                           handler=lambda ctx, a: {"status": "ok"}, risk="high",
-                           requires="mcp", external=False))
-    ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True))
+    reg2.register(
+        ToolSpec(
+            name="mcp__fake__echo",
+            description="x",
+            input_schema={"type": "object", "properties": {}},
+            handler=lambda ctx, a: {"status": "ok"},
+            risk="high",
+            requires="mcp",
+            external=False,
+        )
+    )
+    ctx = ToolContext(
+        domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True)
+    )
     out = reg2.call(ctx, "mcp__fake__echo", {})
     assert out["status"] == "cancelled" and "allow_mcp" in out["error"]
 
 
 # ---------------- ② external 由配置声明,不靠名字猜 ----------------
 
+
 def test_undeclared_server_is_external_and_needs_confirmation(tmp_path):
     con, dom, root = _setup(tmp_path)
-    az = Authz(roots=[root])                          # allow_external_mcp=False(默认)
-    reg_bridge = MCPBridge(root=root, registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
-                           specs=[_server(tmp_path, external=None)], call_timeout=5)
+    az = Authz(roots=[root])  # allow_external_mcp=False(默认)
+    reg_bridge = MCPBridge(
+        root=root,
+        registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
+        specs=[_server(tmp_path, external=None)],
+        call_timeout=5,
+    )
     reg_bridge.start()
     try:
         name = tool_name("fake", "echo")
         spec = reg_bridge.registry.specs[name]
         assert spec.external is True, "未声明 external ⇒ 默认按 external 处理"
-        ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True))
+        ctx = ToolContext(
+            domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True)
+        )
         out = reg_bridge.registry.call(ctx, name, {})
         assert out["status"] == "cancelled" and "确认" in out["error"]
     finally:
@@ -160,16 +197,24 @@ def test_keyword_name_does_not_override_explicit_external_false(tmp_path):
     """名字像外部动作,但服务器显式声明 external=false:仍按配置走,并留审计提示。"""
     con, dom, root = _setup(tmp_path)
     az = Authz(roots=[root])
-    b = MCPBridge(root=root, registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
-                  specs=[_server(tmp_path, tool="submit_report", external=False)], call_timeout=5)
+    b = MCPBridge(
+        root=root,
+        registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
+        specs=[_server(tmp_path, tool="submit_report", external=False)],
+        call_timeout=5,
+    )
     b.start()
     try:
         name = tool_name("fake", "submit_report")
         assert b.registry.specs[name].external is False
         assert b.status["fake"]["external_declared"] is True
         assert b.status["fake"]["external_hint"] == ["submit_report"]
-        ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True))
-        assert b.registry.call(ctx, name, {})["status"] == "ok", "授权内的分析工具应自主执行"
+        ctx = ToolContext(
+            domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True)
+        )
+        assert b.registry.call(ctx, name, {})["status"] == "ok", (
+            "授权内的分析工具应自主执行"
+        )
     finally:
         b.close()
 
@@ -177,11 +222,17 @@ def test_keyword_name_does_not_override_explicit_external_false(tmp_path):
 def test_authorization_can_allow_external_mcp_without_percall_confirm(tmp_path):
     con, dom, root = _setup(tmp_path)
     az = Authz(roots=[root], allow_external_mcp=True)
-    b = MCPBridge(root=root, registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
-                  specs=[_server(tmp_path, external=None)], call_timeout=5)
+    b = MCPBridge(
+        root=root,
+        registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
+        specs=[_server(tmp_path, external=None)],
+        call_timeout=5,
+    )
     b.start()
     try:
-        ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True))
+        ctx = ToolContext(
+            domain=dom, root=root, policy=Policy(authorization=az, allow_high_risk=True)
+        )
         out = b.registry.call(ctx, tool_name("fake", "echo"), {})
         assert out["status"] == "ok"
     finally:
@@ -190,9 +241,10 @@ def test_authorization_can_allow_external_mcp_without_percall_confirm(tmp_path):
 
 # ---------------- ③ 名称碰撞:确定性消歧 / 明确拒绝 ----------------
 
+
 def test_collision_between_servers_is_deterministic_not_silent():
-    a = tool_name("a-b", "c")            # mcp__a_b__c
-    b = tool_name("a_b", "c")            # mcp__a_b__c
+    a = tool_name("a-b", "c")  # mcp__a_b__c
+    b = tool_name("a_b", "c")  # mcp__a_b__c
     assert a == b, "构造前提:两个不同 server 规范化后同名"
     assert disambiguated_name("a-b", "c") != disambiguated_name("a_b", "c")
     # 同一输入永远得到同名(跨轮/重启稳定)
@@ -209,6 +261,44 @@ def test_same_tool_reopened_is_idempotent(tmp_path):
     b.start()
     n1 = len(reg.specs)
     b.close()
-    b.start()                        # 重开(跨轮)不能因为重名而炸
+    b.start()  # 重开(跨轮)不能因为重名而炸
     assert len(reg.specs) == n1
     b.close()
+
+
+def test_hidden_exposure_does_not_register_tools(tmp_path):
+    """Pi exposure=hidden must not silently become a direct fwcore tool."""
+    con, dom, root = _setup(tmp_path)
+    spec = _server(tmp_path, external=False)
+    spec.exposure = "hidden"
+    b = MCPBridge(
+        root=root,
+        registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
+        specs=[spec],
+        call_timeout=5,
+    )
+    b.start()
+    try:
+        assert b.registry.specs == {}
+        assert b.status["fake"]["tools"] == []
+        assert b.status["fake"]["hidden_tools"] == ["echo"]
+    finally:
+        b.close()
+
+
+def test_hidden_tool_override_does_not_register(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    spec = _server(tmp_path, external=False)
+    spec.tool_exposure = {"echo": "hidden"}
+    b = MCPBridge(
+        root=root,
+        registry=__import__("fwcore.tools", fromlist=["Registry"]).Registry(),
+        specs=[spec],
+        call_timeout=5,
+    )
+    b.start()
+    try:
+        assert b.registry.specs == {}
+        assert b.status["fake"]["hidden_tools"] == ["echo"]
+    finally:
+        b.close()

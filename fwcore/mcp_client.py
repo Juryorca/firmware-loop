@@ -1,10 +1,12 @@
-"""独立 MCP 客户端(stdio):发现/调用 MCP 工具(配置来自 fwcore 自己的文件)。
+"""MCP stdio/HTTP 客户端(协议层)。
 
-设计
-- **配置来自 fwcore 自己的文件**:`state/mcp.json`(或 `FW_MCP_CONFIG`)→ 用户级 `~/.pi/agent/mcp.json`(过渡期兼容)。
-- 传输 = stdio + 换行分隔 JSON-RPC;子进程用独立进程组,出错/关闭时整组杀掉(不留孤儿)。
-- 只实现三个必要动作:`initialize` / `tools/list` / `tools/call`;失败要**如实**返回(unreachable ≠ 有工具)。
-- 探针语义:`probe()` 只有在完成 initialize + tools/list 后才算 `reachable`,否则 `unreachable`。
+配置发现、Pi `mcpServers` 校验、global/project override 在
+`fwcore.mcp_config` 中完成；本模块只负责 transport 与 JSON-RPC。
+
+- stdio 子进程独立进程组；关闭时按 Pi 语义先 stdin EOF、再 SIGTERM，
+  超时后才 SIGKILL 整组。
+- 只实现必要的 `initialize` / `tools/list` / `tools/call` / resources；
+  失败如实返回（unreachable ≠ 有工具）。
 """
 
 from __future__ import annotations
@@ -20,82 +22,28 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from typing import Self
+
+# 配置发现/校验交给 Pi 兼容适配层；这里保留 re-export，兼容既有调用方。
+from .mcp_config import (
+    ConfigSource,
+    McpConfig,
+    MCPConfigError,
+    ServerSpec,
+    discover_mcp_config,
+    load_mcp_config,
+    load_servers,
+)
 
 
 class MCPError(RuntimeError):
     pass
 
 
-class MCPConfigError(MCPError):
-    """MCP 配置文件存在但不可读/JSON 损坏/结构非法;不能静默跳过。"""
-
-
-@dataclass
-class ServerSpec:
-    name: str
-    command: str
-    args: list[str] = field(default_factory=list)
-    env: dict = field(default_factory=dict)
-    url: str | None = None          # HTTP transport(Streamable HTTP;JSON/SSE + session id)
-    enabled: bool = True
-    # external: 配置显式声明该服务器是否"会碰外部世界"(网络/登录态/提交)。
-    # None = 没声明 ⇒ 一律按 external=True 处理(默认拒绝,不靠工具名猜)。
-    external: bool | None = None
-
-    @property
-    def transport(self) -> str:
-        return "stdio" if self.command and not self.url else "http"
-
-
-def load_servers(config_paths: list[str]) -> dict[str, ServerSpec]:
-    """按顺序合并配置(靠前的优先;同名不覆盖)。配置损坏必须显式报错。"""
-    out: dict[str, ServerSpec] = {}
-    for path in config_paths:
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-        except OSError as e:
-            raise MCPConfigError(f"{path}: 无法读取: {type(e).__name__}: {e}") from e
-        except json.JSONDecodeError as e:
-            raise MCPConfigError(
-                f"{path}: JSON 解析失败(第 {e.lineno} 行第 {e.colno} 列): {e.msg}") from e
-        if not isinstance(data, dict):
-            raise MCPConfigError(f"{path}: 顶层必须是 JSON object")
-        servers = data.get("mcpServers")
-        if servers is None:
-            servers = {}
-        if not isinstance(servers, dict):
-            raise MCPConfigError(f"{path}: mcpServers 必须是 object")
-        for name, srv in servers.items():
-            if not isinstance(name, str) or not isinstance(srv, dict):
-                raise MCPConfigError(f"{path}: mcpServers.{name!r} 必须是 object")
-            if name in out:
-                continue
-            args = srv.get("args") or []
-            env = srv.get("env") or {}
-            if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
-                raise MCPConfigError(f"{path}: {name}.args 必须是字符串数组")
-            if not isinstance(env, dict):
-                raise MCPConfigError(f"{path}: {name}.env 必须是 object")
-            url = srv.get("url")
-            if url is not None and not isinstance(url, str):
-                raise MCPConfigError(f"{path}: {name}.url 必须是字符串")
-            command = srv.get("command") or ""
-            if not isinstance(command, str):
-                raise MCPConfigError(f"{path}: {name}.command 必须是字符串")
-            out[name] = ServerSpec(
-                name=name,
-                command=command,
-                args=args,
-                env=env,
-                url=url,
-                enabled=srv.get("enabled", True) is not False,
-                external=(None if srv.get("external") is None else bool(srv.get("external"))),
-            )
-    return out
+__all__ = [
+    "ConfigSource", "MCPClient", "MCPConfigError", "MCPError", "McpConfig",
+    "ServerSpec", "discover_mcp_config", "load_mcp_config", "load_servers", "probe",
+]
 
 
 # MCP 单条 transport 上限（Pi 用 16 MiB）；这是消息/传输硬上限，不是图片解码上限。
@@ -109,7 +57,7 @@ class MCPClient:
     def __init__(self, spec: ServerSpec, *, timeout: float = 20.0,
                  pgids_path: str | None = None):
         self.spec = spec
-        self.timeout = timeout
+        self.timeout = float(spec.timeout or timeout)
         self.pgids_path = pgids_path
         self._proc: subprocess.Popen | None = None
         self._next_id = 0
@@ -121,7 +69,7 @@ class MCPClient:
         self._stderr_thread: threading.Thread | None = None
 
     # ---------- 生命周期 ----------
-    def __enter__(self) -> MCPClient:
+    def __enter__(self) -> Self:
         self.start()
         return self
 
@@ -133,10 +81,16 @@ class MCPClient:
         if self.spec.transport == "http":
             self._http_url()
             return
+        if self._proc is not None:
+            if self._proc.poll() is None:
+                return
+            self.close()
+        if self.spec.transport != "stdio":
+            raise MCPError(f"{self.spec.name}: 无效 transport(需要 command 或 http(s) url)")
         env = dict(os.environ, **{k: str(v) for k, v in self.spec.env.items()})
         self._proc = subprocess.Popen(
             [self.spec.command, *self.spec.args], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, env=env, start_new_session=True,
+            stderr=subprocess.PIPE, env=env, cwd=self.spec.cwd, start_new_session=True,
         )
         # stderr 必须持续读走:服务端日志写满 pipe 会让整个 MCP 调用永久卡住。
         if self._proc.stderr is not None:
@@ -161,13 +115,32 @@ class MCPClient:
             pass
 
     def close(self) -> None:
-        if not self._proc:
+        """按 Pi 的顺序关闭:stdin EOF → SIGTERM → 超时 SIGKILL 进程组。"""
+        proc = self._proc
+        if not proc:
             return
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            self._proc.wait(timeout=5)
         self._proc = None
+        with contextlib.suppress(OSError, ValueError):
+            if proc.stdin is not None:
+                proc.stdin.close()
+        pgid = None
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            pass
+        # A server may fork a child that ignores SIGTERM after the parent exits.
+        # Verify the whole group is gone before declaring cleanup complete.
+        if pgid is not None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(pgid, 0)
+                os.killpg(pgid, signal.SIGKILL)
+        if proc.poll() is None:
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                proc.kill()
+                proc.wait(timeout=1.0)
 
     def _drain_stderr(self, stream) -> None:
         """持续排空 stderr，只保留末尾一小段供诊断（避免 PIPE 写满死锁）。"""
@@ -208,6 +181,7 @@ class MCPClient:
             "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": "2024-11-05",
         }
+        headers.update(self.spec.headers)
         if self._http_session:
             headers["Mcp-Session-Id"] = self._http_session
         # start() 已把 transport 限定为 http(s);这里仍是用户配置 URL,标注给静态扫描器。

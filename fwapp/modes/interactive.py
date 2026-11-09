@@ -621,6 +621,10 @@ class FwApp(App):
             lines.append("服务器: 未配置")
         health = st["health"]
         if health:
+            if health.get("closed"):
+                lines.append("连接: 已关闭")
+                self._notice("\n".join(lines))
+                return
             servers = health.get("servers") or {}
             registered = health.get("registered") or {}
             if not servers and not health.get("config_error"):

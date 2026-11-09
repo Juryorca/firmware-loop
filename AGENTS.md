@@ -360,7 +360,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **整机仿真(`qemu-system`)的适用范围**:只对**能整机启动**的目标(本工作区实测 = CHR x86_64);厂商固件多为非标 boot ⇒ 通常**启动不了**,别硬试,退回 qemu-user 或容器。具体配方用 `knowledge_search("docker privileged qemu daemon")`。
 
 ### 取件 / JS 页面(2026-10-27)
-- **无头浏览器 MCP**:`chrome-devtools` 配置由 `FW_MCP_CONFIG` 或 `state/mcp.json` 提供（当前运行时若不支持该 transport，会如实报 `not_started/partial`）。
+- **无头浏览器 MCP**:配置沿用 Pi 的 `mcpServers` 形状：用户级 `~/.pi/agent/mcp.json` → 项目 `<root>/.pi/mcp.json` → 兼容目标级 `state/mcp.json`；显式 `FW_MCP_CONFIG` 覆盖以上来源。fwcore 不另造 MCP 配置格式；`state/mcp.json` 只是兼容层。
 - 边界:真 Chromium ⇒ 只碰公开页,不代填密码;流量走宿主代理;改配置后按当前 harness 的 MCP 重新连接方式处理。
 
 - **能力探针(取代记忆)**:`python3 -m fwcore capabilities`(或 `fw-core capabilities`)列出

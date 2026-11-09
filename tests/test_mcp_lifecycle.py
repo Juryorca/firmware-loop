@@ -72,7 +72,8 @@ def _write_mcp_cfg(root, srv, name="fake"):
 
 
 def _cli(root, db, *a, env_extra=None, timeout=180):
-    env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t")
+    env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t",
+               PI_CODING_AGENT_DIR=os.path.join(root, ".agent"))
     env.update(env_extra or {})
     return subprocess.run([sys.executable, "-m", "fwcore", "--root", str(root), "--db", str(db), *a],
                           cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)

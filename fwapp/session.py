@@ -457,24 +457,23 @@ class AgentSession:
         )
 
     def mcp_status(self) -> dict:
-        """给 /mcp 用的只读状态：配置、是否启动、跳过原因。"""
-        cfg_path = os.environ.get("FW_MCP_CONFIG") or os.path.join(
-            self.cfg.root, "state", "mcp.json")
-        names: list[str] = []
-        config_error = None
-        if os.path.isfile(cfg_path):
-            try:
-                from fwcore.mcp_client import load_servers
-                names = sorted(load_servers([cfg_path]))
-            except Exception as e:  # noqa: BLE001 - 状态页必须展示配置错误
-                config_error = str(e)
+        """给 /mcp 用的只读状态；配置发现与 Runner 使用同一 Pi 兼容来源。"""
+        from fwcore.mcp_config import discover_mcp_config, load_mcp_config
+
+        sources = discover_mcp_config(self.cfg.root)
+        cfg = load_mcp_config(sources, base_dir=self.cfg.root)
+        names = sorted(cfg.servers)
+        display = ", ".join(
+            os.path.relpath(s.path, self.cfg.root) if os.path.isabs(s.path) else s.path
+            for s in sources
+        )
         runner = self._runner_ref
         return {
             "enabled": self._mcp,
-            "config": os.path.relpath(cfg_path, self.cfg.root)
-            if os.path.isabs(cfg_path) else cfg_path,
+            "config": display,
+            "config_sources": [s.path for s in sources],
             "configured": names,
-            "config_error": config_error,
+            "config_error": "\n".join(cfg.errors) or None,
             "health": runner.mcp_health() if runner is not None else None,
             "skipped": runner.mcp_skipped_reason if runner is not None else None,
         }
