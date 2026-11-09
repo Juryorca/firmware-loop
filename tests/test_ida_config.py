@@ -94,6 +94,7 @@ def test_ida_query_manifest_exposes_call_contract():
     desc = data["description"]
     assert "firmware-reversing" in desc
     assert "ida_call.sh" in desc and "database" in desc
+    assert "返回" in desc and "工具错误" in desc
     args = data["input_schema"]["properties"]["args"]["description"]
     assert "database" in args and "ida_tools.sh" in args
     assert data["input_schema"]["examples"][0]["args"] == "idb_list '{}'"

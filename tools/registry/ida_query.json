@@ -1,6 +1,6 @@
 {
   "name": "ida_query",
-  "description": "调用 Windows IDA（经 WSL，自动启动 supervisor）做反编译/函数画像。args 使用 ida_call.sh 的原始参数串：<tool> '<json>'；查询已打开的数据库时 JSON 必须带 database=<会话名>。完整的多步骤操作、顺序和清理流程见 firmware-reversing Skill。",
+  "description": "调用 Windows IDA（经 WSL，自动启动 supervisor）做反编译/函数画像。args 使用 ida_call.sh 的原始参数串：<tool> '<json>'；查询已打开的数据库时 JSON 必须带 database=<会话名>。返回 ida_query observer 的结构化字段或原始文本；失败返回工具错误，不伪装成分析结论。完整的多步骤操作、顺序和清理流程见 firmware-reversing Skill。",
   "input_schema": {
     "type": "object",
     "properties": {
