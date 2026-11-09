@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 
 from fwcore import db
@@ -25,9 +26,13 @@ def _workspace(tmp_path):
 
 def test_codemode_parallel_calls_record_and_filter(tmp_path):
     con, _dom, reg, ctx = _workspace(tmp_path)
+    # A barrier proves that the four calls are actually in flight together;
+    # the previous wall-clock assertion was flaky under xdist load.
+    barrier = threading.Barrier(4)
 
     def slow(tool_ctx, args):
-        time.sleep(0.25)
+        barrier.wait(timeout=2.0)
+        time.sleep(0.02)
         return {
             "status": "ok",
             "value": args.get("v"),
@@ -52,7 +57,7 @@ def test_codemode_parallel_calls_record_and_filter(tmp_path):
     elapsed = time.monotonic() - started
     assert out["status"] == "ok", out
     assert "1,2,3,4" in out["text"]
-    assert elapsed < 1.2, f"tools did not run concurrently: {elapsed:.2f}s"
+    assert elapsed < 2.0
     assert con.execute("SELECT COUNT(*) n FROM tool_calls").fetchone()["n"] == 4
 
 
