@@ -36,7 +36,7 @@ def test_script_reads_state_config_when_env_absent(tmp_path):
         "IDA_STAGE": str(stage), "IDA_WIN_STAGE": r"E:\stage from json",
         "IDA_URL": "http://127.0.0.1:9999/mcp"}}), encoding="utf-8")
     out = subprocess.run(["bash", "-c",
-                          ('source tools/ida/ida_env.sh && printf "%s|%s|%s" '
+                          ('source tools/ida_env.sh && printf "%s|%s|%s" '
                           '"$FW_IDA_STAGE" "$FW_IDA_WIN_STAGE" "$FW_IDA_URL"')],
                          cwd=".", env=_env(FW_IDA_CONFIG=str(cfg)),
                          capture_output=True, text=True, timeout=60, check=False)
@@ -53,7 +53,7 @@ def test_stop_works_with_spaces_in_stage_path(tmp_path):
     sup = subprocess.Popen(["sleep", "30"])
     try:
         (stage / "supervisor.pid").write_text(str(sup.pid), encoding="utf-8")
-        out = subprocess.run(["bash", "tools/ida/ida_stop.sh"], env=_env(
+        out = subprocess.run(["bash", "tools/ida_stop.sh"], env=_env(
             FW_IDA_STAGE=str(stage), FW_IDA_WIN_STAGE=r"E:\stage with spaces",
             FW_IDA_URL="http://127.0.0.1:9/mcp", FW_IDA_INSTANCES=str(inst)),
             capture_output=True, text=True, timeout=120, check=False)
@@ -90,7 +90,7 @@ def test_stop_matches_workers_across_drive_with_mount_override(tmp_path):
     env = _env(FW_IDA_STAGE=str(stage), FW_IDA_WIN_STAGE=r"E:\ida stage",
                FW_IDA_URL="http://127.0.0.1:9/mcp", FW_IDA_INSTANCES=str(inst),
                FW_IDA_MOUNT_E="/mnt/winE", PATH=f"{bindir}:{os.environ['PATH']}")
-    out = subprocess.run(["bash", "tools/ida/ida_stop.sh"], env=env,
+    out = subprocess.run(["bash", "tools/ida_stop.sh"], env=env,
                          capture_output=True, text=True, timeout=120, check=False)
     assert out.returncode == 0, out.stderr
     calls = killed.read_text(encoding="utf-8")
@@ -107,7 +107,7 @@ def test_session_exit_clean_removes_staged_copies_but_keeps_whitelist(tmp_path):
     for name in ("fw.bin", "fw.i64", "fw.id0", "keepalive.py", "idalog.txt"):
         (stage / name).write_text("x", encoding="utf-8")
     (stage / "submit" / "pkg").write_text("x", encoding="utf-8")
-    out = subprocess.run(["bash", "tools/ida/ida_clean.sh"], env=_env(
+    out = subprocess.run(["bash", "tools/ida_clean.sh"], env=_env(
         FW_IDA_STAGE=str(stage), FW_IDA_WIN_STAGE=r"D:\stage",
         FW_IDA_URL="http://127.0.0.1:9/mcp"), capture_output=True, text=True, timeout=120, check=False)
     assert out.returncode == 0, out.stderr
@@ -122,7 +122,7 @@ def test_stop_preserves_idb_as_files(tmp_path):
     stage.mkdir()
     (stage / "fw.i64").write_text("db", encoding="utf-8")
     (stage / "supervisor.pid").write_text("999999", encoding="utf-8")
-    out = subprocess.run(["bash", "tools/ida/ida_stop.sh"], env=_env(
+    out = subprocess.run(["bash", "tools/ida_stop.sh"], env=_env(
         FW_IDA_STAGE=str(stage), FW_IDA_WIN_STAGE=r"D:\stage",
         FW_IDA_URL="http://127.0.0.1:9/mcp", FW_IDA_INSTANCES=str(tmp_path / "none")),
         capture_output=True, text=True, timeout=120, check=False)

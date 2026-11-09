@@ -43,10 +43,9 @@ class ToolsetItem:
 
 DEFAULT_TOOLSET: tuple[ToolsetItem, ...] = (
     ToolsetItem("ida", "IDA Pro(Windows/WSL)", "P0", True, ("debug.ida",),
-                ("tools/ida/README.md", "tools/ida/ida_start.sh", "tools/ida/ida_open.sh",
-                 "tools/ida/ida_call.sh", "tools/ida/ida_stop.sh", "tools/ida/ida_clean.sh",
-                 "tools/ida/ida_env.sh", "tools/ida/ida_list.sh", "tools/ida/ida_tools.sh",
-                 "tools/ida/ida_mcp_lib.sh")),
+                ("tools/ida_start.sh", "tools/ida_open.sh", "tools/ida_call.sh",
+                 "tools/ida_stop.sh", "tools/ida_clean.sh", "tools/ida_env.sh",
+                 "tools/ida_list.sh", "tools/ida_tools.sh", "tools/ida_mcp_lib.sh")),
     ToolsetItem("ghidra", "Ghidra 无头分析", "P0", True, ("debug.ghidra",),
                 ("tools/ghidra_run.sh", "tools/ghidra_scripts/ProfileFuncs.java",
                  "tools/ghidra_scripts/DumpFuncsWithStr.java",

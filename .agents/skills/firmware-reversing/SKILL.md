@@ -26,11 +26,24 @@ description: 固件静态逆向与入口建模：rootfs 枚举、IDA/Ghidra、CG
 5. **登记**：确认的地址/字符串/调用关系用 `state_add_observation`；有产物用 `state_add_evidence`。
 6. **构造预测**：写出最可能的缺陷形态和验证 oracle，再进入 validation Skill。
 
-## IDA headless wrapper
+## IDA headless wrapper（按需使用，不必研究脚本）
 
-IDA 的安装/配置/命令/参数/生命周期/故障处理是工具套件的一部分，单一手册在
-[`tools/ida/README.md`](../../../tools/ida/README.md)。本 Skill 只规定研究顺序：
-需要 IDA 时先读该 README，再按“入口 → 参数 → 鉴权/校验 → sink”分析，不复制工具命令。
+本工作区已有 wrapper；直接用，不要先 `head`/`sed` 读 `tools/ida_*.sh`：
+
+```bash
+bash tools/ida_start.sh
+bash tools/ida_open.sh <Linux二进制路径> [会话名]
+bash tools/ida_tools.sh
+bash tools/ida_call.sh <tool> '{"database":"<会话名>",...}'
+bash tools/ida_stop.sh
+bash tools/ida_clean.sh
+```
+
+- `ida_open.sh` 会把 Linux 路径复制到暂存目录并调用 `idb_open`。
+- `ida_call.sh` 的 JSON 必须带 `database=<会话名>`。
+- 本机 IDA MCP 端点用 `curl --noproxy` / `ida_call.sh`，不要用 webfetch。
+- 缺少 exe/目录/挂载点时先运行 `fw-core ida-env`；这是配置问题，不是分析失败。
+- 生命周期和路径全部由 `tools/ida_env.sh` / `state/ida.json` 决定，不写死盘符或端口。
 
 ## 判据
 

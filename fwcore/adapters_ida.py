@@ -13,7 +13,7 @@
   不会被误当成"IDA 分析失败"。
 
 修掉的既有缺陷
-- 旧实现:`shell_exec(ctx, "bash tools/ida/ida_start.sh")` 的返回**根本没检查** ⇒ supervisor 起不来也照样
+- 旧实现:`shell_exec(ctx, "bash tools/ida_start.sh")` 的返回**根本没检查** ⇒ supervisor 起不来也照样
   往下调 `ida_call.sh`,模型拿到的是"调用失败"而不是"启动失败"(错误归因错、更难恢复)。
 """
 
@@ -121,7 +121,7 @@ class IdAdapter(Adapter):
             self._started = True
             return None
 
-        script = os.path.join(self.root, "tools", "ida", "ida_start.sh")
+        script = os.path.join(self.root, "tools", "ida_start.sh")
         if not os.path.isfile(script):
             return {"status": "error", "error": f"IDA 启动脚本不存在: {script}",
                     "meta": {"capability": "debug.ida", "provider": "ida:supervisor"}}
@@ -150,7 +150,7 @@ class IdAdapter(Adapter):
     # -- call --
     def call(self, ctx: ToolContext, m: Manifest, args: dict) -> dict:
         cfg = self.cfg
-        script = os.path.join(self.root, "tools", "ida", "ida_call.sh")
+        script = os.path.join(self.root, "tools", "ida_call.sh")
         if not os.path.isfile(script):
             return {"status": "error", "error": f"IDA 调用脚本不存在: {script}"}
         argv = ["bash", script]
@@ -191,7 +191,7 @@ class IdAdapter(Adapter):
         cfg = load_ida_config(self.root)
         if not self._started or not cfg.stop_on_close:
             return
-        script = os.path.join(self.root, "tools", "ida", "ida_stop.sh")
+        script = os.path.join(self.root, "tools", "ida_stop.sh")
         if not os.path.isfile(script):
             return
         import subprocess

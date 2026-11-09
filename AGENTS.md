@@ -109,15 +109,15 @@
   (只放行 ROUTE/KOBJECT_UEVENT/AUDIT)⇒ `NETLINK_NETFILTER`(NFQUEUE 类 daemon)/`SOCK_DIAG`/`XFRM`/`GENERIC` 全被拒。
   **已装好,各轮直接用**:`qemu-aarch64-patched -L <rootfs> <guest_bin>`;判读探针在 `tools/qemu-nl-probe/`,
   `tools/check.sh` 有 INFO 行;**32 位/大端边界用 `knowledge_search("qemu-user 32 位 大端")`**
-- Windows 工具路径由 `tools/ida/ida_env.sh` / `state/ida.json` 解析；不要在指令里写死盘符或用户名
+- Windows 工具路径由 `tools/ida_env.sh` / `state/ida.json` 解析；不要在指令里写死盘符或用户名
 - 本机代理会劫持 localhost: 任何 curl 加 --noproxy '*';
   webfetch/fetch 工具同理且**无超时** —— 对 127.0.0.1 本地端点(如 IDA MCP)永远用
   curl --noproxy 或 ida_call.sh,用 webfetch 会无限挂死
 - Windows 脚本经 WSL 执行注意 CRLF(必要时 dos2unix)
 - 实验产物一律写 `state/<target>/artifacts/`;工作区外路径必须走已配置的授权/中转,不要假设旧 harness 的权限配置。
-- IDA 端点生命周期:`tools/ida/ida_start.sh`/`fw-core ida-env` 管理;fwapp 退出时按当前工具链清理,不依赖旧会话壳。
+- IDA 端点生命周期:`tools/ida_start.sh`/`fw-core ida-env` 管理;fwapp 退出时按当前工具链清理,不依赖旧会话壳。
   - **Windows/IDA 接入配置是单一来源**:`fw-core ida-env`(环境变量 `FW_IDA_*` > `state/ida.json` > 兼容默认);
-    `tools/ida/ida_*.sh` 全由它驱动,不再写死 `/mnt/d`、盘符、端口、Windows 用户目录;
+    `tools/ida_*.sh` 全由它驱动,不再写死 `/mnt/d`、盘符、端口、Windows 用户目录;
     换机器只需设 `FW_IDA_STAGE`/`FW_IDA_WIN_STAGE`/`FW_IDA_MCP_EXE`(或写 `state/ida.json`),细节见 `docs/IDA-ENV.md`。
     配置缺项时工具会报"缺哪个 exe/目录/挂载点",那不是 IDA 分析失败。
 
@@ -131,7 +131,7 @@
 1. 信号判定: `tools/parse_signal.py` 覆盖的类别以其输出为准;不覆盖的类别(DoS/信息泄露/逻辑缺陷/权限等)用**自定义差分·对比实验**验证,同样构成发现 —— 禁止无证据宣称成功。
 2. 每完成一个阶段 → 用 `state_*` 工具写**权威状态**(假设/证据/结论/下一步);`notes.md` 可选，仅历史叙述，不再是研究过程的必需记录。
 3. 失败先分诊(**假设 / 环境 / 信号**三层),修正后重跑,禁止盲目重试(判据见 `research-loop` Skill(`references/LOOP.md`)「失败分诊」)。
-4. Windows IDA: 使用 `tools/ida/ida_*.sh` wrapper；具体命令、`database` 参数与生命周期见 `tools/ida/README.md`。
+4. Windows IDA: 使用 `tools/ida_*.sh` wrapper；具体命令、`database` 参数与生命周期见 `.agents/skills/firmware-reversing/SKILL.md`「IDA headless wrapper」。
 5. 范围门控: 仅 PoC 级验证、仅授权目标;不做武器化、不做沙箱逃逸(探测/交付边界见下方「交付原则」)。
 6. 前提验证: 任务/用户给的前提(如"已加密")同为待验证假设 —— 先指纹实证;证伪即改道,并把"前提修正"用 `knowledge_propose` 记为 `guideline`（tags 含对应工具/前提）。
 7. 工作区清理(收尾必做,**不等用户问**): **规则见 `research-loop` Skill(`references/LOOP.md`)「清理与生命周期」(唯一所在)**;只有两档 —— **使用中 / 收尾未归档(含"提交中、等厂商回复")处理相同**:只清垃圾(`/tmp`、会话日志、运行残留、队列用不到的 `artifacts/`),**不释放运行载体与原件**;只有**用户宣布「归档/不要了」**后一次性释放 运行载体·派生物·原件(原件须满足"可重下"三条件);**只说"收尾"时运行载体照留**(复核/PoC 要用)⇒ 知识 / 对外材料(`report/`)/ 重下凭据永久保留(**`artifacts/` 是内部证据,不属永久保留** ⇒ 见 `research-loop` Skill 两档表 ✓)。
@@ -388,7 +388,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
   探针 `ON` 并列出真实标签页;开关未开 ⇒ 上述 `ENOENT`/`remote debugging is enabled` 报错 = `OFF`,提醒用户去开 ✓。
 - **触发**:只认**明确指令** —— `/提交 <报告>` 或"提交 <报告名>" ✓;**没点名/匹配到多份 ⇒ 问一次** ✓;**禁止自行发起** ✗(会话里没有报告就直说没有 ✓)。
 - **附件上传 = Windows 路径**:浏览器在 Windows 上跑 ⇒ `upload_file` / 表单附件只认 **Windows 路径**(Linux 路径无效 ✗)⇒ 用 `tools/win_stage.sh <文件>`
-  把文件放到中转目录并打印 `D:\ida_test\submit\<名>`;该目录由 `tools/ida/ida_clean.sh` 一并清理 ✓;邮件正文里的引用照旧写报告内路径 ✓。
+  把文件放到中转目录并打印 `D:\ida_test\submit\<名>`;该目录由 `tools/ida_clean.sh` 一并清理 ✓;邮件正文里的引用照旧写报告内路径 ✓。
 - 边界:只用于用户要求提交的报告;只填不点提交;不存不代填密码;登录态不进对外材料、不复制出工作区。
 - 多会话:①headless 天然隔离(每会话一进程 + `--isolated`),只费内存;②冲突只有一种 —— **两个会话连同一个可调试浏览器**(共用标签页)⇒ 同一时间只在一个会话 `enabled:true`;③`state/<目标>/` 单写者 ⇒ 一个目标只开一个会话。
 
@@ -445,7 +445,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 - **netlink 面解锁**: `qemu-aarch64-patched`(已装,直接用)→ 判读探针 `tools/qemu-nl-probe/`
 - **派生量重算**: `bash tools/derived_check.sh <目标>` —— 一次算出 A2 覆盖度 /
   每个 finding 的包完整性;覆盖度与材料完成的**断言直接粘它的输出**(有 FAIL 非零退出)
-- IDA(headless):用现有 `tools/ida/ida_*.sh` wrapper;具体命令、`database` 参数与生命周期见 `tools/ida/README.md`。
+- IDA(headless):用现有 `tools/ida_*.sh` wrapper;具体命令、`database` 参数与生命周期见 `.agents/skills/firmware-reversing/SKILL.md`「IDA headless wrapper」。
 - 终端截图(声明式,**不接受自由命令**): 先在 finding 包目录写好 `shots.json`,再
   终端截图走 `tools/termshot.sh`(**用法与约束见 `tools/templates/report.md`「截图」一节**),禁手绘、禁改用其他方式。
   脚本必须与 `shots.json` **同目录**(路径 containment)、可执行、argv 走白名单

@@ -2,7 +2,7 @@
 
 为什么需要它
 - IDA 的自动启动链路跨三个世界:WSL 的路径、Windows 的路径、HTTP Supervisor。
-  这些值原来写死在 `providers.py` / `adapters_ida.py` / `tools/ida/ida_*.sh` 里
+  这些值原来写死在 `providers.py` / `adapters_ida.py` / `tools/ida_*.sh` 里
   ( `/mnt/d/ida_test`、`D:\\ida9.3`、`C:\\Users\\30104\\...`、端口 8745 ),
   换机器/换盘符/换安装位置就全坏,而且同一个值在 Python 和 shell 里各写一遍。
 - 这里做**单一来源**:所有键集中定义、集中解析、集中导出给 shell(`ida-env --sh`)。

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 用法: ida_start.sh [初始二进制的Linux路径]
 # 启动 idalib-mcp supervisor(headless);幂等: 已在则直接返回。
-# 全部路径/端口/日志来自 config(tools/ida/ida_env.sh ← fwcore/winenv.py)。
+# 全部路径/端口/日志来自 config(tools/ida_env.sh ← fwcore/winenv.py)。
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/ida_env.sh"
 
