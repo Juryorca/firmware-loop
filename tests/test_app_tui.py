@@ -865,6 +865,7 @@ def test_mouse_selection_auto_copies_to_clipboard(tmp_path):
             await pilot.mouse_up(notice, offset=(10, 0))
             await pilot.pause(0.2)
             assert "alpha" in app.clipboard
+            assert app.focused is app.query_one(PromptEditor)
             await pilot.press("ctrl+q")
 
     try:
@@ -895,6 +896,32 @@ def test_mcp_command_auto_scrolls_to_bottom(tmp_path):
             await pilot.pause(0.3)
             assert app.query("NoticeWidget")
             assert tv.at_bottom()
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_mouse_selection_works_on_assistant_markdown(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 24)) as pilot:
+            await pilot.pause(0.2)
+            tv = app.query_one(TranscriptView)
+            tv.remove_children()
+            msg = MessageWidget("assistant", "alpha beta gamma")
+            tv.append(msg)
+            await pilot.pause(0.3)
+            await pilot.mouse_down(msg.body, offset=(0, 0))
+            await pilot.mouse_up(msg.body, offset=(12, 0))
+            await pilot.pause(0.2)
+            assert "alpha" in app.clipboard
+            assert app.focused is app.query_one(PromptEditor)
             await pilot.press("ctrl+q")
 
     try:

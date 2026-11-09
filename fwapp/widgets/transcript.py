@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import json
 
-from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
 from textual import events
 from textual.containers import Vertical, VerticalScroll
 from textual.widget import Widget
-from textual.widgets import Static
+from textual.widgets import Markdown, Static
 
 STATUS_ICON = {
     "pending": "·", "running": "⏳", "ok": "✓", "error": "✗",
@@ -104,11 +103,12 @@ class MessageWidget(Vertical):
         meta = meta or {}
         label = {"user": "你", "assistant": "fw-core", "notice": "系统"}.get(role, role)
         head = Static(Text(label, style="bold"), classes="msg-role")
-        body: Static
-        if role == "assistant" and text:
-            body = Static(RichMarkdown(text), classes="msg-body")
-        elif role == "assistant":
-            body = Static(Text(""), classes="msg-body")
+        body: Static | Markdown
+        if role == "assistant":
+            # Textual Markdown is selectable (its blocks expose Content through
+            # Widget.get_selection). RichMarkdown inside Static is not, which
+            # made assistant answers impossible to mouse-select.
+            body = Markdown(text or "", classes="msg-body")
         elif role == "user":
             body = Static(Text(text, style="bold"), classes="msg-body")
         else:
@@ -131,7 +131,10 @@ class MessageWidget(Vertical):
         if not delta:
             return
         self._text += delta
-        self.body.update(Text(self._text))
+        if isinstance(self.body, Markdown):
+            self.body.append(delta)
+        else:
+            self.body.update(Text(self._text))
 
     def append_reasoning(self, delta: str) -> None:
         if not delta:
@@ -146,8 +149,8 @@ class MessageWidget(Vertical):
     def finalize(self, text: str | None = None) -> None:
         if text is not None:
             self._text = text
-        if self.role == "assistant" and self._text:
-            self.body.update(RichMarkdown(self._text))
+        if isinstance(self.body, Markdown):
+            self.body.update(self._text)
         else:
             self.body.update(Text(self._text))
 
