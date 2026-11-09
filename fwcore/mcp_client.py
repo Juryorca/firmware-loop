@@ -40,6 +40,22 @@ class MCPError(RuntimeError):
     pass
 
 
+class MCPHTTPError(MCPError):
+    """HTTP status/transport failure; read-only requests may retry it."""
+
+    def __init__(self, message: str, status: int = 0, *, retryable: bool = False):
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+
+
+READ_ONLY_METHODS = frozenset({
+    "initialize", "tools/list", "resources/list",
+    "resources/templates/list", "resources/read",
+})
+TRANSIENT_HTTP = frozenset({408, 429, 500, 502, 503, 504})
+
+
 __all__ = [
     "ConfigSource", "MCPClient", "MCPConfigError", "MCPError", "McpConfig",
     "ServerSpec", "discover_mcp_config", "load_mcp_config", "load_servers", "probe",
@@ -63,6 +79,7 @@ class MCPClient:
         self._next_id = 0
         self._buf = b""
         self._http_session: str | None = None
+        self._http_broken = False
         self.capabilities: dict = {}
         self.tools_changed = False
         self._stderr_tail = bytearray()
@@ -81,6 +98,7 @@ class MCPClient:
     def start(self) -> None:
         if self.spec.transport == "http":
             self._http_url()
+            self._http_broken = False
             return
         if self._proc is not None:
             if self._proc.poll() is None:
@@ -266,12 +284,24 @@ class MCPClient:
                             self.tools_changed = True
                 raise MCPError(f"{self.spec.name}: SSE 中没有匹配 id={rid} 的 JSON-RPC 响应")
         except urllib.error.HTTPError as e:
+            self._http_broken = True
             body = e.read().decode("utf-8", errors="replace")[:500]
-            raise MCPError(f"{self.spec.name}: HTTP {e.code}: {body}") from e
+            raise MCPHTTPError(
+                f"{self.spec.name}: HTTP {e.code}: {body}", e.code,
+                retryable=e.code in TRANSIENT_HTTP,
+            ) from e
         except urllib.error.URLError as e:
-            raise MCPError(f"{self.spec.name}: HTTP 连接失败: {e.reason}") from e
+            self._http_broken = True
+            raise MCPHTTPError(
+                f"{self.spec.name}: HTTP 连接失败: {e.reason}", 0, retryable=True
+            ) from e
         except (OSError, ValueError) as e:
-            raise MCPError(f"{self.spec.name}: HTTP 请求失败: {type(e).__name__}: {e}") from e
+            if isinstance(e, OSError):
+                self._http_broken = True
+            raise MCPHTTPError(
+                f"{self.spec.name}: HTTP 请求失败: {type(e).__name__}: {e}", 0,
+                retryable=isinstance(e, OSError),
+            ) from e
 
     def _read_message(self, deadline: float, timeout: float | None = None) -> dict:
         if not self._proc or not self._proc.stdout:
@@ -310,13 +340,29 @@ class MCPClient:
         self._next_id += 1
         rid = self._next_id
         if self.spec.transport == "http":
-            msg = self._http_post({"jsonrpc": "2.0", "id": rid, "method": method,
-                                   "params": params or {}},
-                                  timeout if timeout is not None else self.timeout)
+            attempts = 3 if method in READ_ONLY_METHODS else 1
+            msg = None
+            for attempt in range(attempts):
+                try:
+                    msg = self._http_post(
+                        {"jsonrpc": "2.0", "id": rid, "method": method,
+                         "params": params or {}},
+                        timeout if timeout is not None else self.timeout)
+                    break
+                except MCPHTTPError as e:
+                    retryable = e.retryable or e.status in TRANSIENT_HTTP
+                    if e.status == 404 and self._http_session:
+                        self._http_session = None
+                        retryable = True
+                    if attempt + 1 >= attempts or not retryable:
+                        raise
+                    time.sleep(0.25 if attempt == 0 else 1.0)
+            assert msg is not None
             if not isinstance(msg, dict):
                 raise MCPError(f"{self.spec.name}: 非法 JSON-RPC 响应(顶层不是 object)")
             if "error" in msg:
                 raise MCPError(f"{self.spec.name}: {method} 失败: {msg['error']}")
+            self._http_broken = False
             return msg.get("result") or {}
         self._send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}})
         deadline = time.time() + (timeout if timeout is not None else self.timeout)
@@ -351,6 +397,13 @@ class MCPClient:
     @property
     def supports_resources(self) -> bool:
         return "resources" in self.capabilities
+
+    @property
+    def alive(self) -> bool:
+        """Whether the transport can still be used for another call."""
+        if self.spec.transport == "http":
+            return not self._http_broken
+        return self._proc is not None and self._proc.poll() is None
 
     def list_tools(self) -> list[dict]:
         """读取 tools/list 的全部页（MCP 用 nextCursor 分页）。"""

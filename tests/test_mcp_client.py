@@ -318,3 +318,73 @@ def test_close_kills_forked_child_that_ignores_sigterm(tmp_path):
             time.sleep(0.02)
         else:
             raise AssertionError(f"process {pid} survived MCP close")
+
+
+def test_http_read_only_retry_but_not_tools_call():
+    class Handler(BaseHTTPRequestHandler):
+        list_attempts = 0
+        call_attempts = 0
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            req = json.loads(self.rfile.read(n) or b"{}")
+            m, rid = req.get("method"), req.get("id")
+            if m == "tools/list":
+                Handler.list_attempts += 1
+                if Handler.list_attempts <= 2:
+                    self.send_response(503)
+                    self.end_headers()
+                    self.wfile.write(b"temporary")
+                    return
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {
+                        "tools": [{"name": "echo", "inputSchema": {"type": "object"}}]
+                    },
+                }
+            elif m == "tools/call":
+                Handler.call_attempts += 1
+                self.send_response(503)
+                self.end_headers()
+                self.wfile.write(b"do not retry calls")
+                return
+            elif m == "initialize":
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": rid,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "serverInfo": {"name": "retry", "version": "1"},
+                    },
+                }
+            else:
+                out = {"jsonrpc": "2.0", "id": rid, "result": {}}
+            data = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format, *args):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    th = threading.Thread(target=srv.serve_forever, daemon=True)
+    th.start()
+    try:
+        spec = ServerSpec(
+            name="retry", command="", url=f"http://127.0.0.1:{srv.server_port}/mcp"
+        )
+        client = MCPClient(spec, timeout=5)
+        client.initialize()
+        assert client.list_tools()[0]["name"] == "echo"
+        assert Handler.list_attempts == 3
+        with pytest.raises(MCPError):
+            client.call_tool("echo", {})
+        assert Handler.call_attempts == 1
+    finally:
+        srv.shutdown()
+        th.join(timeout=2)

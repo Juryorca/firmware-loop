@@ -491,3 +491,30 @@ def test_refresh_hidden_tool_is_not_duplicated(tmp_path):
     assert bridge.refresh_tools(force=True) is True
     assert bridge.status["fake"]["hidden_tools"] == ["new"]
     assert bridge.registry.specs == {}
+
+
+def test_mcp_background_start_and_reconnect_after_process_death(tmp_path):
+    spec, _ = _spec(tmp_path)
+    _con, dom, root = _setup(tmp_path)
+    reg = Registry()
+    bridge = MCPBridge(root=root, registry=reg, specs=[spec])
+    assert bridge.start(background=True) is not None
+    assert bridge.wait_ready(5.0)
+    try:
+        from fwcore.policy import DirectPolicy
+        from fwcore.tools import ToolContext
+
+        ctx = ToolContext(domain=dom, root=root, policy=DirectPolicy())
+        name = "mcp__fake__echo"
+        assert reg.call(ctx, name, {"text": "one"})["status"] == "ok"
+        client = bridge.clients["fake"]
+        assert client._proc is not None
+        os.kill(client._proc.pid, 9)
+        time.sleep(0.1)
+        assert not client.alive
+        out = reg.call(ctx, name, {"text": "two"})
+        assert out["status"] == "ok", out
+        assert bridge.status["fake"]["state"] == "connected"
+        assert name in reg.specs
+    finally:
+        bridge.close()

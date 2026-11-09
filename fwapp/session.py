@@ -386,7 +386,7 @@ class AgentSession:
                 runner = self._make_runner(con)
                 self._runner_ref = runner
                 self._runner_model_name = self.model_name
-                runner._ensure_mcp(None)  # noqa: SLF001 - session-owned runner
+                runner._ensure_mcp(None, background=True)  # noqa: SLF001 - session-owned runner
             except Exception as e:  # noqa: BLE001 - app layer must surface setup errors
                 self._last_error = str(e)
             while not self._closed:

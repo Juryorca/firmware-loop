@@ -12,6 +12,8 @@
   thinking 模式默认回传 `reasoning_content`。
 - **工具**:统一 manifest(`tools/registry/*.json`,8 个)+ 内置 `state_*`/`shell_exec`/`fs_*` + IDA feature 适配器 + MCP;
   工具 exposure 四态(`direct`/`deferred`/`codemode`/`hidden`)，MCP 默认 `codemode`；
+  MCP 支持后台连接、进程/HTTP 断线后的有界重连、工具列表恢复；HTTP 只读请求
+  408/429/5xx 重试，`tools/call` 不重试；
   `codemode` 用 QuickJS worker 调现有 Registry，`tool_search` 用 BM25 激活 deferred 工具；
   结果是 Pi 风格有界输出(2000 行/50 KiB 尾部);截断时带 `full_output_path`,并保留 `db_tool_call_id`/产物路径/哈希。
 - **上下文**:静态 system + append-only history + 尾部状态(含 `[Context status]`);阈值压缩(90%@1M 窗口),

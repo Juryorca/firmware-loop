@@ -882,6 +882,9 @@ class Runner:
         self._watchdog_start()           # 心跳在起看护之前,避免旧 pid 被误判 owner_dead
         self._ensure_mcp(rid)          # 跨轮/恢复:MCP 必须真的可用(被关过就重开)
         if self.mcp_bridge is not None:
+            # Background startup is allowed, but the first model request must
+            # not silently miss direct/deferred tools.
+            self.mcp_bridge.wait_ready(10.0)
             # tools/list_changed 可能只在请求时被读到；每个 turn 开头主动刷新一次，
             # 避免模型长期拿旧工具清单。刷新失败保留旧工具。
             self.mcp_bridge.refresh_tools(force=True)
@@ -1446,7 +1449,7 @@ class Runner:
         return None
 
     # ---------------- 资源生命周期(MCP / 看护) ----------------
-    def _ensure_mcp(self, rid: str | None = None) -> None:
+    def _ensure_mcp(self, rid: str | None = None, *, background: bool = False) -> None:
         """跨轮/恢复时确保 MCP 真活着:被关过(或构造时没开)就重开并记事件。
 
         `rid` 给出时,把 MCP 子进程的 pgid+starttime 登记进该 run 的 .pgids,
@@ -1484,7 +1487,7 @@ class Runner:
             bridge = self.mcp_bridge
         elif pgids and not bridge.pgids_path:
             bridge.pgids_path = pgids
-        bridge.start()
+        bridge.start(background=background)
         with contextlib.suppress(Exception):
             _event(self.con, "mcp.reopened" if reopened else "mcp.started", None,
                    {"servers": bridge.health().get("servers", {})})

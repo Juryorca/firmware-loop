@@ -16,6 +16,7 @@ import fnmatch
 import json
 import os
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -108,8 +109,34 @@ class MCPBridge:
     config_sources: list[str] = field(default_factory=list)
     close_errors: list[str] = field(default_factory=list)
     resource_tools_registered: bool = False
+    _bg_thread: threading.Thread | None = None
+    _server_locks: dict[str, threading.RLock] = field(default_factory=dict)
 
-    def start(self) -> dict[str, dict]:
+    def start(self, *, background: bool = False) -> dict[str, dict]:
+        """Start connections. ``background`` is used by the TUI session startup."""
+        if not background:
+            return self._start_sync()
+        if self.clients and not self.closed:
+            self.close()
+        self.closed = False
+        self.status = {
+            spec.name: {"status": "connecting", "state": "connecting"}
+            for spec in self.specs if spec.enabled
+        }
+        self.registered.clear()
+        self._bg_thread = threading.Thread(
+            target=self._start_sync, daemon=True, name="fwcore-mcp-connect")
+        self._bg_thread.start()
+        return self.status
+
+    def wait_ready(self, timeout: float | None = 10.0) -> bool:
+        thread = self._bg_thread
+        if thread is not None:
+            thread.join(timeout)
+            return not thread.is_alive()
+        return True
+
+    def _start_sync(self) -> dict[str, dict]:
         """连接 + 注册;单个服务器失败不影响其它。可重复调用(已关闭的桥会重新打开)。"""
         if self.clients and not self.closed:
             # Starting an already-open bridge must not overwrite clients and leak
@@ -312,12 +339,16 @@ class MCPBridge:
         """拉取 tools/list；notification 后或每个 turn 开始调用，避免长期用旧列表。"""
         changed = False
         for server, client in list(self.clients.items()):
+            if not getattr(client, "alive", True):
+                client = self._reconnect(server)
+                if client is None:
+                    continue
             if not force and not client.tools_changed:
                 continue
             try:
                 tools = client.list_tools()
             except (MCPError, OSError, ValueError) as e:
-                self.status.setdefault(server, {})["tools_refresh_error"] = str(e)[:300]
+                self._mark_disconnected(server, str(e))
                 continue
             self._replace_server_tools(server, tools)
             client.tools_changed = False
@@ -548,11 +579,62 @@ class MCPBridge:
             for k in ("submit", "upload", "publish", "send", "login", "http request")
         )
 
+    def _server_lock(self, server: str) -> threading.RLock:
+        return self._server_locks.setdefault(server, threading.RLock())
+
+    def _mark_disconnected(self, server: str, error: str) -> None:
+        with self._server_lock(server):
+            client = self.clients.pop(server, None)
+            if client is not None:
+                client.close()
+            self._replace_server_tools(server, [])
+            self.status[server] = {
+                "status": "disconnected", "state": "disconnected",
+                "detail": str(error)[:300],
+            }
+
+    def _reconnect(self, server: str):
+        """Reconnect one server and restore its tools; never retries a tools/call."""
+        spec = next((s for s in self.specs if s.name == server), None)
+        if spec is None or not spec.enabled:
+            return None
+        with self._server_lock(server):
+            old = self.clients.pop(server, None)
+            if old is not None:
+                old.close()
+            self._replace_server_tools(server, [])
+            client = MCPClient(
+                spec, timeout=spec.timeout or self.timeout, pgids_path=self.pgids_path
+            )
+            try:
+                client.start()
+                client.initialize()
+                tools = client.list_tools()
+            except (MCPError, OSError, ValueError) as e:
+                client.close()
+                self.status[server] = {
+                    "status": "unreachable", "state": "failed",
+                    "detail": str(e)[:300],
+                }
+                return None
+            self.clients[server] = client
+            self._replace_server_tools(server, tools)
+            self.status[server] = {
+                "status": "ready", "state": "connected", "server": server,
+                "tools": self.registered.get(server, []),
+                "resources": bool(client.supports_resources),
+            }
+            return client
+
     def _make_handler(
         self, server: str, remote_name: str
     ) -> Callable[[object, dict], dict]:
         def _handler(ctx, args: dict) -> dict:
             client = self.clients.get(server)
+            if client is None or not getattr(client, "alive", True):
+                # Reconnect before the next call, but do not replay a failed
+                # tools/call: it may have had side effects.
+                client = self._reconnect(server)
             if client is None:
                 return {
                     "status": "error",
@@ -568,8 +650,12 @@ class MCPBridge:
             except MCPError as e:
                 msg = str(e)
                 status = "timeout" if "超时" in msg else "error"
+                if not getattr(client, "alive", True):
+                    self._mark_disconnected(server, msg)
                 return {"status": status, "error": msg[:500], "meta": meta}
             except (OSError, ValueError) as e:
+                if not getattr(client, "alive", True):
+                    self._mark_disconnected(server, str(e))
                 return {
                     "status": "error",
                     "error": f"{type(e).__name__}: {e}"[:500],
@@ -671,6 +757,8 @@ class MCPBridge:
 
     def close(self) -> None:
         """幂等:重复调用安全(关闭后 clients 为空、closed=True)。"""
+        if self._bg_thread is not None and self._bg_thread.is_alive():
+            self._bg_thread.join(timeout=5.0)
         self.close_errors.clear()
         for name, client in list(self.clients.items()):
             try:

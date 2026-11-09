@@ -136,6 +136,10 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   `describeNamespace`/`ALL_TOOLS`/`text()`/`image()`，只把显式输出交给模型；
   worker 有内存、超时、输出上限，进程退出时清理。`tool_search` 用本地 BM25
   只检索 `deferred` 工具并写回历史；checkpoint/resume 从工具结果恢复激活集合。
+- **MCP 连接可靠性**：支持 `start(background=True)` + 有界 `wait_ready`；
+  stdio 进程退出/HTTP 请求失败通过 `alive` 标记，下一次工具调用前重建客户端并恢复
+  `tools/list`，不会回放失败的 `tools/call`；HTTP 只对 read-only 方法做 408/429/5xx
+  有界重试，`tools/call` 不自动重试。
 - **MCP 配置/发现**：复用 Pi 的 `mcpServers` 契约，不另造检测格式：用户级
   `~/.pi/agent/mcp.json` → 项目 `<root>/.pi/mcp.json` → 兼容目标级 `state/mcp.json`；
   显式 `FW_MCP_CONFIG` 覆盖以上来源。项目只覆盖 `enabled`/`exposure`/`toolExposure`，
