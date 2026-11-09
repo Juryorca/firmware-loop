@@ -35,7 +35,7 @@ def _short(value, limit: int = 90) -> str:
 
 
 class TranscriptView(VerticalScroll):
-    """可滚动的对话区;新内容只在用户已在底部时自动跟随。
+    """可滚动的对话区;新内容自动跟随到底部。
 
     点击对话区不应把键盘焦点从编辑器抢走；滚动条仍可用鼠标。
     """
@@ -52,9 +52,17 @@ class TranscriptView(VerticalScroll):
         # `mount()` lays out asynchronously. Scrolling immediately uses the old
         # max_scroll_y, so the newly added notice/message can land below the
         # visible area. Re-check after the next refresh.
-        stick = self.at_bottom()
         self.mount(widget)
-        if stick:
+        self.follow_end()
+
+    def follow_end(self) -> None:
+        """Schedule a scroll after the next layout pass.
+
+        The same path is used for appended widgets, streaming Markdown updates,
+        tool body updates, and initial transcript loading.  Calling
+        ``scroll_end`` synchronously during mount sees the old max_scroll_y.
+        """
+        if self.is_attached:
             self.call_after_refresh(self._scroll_to_end)
 
     def _scroll_to_end(self) -> None:
@@ -89,6 +97,12 @@ class ThinkingBlock(Vertical):
             return
         self._text += delta
         self._refresh()
+        node = self.parent
+        while node is not None:
+            if isinstance(node, TranscriptView):
+                node.follow_end()
+                return
+            node = node.parent
 
     def toggle(self) -> None:
         self._expanded = not self._expanded
@@ -99,6 +113,14 @@ class ThinkingBlock(Vertical):
         event.stop()
 
 class MessageWidget(Vertical):
+    def _follow_transcript(self) -> None:
+        node = self.parent
+        while node is not None:
+            if isinstance(node, TranscriptView):
+                node.follow_end()
+                return
+            node = node.parent
+
     def __init__(self, role: str, text: str, meta: dict | None = None):
         meta = meta or {}
         label = {"user": "你", "assistant": "fw-core", "notice": "系统"}.get(role, role)
@@ -135,6 +157,7 @@ class MessageWidget(Vertical):
             self.body.append(delta)
         else:
             self.body.update(Text(self._text))
+        self._follow_transcript()
 
     def append_reasoning(self, delta: str) -> None:
         if not delta:
@@ -256,6 +279,12 @@ class ToolWidget(Vertical):
     def update_call(self, call: dict) -> None:
         self.call_data = dict(call)
         self._refresh()
+        node = self.parent
+        while node is not None:
+            if isinstance(node, TranscriptView):
+                node.follow_end()
+                return
+            node = node.parent
 
     def toggle(self) -> None:
         self.body.display = not self.body.display

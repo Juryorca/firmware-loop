@@ -181,6 +181,7 @@ class FwApp(App):
 
     def _notice(self, text: str, level: str = "info") -> None:
         self._append(NoticeWidget(text, level))
+        self.query_one(TranscriptView).follow_end()
 
     def request_exit(self) -> None:
         """供 SIGTERM/SIGHUP 等信号处理函数调用（只置标志，不跨线程操作 UI）。"""
@@ -242,7 +243,9 @@ class FwApp(App):
         for call in self.sess.tool_updates():
             if str(call.get("id")) not in self._tool_widgets:
                 self._upsert_tool(call)
-        tv.scroll_end(animate=False)
+        # Layout of the just-mounted transcript is asynchronous; scroll only
+        # after it has a real max_scroll_y.
+        tv.follow_end()
 
     def _upsert_tool(self, call: dict, force_append: bool = False) -> None:
         key = str(call.get("id") or "")
