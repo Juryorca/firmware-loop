@@ -26,18 +26,28 @@ def _workspace(tmp_path):
 
 def test_codemode_parallel_calls_record_and_filter(tmp_path):
     con, _dom, reg, ctx = _workspace(tmp_path)
-    # A barrier proves that the four calls are actually in flight together;
-    # the previous wall-clock assertion was flaky under xdist load.
-    barrier = threading.Barrier(4)
+    # Measure actual overlap instead of relying on a barrier: a broken SQLite
+    # write in one worker used to leave the other three waiting for the barrier
+    # until the timeout, turning this into an xdist-dependent hang/failure.
+    active = 0
+    max_active = 0
+    active_lock = threading.Lock()
 
     def slow(tool_ctx, args):
-        barrier.wait(timeout=10.0)
-        time.sleep(0.02)
-        return {
-            "status": "ok",
-            "value": args.get("v"),
-            "text": f"value={args.get('v')}",
-        }
+        nonlocal active, max_active
+        with active_lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            time.sleep(0.2)
+            return {
+                "status": "ok",
+                "value": args.get("v"),
+                "text": f"value={args.get('v')}",
+            }
+        finally:
+            with active_lock:
+                active -= 1
 
     reg.register(
         ToolSpec(
@@ -55,6 +65,7 @@ def test_codemode_parallel_calls_record_and_filter(tmp_path):
     )
     assert out["status"] == "ok", out
     assert "1,2,3,4" in out["text"]
+    assert max_active >= 2, f"tools were serialized (max_active={max_active})"
     assert con.execute("SELECT COUNT(*) n FROM tool_calls").fetchone()["n"] == 4
 
 
