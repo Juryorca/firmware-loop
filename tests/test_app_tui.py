@@ -347,7 +347,7 @@ def test_toggle_tools_includes_streaming_previews():
 
 
 def test_toolset_screen_loads_in_worker(monkeypatch, tmp_path):
-    import fwapp.widgets.screens as screens
+    from fwapp.widgets import screens
 
     calls = []
     report = {
@@ -386,7 +386,7 @@ def test_toolset_screen_loads_in_worker(monkeypatch, tmp_path):
 
 
 def test_tool_setup_command_runs_in_worker(monkeypatch, tmp_path):
-    import fwcore.toolset as toolset
+    from fwcore import toolset
 
     report = {
         "required_total": 0, "required_ready": 0, "required_incomplete": 0,

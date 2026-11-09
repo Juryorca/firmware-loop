@@ -13,7 +13,7 @@ import asyncio
 import contextlib
 import signal
 import time
-from typing import Any
+from typing import Any, ClassVar
 
 from rich.text import Text
 from textual import events
@@ -105,7 +105,7 @@ class FwApp(App):
     TabbedContent { background: #19212B; }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Any]] = [
         ("f1", "help", "Help"),
         ("f2", "research", "Research"),
         ("ctrl+g", "research", "Research"),
@@ -213,7 +213,7 @@ class FwApp(App):
     def _update_status(self) -> None:
         try:
             s = self.sess.snapshot()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.query_one(StatusBar).update(Text(f"状态读取失败: {e}", style="#CE8888"))
             return
         try:
@@ -405,9 +405,9 @@ class FwApp(App):
                 # assistant_error 已经显示过同一条流错误时，不再重复一条泛化通知。
                 # 用户主动停止时，请求提示已经显示过一次；这里不再重复“已暂停”。
                 is_user_stop = str(hb or "").startswith("user_stop")
-                if not (self._stream_error_notified and str(hb or "").startswith("model_error")):
-                    if not (self._stop_requested and is_user_stop):
-                        self._notice(f"{prefix}{label}{reason}", "warning")
+                if (not (self._stream_error_notified and str(hb or "").startswith("model_error"))
+                        and not (self._stop_requested and is_user_stop)):
+                    self._notice(f"{prefix}{label}{reason}", "warning")
             elif hb in ("awaiting_user_close", "closed"):
                 self._notice("收尾条件已满足，等待你确认收尾" if hb == "awaiting_user_close"
                              else "已确认收尾", "success")

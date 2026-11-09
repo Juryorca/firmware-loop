@@ -62,7 +62,7 @@ def _cli(root, *a, timeout=180, env_extra=None):
     env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t1")
     env.update(env_extra or {})
     return subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db, *a],
-                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout, check=False)
 
 
 def _prep(tmp_path):

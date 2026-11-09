@@ -40,7 +40,7 @@ def wait_turn(sess, timeout=10.0):
 
 
 def test_submit_turn_uses_runner_and_records_tool(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
     script = [
         {"content": "先登记假设。", "tool_calls": [{
             "id": "c1", "name": "state_add_hypothesis",
@@ -69,7 +69,7 @@ def test_submit_turn_uses_runner_and_records_tool(tmp_path):
 
 
 def test_cancel_pauses_run_at_safe_point(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
 
     class Slow:
         name = "scripted"
@@ -98,7 +98,7 @@ def test_cancel_pauses_run_at_safe_point(tmp_path):
 
 
 def test_resume_paused_run_continues_same_run(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
     first = [{"content": "FINAL: 第一轮", "tool_calls": []}]
     rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: ScriptedAdapter(script=first),
                     mcp=False, watchdog=False)
@@ -130,7 +130,7 @@ def test_resume_paused_run_continues_same_run(tmp_path):
 
 
 def test_new_session_creates_another_run(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
     script = [{"content": "FINAL: 完成", "tool_calls": []}] * 4
     rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: ScriptedAdapter(script=script),
                     mcp=False, watchdog=False)
@@ -150,7 +150,7 @@ def test_new_session_creates_another_run(tmp_path):
 
 
 def test_submit_while_busy_is_queued_and_steers_next_turn(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
 
     class Slow:
         name = "scripted"
@@ -187,7 +187,7 @@ def test_submit_while_busy_is_queued_and_steers_next_turn(tmp_path):
 
 
 def test_print_mode_prints_final_and_uses_session(tmp_path, capsys):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
     rt = AppRuntime(cfg, target="t1",
                     adapter_factory=lambda name: ScriptedAdapter(
                         script=[{"content": "FINAL: 打印结果", "tool_calls": []}]),

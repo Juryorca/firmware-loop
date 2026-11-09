@@ -11,8 +11,12 @@ from __future__ import annotations
 import json
 import re
 
-from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,
-                     combined_output_text, truncate_tail)
+from .output import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    combined_output_text,
+    truncate_tail,
+)
 from .tools import Registry, ToolContext, shell_exec
 
 
@@ -48,7 +52,7 @@ def _run(ctx: ToolContext, cmd: str, timeout: float = 120.0, keep: int = DEFAULT
         if fn:
             try:
                 out["observation"] = fn(text)
-            except Exception as e:                     # 解析失败不算工具失败,但要如实标注
+            except Exception as e:                     # 解析失败不算工具失败,但要如实标注  # noqa: BLE001
                 out["observation"] = {"status": "unparsed", "error": f"{type(e).__name__}: {e}"}
         else:
             out["observation"] = {"status": "unparsed", "reason": "该工具尚无结构化解析器"}
@@ -93,7 +97,7 @@ def _obs_signal(text: str) -> dict:
 def _obs_fuzz(text: str) -> dict:
 
     tuples = re.findall(r"tuples[:=]\s*(\d+)", text)
-    crash = bool(re.search(r"SIGSEGV|SIGILL|SIGBUS|uncaught signal|crash", text, re.I))
+    crash = bool(re.search(r"SIGSEGV|SIGILL|SIGBUS|uncaught signal|crash", text, re.IGNORECASE))
     if not tuples and not crash:
         return {"status": "unparsed", "raw": text[-160:]}
     return {"status": "ok", "tuples": _int_or_none(tuples[-1]) if tuples else None,

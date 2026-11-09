@@ -37,11 +37,11 @@ def test_mock_sse_events_include_text_tools_usage():
     lines = [
         'data: {"choices":[{"delta":{"content":"你"}}]}',
         'data: {"choices":[{"delta":{"content":"好"}}]}',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",'
-        '"function":{"name":"state_add_hypothesis","arguments":"{\\"target\\""}}]}}]}',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+        ('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1",'
+        '"function":{"name":"state_add_hypothesis","arguments":"{\\"target\\""}}]}}]}'),
+        ('data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
         '"function":{"arguments":":\\"t1\\"}"}}]},"finish_reason":"tool_calls"}],'
-        '"usage":{"prompt_tokens":7,"completion_tokens":3}}',
+        '"usage":{"prompt_tokens":7,"completion_tokens":3}}'),
         "data: [DONE]",
     ]
     model = OpenAICompatModel(model="m", base_url="https://example.test", api_key="k",
@@ -153,7 +153,9 @@ def test_multiturn_user_messages_persisted_and_restored(tmp_path):
     dom = Domain(con, str(root))
 
     class Recorder(ScriptedAdapter):
-        requests: list = []
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.requests: list = []
 
         def chat(self, messages, tools):
             self.requests.append(messages)
@@ -203,14 +205,16 @@ def test_multiturn_user_messages_persisted_and_restored(tmp_path):
 
 
 def test_tui_shows_streaming_deltas_before_turn_finishes(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
+    release_second = threading.Event()
 
     class SlowStream(ScriptedAdapter):
         def stream(self, messages, tools, *, control=None):
             yield StreamEvent("start")
-            time.sleep(0.35)
             yield StreamEvent("text_delta", text="第一段")
-            time.sleep(0.35)
+            # Gate the second token until the test has observed the partial
+            # assistant message; avoid a wall-clock race under xdist.
+            release_second.wait(timeout=5.0)
             yield StreamEvent("text_delta", text="第二段")
             yield StreamEvent("text_delta", text="\nFINAL: 完成")
             yield StreamEvent("done", finish_reason="stop")
@@ -233,6 +237,7 @@ def test_tui_shows_streaming_deltas_before_turn_finishes(tmp_path):
                     break
             assert saw_partial, "token 到达后应立即创建并更新 assistant 消息"
             assert app.sess.busy, "首个 token 到达时 turn 应仍在执行"
+            release_second.set()
             for _ in range(80):
                 await pilot.pause(0.05)
                 if not app.sess.busy and app._stream_msg is None:
@@ -250,7 +255,7 @@ def test_tui_shows_streaming_deltas_before_turn_finishes(tmp_path):
 
 
 def test_session_cancel_closes_stream_and_pauses(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
 
     class Slow(ScriptedAdapter):
         def stream(self, messages, tools, *, control=None):
@@ -292,7 +297,7 @@ def test_session_cancel_closes_stream_and_pauses(tmp_path):
 
 
 def test_queued_message_persisted_then_updates_to_ok(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
     slow = ScriptedAdapter(script=[{"content": "\nFINAL: 一", "tool_calls": []},
                                    {"content": "\nFINAL: 二", "tool_calls": []}],
                            chunk_size=4, stream_delay=0.2)
@@ -329,7 +334,7 @@ def test_queued_message_persisted_then_updates_to_ok(tmp_path):
 
 
 def test_cancel_marks_queued_message_cancelled(tmp_path):
-    root, cfg = make_ws(tmp_path)
+    _root, cfg = make_ws(tmp_path)
     slow = ScriptedAdapter(script=[{"content": "\nFINAL: 一", "tool_calls": []}],
                            chunk_size=4, stream_delay=0.3)
     rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: slow,
@@ -363,7 +368,7 @@ def test_cancel_marks_queued_message_cancelled(tmp_path):
 
 def _sse_model(lines):
     return OpenAICompatModel(model="m", base_url="https://example.test", api_key="k",
-                             stream_transport=lambda url, headers, payload: list(lines))
+                             stream_transport=lambda url, headers, payload: lines.copy())
 
 
 def _collect(model, control=None):
@@ -371,8 +376,8 @@ def _collect(model, control=None):
     err = None
     try:
         for ev in model.stream([{"role": "user", "content": "hi"}], [], control=control):
-            events.append(ev)
-    except Exception as e:                     # 测试需要检查异常类型
+            events.append(ev)  # noqa: PERF402 (needs partial events on exception)
+    except Exception as e:                     # 测试需要检查异常类型  # noqa: BLE001
         err = e
     return events, err
 

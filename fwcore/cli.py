@@ -18,7 +18,7 @@
   resume <run-id> [--steps N]
 """
 
-# ruff: noqa: E702 (CLI parser table uses compact semicolons by design)
+
 from __future__ import annotations
 
 import argparse

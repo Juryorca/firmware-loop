@@ -40,7 +40,7 @@ def _setup(tmp_path):
 
 
 def test_cancel_stops_at_safe_point_and_marks_user_stop(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     ref: dict = {}
     runner = Runner(con, root, CancellingAdapter(ref), limits=Limits(max_model_calls=50),
                     policy=Policy(allow_high_risk=True))
@@ -60,7 +60,7 @@ def test_cancel_stops_at_safe_point_and_marks_user_stop(tmp_path):
 
 
 def test_cancel_before_run_prevents_any_step(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     runner = Runner(con, root, CancellingAdapter({}), limits=Limits(max_model_calls=10),
                     policy=Policy(allow_high_risk=True))
     rid = runner.start("t1")

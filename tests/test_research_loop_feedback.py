@@ -28,7 +28,7 @@ def _ctx(dom, root, rid=None):
 
 def test_shell_exec_auto_uses_shell_for_metacharacters(tmp_path):
     """模型天然按 shell 写命令;不该因为 `; |` 静默失败(演练里 7 次失败源于此)。"""
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, reg = _setup(tmp_path)
     ctx = _ctx(dom, root, rid="R1")
     out = reg.call(ctx, "shell_exec", {"command": "echo A; echo b"})
     assert out["status"] == "ok", out
@@ -37,7 +37,7 @@ def test_shell_exec_auto_uses_shell_for_metacharacters(tmp_path):
 
 
 def test_shell_exec_plain_command_stays_argv(tmp_path):
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, reg = _setup(tmp_path)
     out = reg.call(_ctx(dom, root, rid="R1"), "shell_exec", {"command": "echo hi"})
     assert out["status"] == "ok" and out.get("shell") is False
 
@@ -70,7 +70,7 @@ def test_evidence_auto_links_to_producing_tool_call(tmp_path):
 
 
 def test_evidence_without_matching_tool_call_does_not_fake_link(tmp_path):
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, reg = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     p = os.path.join(root, "manual.txt")
@@ -83,7 +83,7 @@ def test_evidence_without_matching_tool_call_does_not_fake_link(tmp_path):
 
 def test_progress_brief_surfaces_unfinished_work(tmp_path):
     """演练复盘:模型跑完实验不知道要结束 attempt / 复核证据 / 下结论。"""
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, _reg = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "命令注入", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     ev_id = dom.add_evidence("t1", "log", capture="看过回显", attempt_id=aid, hypothesis_id=hid)
@@ -94,7 +94,7 @@ def test_progress_brief_surfaces_unfinished_work(tmp_path):
 
 
 def test_progress_brief_says_when_ready_to_conclude(tmp_path):
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, _reg = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "注入", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     ev = dom.add_evidence("t1", "log", capture="payload 被执行", attempt_id=aid, hypothesis_id=hid)
@@ -108,7 +108,7 @@ def test_progress_brief_says_when_ready_to_conclude(tmp_path):
 
 
 def test_verify_evidence_points_to_conclusion_when_ready(tmp_path):
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, reg = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     ev = dom.add_evidence("t1", "log", capture="payload 执行", attempt_id=aid, hypothesis_id=hid)
@@ -133,7 +133,7 @@ def test_verify_evidence_points_to_conclusion_when_ready(tmp_path):
 
 def test_ready_hint_requires_causal_verification(tmp_path):
     """只有 recheck-sha256(完整性)时不能提示"可以漏洞收口"。"""
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, _reg = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "注入", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     art = os.path.join(root, "x.txt")
@@ -153,7 +153,7 @@ def test_ready_hint_requires_causal_verification(tmp_path):
 
 def test_only_one_file_can_be_the_direct_output_of_a_call(tmp_path):
     """强关联按产物路径唯一匹配:同一次调用最多对 stdout/result 两个文件负责。"""
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, reg = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     ctx = _ctx(dom, root, rid="R1")
@@ -171,7 +171,7 @@ def test_only_one_file_can_be_the_direct_output_of_a_call(tmp_path):
 
 def test_shell_mode_contract(tmp_path):
     """`* ? ~` 不触发 shell;显式 mode 决定解释方式。"""
-    con, dom, root, reg = _setup(tmp_path)
+    _con, dom, root, reg = _setup(tmp_path)
     ctx = _ctx(dom, root, rid="R1")
     # 引号内的通配符:argv 模式 ⇒ 原样传给命令(不展开)
     out = reg.call(ctx, "shell_exec", {"command": "printf '%s\\n' '*.c'", "mode": "argv"})
@@ -191,7 +191,7 @@ def test_tool_calls_per_turn_are_capped(tmp_path):
     from fwcore.models import ScriptedAdapter
     from fwcore.runtime import Runner
 
-    con, dom, root, _reg = _setup(tmp_path)
+    con, _dom, root, _reg = _setup(tmp_path)
     calls = [{"id": f"c{i}", "name": "shell_exec", "args": {"command": f"echo {i}"}}
              for i in range(12)]
     script = [{"content": "批量", "tool_calls": calls},

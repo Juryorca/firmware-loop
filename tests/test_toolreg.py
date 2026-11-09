@@ -12,9 +12,15 @@ import os
 from fwcore import db as _db
 from fwcore.domain import Domain
 from fwcore.policy import Authz, Policy
-from fwcore.toolreg import (Manifest, ManifestError, capability_index, load_manifests,
-                            register_feature, register_manifests)
-from fwcore.toolreg import Adapter
+from fwcore.toolreg import (
+    Adapter,
+    Manifest,
+    ManifestError,
+    capability_index,
+    load_manifests,
+    register_feature,
+    register_manifests,
+)
 from fwcore.tools import Registry, ToolContext
 
 
@@ -112,7 +118,7 @@ def test_new_script_tool_needs_only_a_manifest(tmp_path):
 
 
 def test_python_adapter_tool(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     d = str(tmp_path / "reg")
     _write_manifest(d, name="py_echo", description="py 适配器",
                     input_schema={"type": "object", "properties": {"text": {"type": "string"}}},
@@ -124,7 +130,7 @@ def test_python_adapter_tool(tmp_path):
 
 
 def test_python_adapter_prefix_allowlist(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     d = str(tmp_path / "reg")
     _write_manifest(d, name="evil", description="x",
                     input_schema={"type": "object"}, kind="python",
@@ -136,7 +142,7 @@ def test_python_adapter_prefix_allowlist(tmp_path):
 
 
 def test_missing_entry_is_reported_not_faked(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     d = str(tmp_path / "reg")
     _write_manifest(d, name="needs_bin", description="x",
                     input_schema={"type": "object"}, kind="script",
@@ -151,7 +157,7 @@ def test_missing_entry_is_reported_not_faked(tmp_path):
 # ---------------- ③ 执行语义:超时/取消/取消杀组 ----------------
 
 def test_script_tool_timeout_kills_process_group(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     d = str(tmp_path / "reg")
     script = os.path.join(root, "tools", "slow.sh")
     os.makedirs(os.path.dirname(script), exist_ok=True)
@@ -178,7 +184,7 @@ def test_script_tool_timeout_kills_process_group(tmp_path):
 # ---------------- ④ 特色适配器:启动失败必须显式 ----------------
 
 def test_feature_adapter_start_failure_is_explicit(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     d = str(tmp_path / "reg")
     _write_manifest(d, name="feat_tool", description="feature", input_schema={"type": "object"},
                     kind="feature", adapter="fakefeat")

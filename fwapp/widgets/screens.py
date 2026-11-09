@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 from dataclasses import dataclass
+from typing import Any, ClassVar
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.text import Text
@@ -51,7 +52,7 @@ class SelectItem:
 class SelectorScreen(ModalScreen[str | None]):
     """通用选择器:搜索 + 列表(目标 / run / 模型)。"""
 
-    BINDINGS = [("escape", "cancel", "取消")]
+    BINDINGS: ClassVar[list[Any]] = [("escape", "cancel", "取消")]
 
     def __init__(self, title: str, items: list[SelectItem], **kw):
         super().__init__(**kw)
@@ -110,7 +111,7 @@ class SelectorScreen(ModalScreen[str | None]):
 
 
 class HelpScreen(ModalScreen[None]):
-    BINDINGS = [("escape", "close", "关闭")]
+    BINDINGS: ClassVar[list[Any]] = [("escape", "close", "关闭")]
 
     def compose(self) -> ComposeResult:
         lines = ["# fw-core 命令与快捷键", "", "## 命令", ""]
@@ -137,7 +138,7 @@ class HelpScreen(ModalScreen[None]):
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [("escape", "no", "取消")]
+    BINDINGS: ClassVar[list[Any]] = [("escape", "no", "取消")]
 
     def __init__(self, message: str, **kw):
         super().__init__(**kw)
@@ -180,7 +181,7 @@ def _fmt_duration(seconds) -> str:
 class ResearchScreen(ModalScreen[None]):
     """研究专用视图：进度、假设池、观察、证据、结论与收尾检查。"""
 
-    BINDINGS = [("escape", "close", "关闭"), ("g", "close", "关闭")]
+    BINDINGS: ClassVar[list[Any]] = [("escape", "close", "关闭"), ("g", "close", "关闭")]
 
     def __init__(self, session: AgentSession, tab: str = "progress", **kw):
         super().__init__(**kw)
@@ -226,7 +227,7 @@ class ResearchScreen(ModalScreen[None]):
         derived = {}
         try:
             derived = sess.services.domain.derived(sess.target)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             derived = {"error": str(e)}
         sig = json.dumps({"rows": rows, "derived": derived}, sort_keys=True, default=str)
         if sig == self._last_refresh_sig:
@@ -345,7 +346,7 @@ def _toolset_user_text(report: dict) -> str:
 class ToolsetScreen(ModalScreen[None]):
     """默认工具集完整性(只读;不启动服务/浏览器)."""
 
-    BINDINGS = [("escape", "close", "关闭"), ("g", "close", "关闭")]
+    BINDINGS: ClassVar[list[Any]] = [("escape", "close", "关闭"), ("g", "close", "关闭")]
 
     def __init__(self, root: str, **kw):
         super().__init__(**kw)

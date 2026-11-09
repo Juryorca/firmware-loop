@@ -27,7 +27,7 @@ TRUNCATED = {"id": "c1", "type": "function",
 
 
 def test_truncated_arguments_fail_explicitly_and_do_not_execute(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = Runner(con, root, ScriptedAdapter(script=[{"content": "", "tool_calls": [TRUNCATED]},
                                                  {"content": "FINAL: 收到错误后收工", "tool_calls": []}]),
                limits=Limits(max_model_calls=4), policy=Policy(allow_high_risk=True))

@@ -38,7 +38,7 @@ FINAL = {"content": "FINAL: 收工", "tool_calls": []}
 
 
 def test_prepare_note_is_injected_into_system_prompt(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     ad = RecordingAdapter([FINAL])
     r = Runner(con, root, ad, limits=Limits(max_model_calls=3), policy=Policy(allow_high_risk=True),
                prepare=lambda payload: {"context_note": "上次尝试的关键未知:X 未验证"})
@@ -48,7 +48,7 @@ def test_prepare_note_is_injected_into_system_prompt(tmp_path):
 
 
 def test_prepare_timeout_does_not_block_research(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     ad = RecordingAdapter([FINAL])
     r = Runner(con, root, ad, limits=Limits(max_model_calls=3), policy=Policy(allow_high_risk=True),
                prepare=lambda payload: time.sleep(1.5) or {}, prepare_timeout=0.1)
@@ -61,7 +61,7 @@ def test_prepare_timeout_does_not_block_research(tmp_path):
 
 
 def test_prepare_error_does_not_kill_run(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     def boom(_payload):
         raise RuntimeError("钩子坏了")
     r = Runner(con, root, ScriptedAdapter(script=[FINAL]), limits=Limits(max_model_calls=3),
@@ -99,7 +99,7 @@ def test_progress_snapshot_is_structured(tmp_path):
 
 def test_prepare_timeout_does_not_wait_for_hung_hook(tmp_path):
     """钩子卡死时主流程必须**立刻**继续(不能等它),并且有可观测计数。"""
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = Runner(con, root, ScriptedAdapter(script=[FINAL]), limits=Limits(max_model_calls=2),
                policy=Policy(allow_high_risk=True),
                prepare=lambda payload: time.sleep(5), prepare_timeout=0.1)

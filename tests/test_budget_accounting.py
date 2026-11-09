@@ -47,7 +47,7 @@ def _counters(con, rid):
 
 
 def test_model_calls_accumulate_across_resume_without_reset(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     script = [{"content": "第二句", "tool_calls": []},
               {"content": "第三句", "tool_calls": []},
               {"content": "第四句", "tool_calls": []},
@@ -70,7 +70,7 @@ def test_model_calls_accumulate_across_resume_without_reset(tmp_path):
 
 
 def test_resume_continues_when_budget_allows(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     script = [{"content": "a", "tool_calls": []}, {"content": "b", "tool_calls": []},
               {"content": "c", "tool_calls": []}, {"content": "FINAL: 完成", "tool_calls": []}]
     adapter = CountingAdapter(script)
@@ -85,7 +85,7 @@ def test_resume_continues_when_budget_allows(tmp_path):
 
 
 def test_tool_calls_counter_matches_db_rows(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     script = [{"content": "跑两条", "tool_calls": [
         {"id": "c1", "name": "shell_exec", "args": {"command": "echo a"}},
         {"id": "c2", "name": "shell_exec", "args": {"command": "echo b"}}]},
@@ -99,7 +99,7 @@ def test_tool_calls_counter_matches_db_rows(tmp_path):
 
 
 def test_advance_does_not_double_count(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     script = [{"content": "第一轮", "tool_calls": []},
               {"content": "FINAL: 第一轮结束", "tool_calls": []},
               {"content": "第二轮", "tool_calls": []},
@@ -114,7 +114,7 @@ def test_advance_does_not_double_count(tmp_path):
 
 
 def test_elapsed_accumulates(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     script = [{"content": "x", "tool_calls": []}, {"content": "FINAL: 收束", "tool_calls": []}]
     r = Runner(con, root, ScriptedAdapter(script=script), limits=Limits(max_model_calls=5),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
@@ -140,7 +140,7 @@ def test_no_tool_no_final_replies_pause_instead_of_burning_budget(tmp_path):
 
             return Reply(content="我想想", tool_calls=[])
 
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     ad = EmptyAdapter()
     r = Runner(con, root, ad, limits=Limits(max_model_calls=50), stall_repeats=3,
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
@@ -154,7 +154,7 @@ def test_no_tool_no_final_replies_pause_instead_of_burning_budget(tmp_path):
 
 def test_run_budget_is_persisted_and_exposed(tmp_path):
     """预算边界要落 runs.budget_note(否则"还剩多少"只能靠记忆/文档,已发生漂移)。"""
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: x", "tool_calls": []}]),
                limits=Limits(max_model_calls=3, max_seconds=123.0),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))

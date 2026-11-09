@@ -54,7 +54,7 @@ def test_shell_exports_quote_spaces_and_roundtrip(tmp_path):
                                  "FW_IDA_URL": "http://127.0.0.1:9911/mcp"})
     exports = c.shell_exports()
     script = exports + '\nprintf "%s\\n" "$FW_IDA_STAGE|$FW_IDA_WIN_STAGE|$FW_IDA_URL|$FW_IDA_MCP_EXE"\n'
-    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=False)
     assert out.returncode == 0, out.stderr
     stage, win_stage, url, exe = out.stdout.strip().split("|")
     assert stage == "/mnt/e/ida stage"
@@ -106,7 +106,7 @@ def test_stop_only_kills_own_supervisor_and_matching_workers(tmp_path):
                    FW_IDA_URL="http://127.0.0.1:9/mcp", FW_IDA_INSTANCES=str(inst),
                    FW_IDA_WSL_STAGE=str(stage))
         out = subprocess.run(["bash", "tools/ida_stop.sh"], env=env,
-                             capture_output=True, text=True, timeout=120)
+                             capture_output=True, text=True, timeout=120, check=False)
         assert out.returncode == 0, out.stderr
         # 轮询而不是固定 sleep:Windows 互操作(taskkill.exe)可能慢,固定等待会 flaky
         deadline = time.time() + 10

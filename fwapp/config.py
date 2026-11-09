@@ -63,7 +63,7 @@ def resolve(opts) -> AppConfig:
     raw: dict = {}
     try:
         raw = limits_config(root)
-    except Exception as e:                      # 配置坏 ⇒ 用默认值,但必须让人看见
+    except Exception as e:                      # 配置坏 ⇒ 用默认值,但必须让人看见  # noqa: BLE001
         diags.append(Diagnostic("warning", f"limits 配置读取失败,使用默认值: {e}"))
     try:
         limits = Limits(**raw)
@@ -74,12 +74,12 @@ def resolve(opts) -> AppConfig:
     key = base = model = ""
     try:
         key, base, model = load_model_config(root)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         diags.append(Diagnostic("warning", f"模型配置读取失败: {e}"))
     model_opts = {"api": "", "supports_vision": False, "image_mode": "none"}
     try:
         model_opts = load_model_options(root)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         diags.append(Diagnostic("warning", f"模型多模态配置读取失败,使用纯文本: {e}"))
 
     name = (opts.model or os.environ.get("FW_MODEL_NAME") or model or "scripted").strip()

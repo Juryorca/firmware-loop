@@ -43,7 +43,7 @@ def _wd(con, root, **limits):
 
 
 def test_inflight_tool_does_not_bypass_db_cap(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     rid = _run_with_inflight_tool(con, root)
     acts = _wd(con, root, max_db_bytes=1).scan_once()
     assert any(a.get("hard") == ["max_db_bytes"] for a in acts), acts
@@ -51,7 +51,7 @@ def test_inflight_tool_does_not_bypass_db_cap(tmp_path):
 
 
 def test_inflight_tool_does_not_bypass_checkpoint_cap(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     rid = _run_with_inflight_tool(con, root)
     for i in range(14):
         con.execute("INSERT INTO checkpoints(id,run_id,step,messages,created_at) VALUES(?,?,?,?,?)",
@@ -63,7 +63,7 @@ def test_inflight_tool_does_not_bypass_checkpoint_cap(tmp_path):
 
 def test_inflight_tool_still_kept_alive_when_caps_ok(tmp_path):
     """对照:没有硬超限时长工具仍然保活(不能因为这次改动把宽限也弄坏)。"""
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     rid = _run_with_inflight_tool(con, root)
     acts = _wd(con, root).scan_once()
     assert any(a.get("kept_alive_by") == "tool_inflight" for a in acts), acts
@@ -72,7 +72,7 @@ def test_inflight_tool_still_kept_alive_when_caps_ok(tmp_path):
 
 def test_standalone_supervisor_pauses_dead_run(tmp_path):
     """主进程死了以后,独立看护进程仍然能收敛(看守与运行不同生共死)。"""
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = Runner(con, root, ScriptedAdapter(script=[]))
     rid = r.start("t1")
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -83,7 +83,7 @@ def test_standalone_supervisor_pauses_dead_run(tmp_path):
     out = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
                           "watchdog", "--once"], cwd=ROOT,
                          env=dict(os.environ, PYTHONPATH=ROOT),
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, timeout=120, check=False)
     assert out.returncode == 0, out.stderr[-500:]
     report = json.loads(out.stdout)
     assert report["actions"], "独立看护什么都没做"

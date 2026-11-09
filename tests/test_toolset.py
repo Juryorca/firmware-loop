@@ -64,7 +64,7 @@ def test_ghidra_wrapper_help():
     if not os.access(os.path.join(ROOT, "tools/ghidra_run.sh"), os.X_OK):
         pytest.skip("ghidra_run.sh 不可执行")
     r = subprocess.run([os.path.join(ROOT, "tools/ghidra_run.sh"), "-help"],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, timeout=30, check=False)
     out = r.stdout + r.stderr
     if "GHIDRA_MISSING" in out:
         pytest.skip("本机未安装 Ghidra")
@@ -158,6 +158,6 @@ def test_ghidra_configured_missing_path_is_not_silent(tmp_path):
     r = subprocess.run([os.path.join(ROOT, "tools", "ghidra_run.sh"), "-help"],
                        capture_output=True, text=True, timeout=30,
                        env={**os.environ, "FW_TOOL_CONFIG": str(cfg),
-                            "GHIDRA_HOME": "/also/no/such"})
+                            "GHIDRA_HOME": "/also/no/such"}, check=False)
     assert r.returncode != 0
     assert "GHIDRA_PATH_INVALID" in (r.stdout + r.stderr)

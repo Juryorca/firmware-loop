@@ -40,7 +40,7 @@ def test_relative_firmware_path_survives_cd_to_outdir(tmp_path):
     _stub(bindir, "binwalk", f'echo "$@" > "{args_file}"\necho "extract-ok"\n')
     out = tmp_path / "out"
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(out), "--no-unblob"],
-                       cwd=work, env=_env(bindir), capture_output=True, text=True, timeout=120)
+                       cwd=work, env=_env(bindir), capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 0, (r.stdout, r.stderr)
     seen = args_file.read_text(encoding="utf-8")
     assert str(work / "fw.bin") in seen, f"传给 binwalk 的固件不是绝对路径: {seen}"
@@ -58,7 +58,7 @@ def test_disk_cap_aborts_and_kills_child_group(tmp_path):
           f'echo $$ > "{pidfile}"\nhead -c 2000000 /dev/zero > ./bomb.bin\nsleep 30\n')
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out"), "--no-unblob"],
                        cwd=work, env=_env(bindir, FW_EXTRACT_MAX_MB=1),
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 9, (r.returncode, r.stdout[-500:])
     assert "ABORT=disk" in r.stdout, r.stdout[-500:]
     child = int(pidfile.read_text(encoding="utf-8").strip())
@@ -83,7 +83,7 @@ def test_file_count_cap_aborts(tmp_path):
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out"), "--no-unblob"],
                        cwd=work, env=_env(bindir, FW_EXTRACT_MAX_MB=4096,
                                           FW_EXTRACT_MAX_FILES=10),
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 9, (r.returncode, r.stdout[-400:])
     assert "ABORT=files" in r.stdout, r.stdout[-400:]
 
@@ -99,7 +99,7 @@ def test_depth_limit_is_passed_to_both_extractors(tmp_path):
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")],
                        cwd=work, env=_env(bindir, FW_EXTRACT_MAX_DEPTH=4,
                                           FW_UNBLOB=os.path.join(bindir, "unblob")),
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 0, (r.stdout, r.stderr)
     text = args.read_text(encoding="utf-8")
     assert "bw -Me -d 4" in text, text
@@ -141,7 +141,7 @@ def _run(script_args, tmp_path, bindir=None, **env):
         envs["PATH"] = f"{bindir}:/usr/bin:/bin"
     envs.update({k: str(v) for k, v in env.items()})
     return subprocess.run(["bash", SCRIPT, *script_args], env=envs,
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=120, check=False)
 
 
 def test_no_extractor_is_not_success(tmp_path):
@@ -155,13 +155,13 @@ def test_no_extractor_is_not_success(tmp_path):
     for tool in ("sh", "bash", "basename", "dirname", "mkdir", "pwd", "du", "df", "find",
                  "awk", "wc", "sort", "tail", "head", "sleep", "kill", "cat", "printf",
                  "setsid", "env"):
-        src = subprocess.run(["which", tool], capture_output=True, text=True).stdout.strip()
+        src = subprocess.run(["which", tool], capture_output=True, text=True, check=False).stdout.strip()
         if src and not (only / tool).exists():
             os.symlink(src, only / tool)
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")], cwd=str(work),
                        env={**os.environ, "PATH": str(only),
                             "FW_UNBLOB": str(tmp_path / "nope-unblob")},
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 4, (r.returncode, r.stdout[-400:], r.stderr[-300:])
     assert "STATUS=no_extractor" in r.stdout
 
@@ -175,7 +175,7 @@ def test_partial_when_one_extractor_missing(tmp_path):
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")], cwd=str(work),
                        env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
                             "FW_UNBLOB": str(tmp_path / "missing-unblob")},
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 6, (r.returncode, r.stdout[-400:])
     assert "STATUS=partial" in r.stdout and "missing_unblob=1" in r.stdout
 
@@ -192,7 +192,7 @@ def test_all_attempted_failed(tmp_path):
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")], cwd=str(work),
                        env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
                             "FW_UNBLOB": str(stub_ub)},
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 5, (r.returncode, r.stdout[-400:])
     assert "STATUS=failed" in r.stdout
 
@@ -207,7 +207,7 @@ def test_fast_burst_is_caught_by_final_check(tmp_path):
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out"), "--no-unblob"],
                        cwd=str(work), env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
                                            "FW_EXTRACT_MAX_MB": "1"},
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 9, (r.returncode, r.stdout[-500:])
     assert ("ABORT=disk" in r.stdout) or ("ABORT=disk_after" in r.stdout), r.stdout[-500:]
 
@@ -229,7 +229,7 @@ def test_unblob_metadata_env_cwd_are_used(tmp_path):
     r = subprocess.run(["bash", SCRIPT, "fw.bin", str(tmp_path / "out")],
                        cwd=str(work), env={**os.environ, "PATH": f"{bindir}:/usr/bin:/bin",
                                            "FW_TOOL_CONFIG": str(cfg)},
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 0, (r.returncode, r.stdout[-500:], r.stderr[-300:])
     text = marker.read_text(encoding="utf-8")
     assert str(work) in text

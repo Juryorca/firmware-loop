@@ -13,7 +13,7 @@ GIN='github.com/gin-gonic/gin.(*RouterGroup).'
 METHODS={'GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS','Any','Static','StaticFS','StaticFile','handle'}
 
 def sections(b):
-    out=subprocess.run(['readelf','-S','-W',b],capture_output=True,text=True).stdout
+    out=subprocess.run(['readelf','-S','-W',b],capture_output=True,text=True, check=False).stdout
     secs=[]
     for l in out.splitlines():
         m=re.match(r'\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)',l)
@@ -36,14 +36,14 @@ def join(a,b):
 def main():
     b=sys.argv[1]; pat=sys.argv[2] if len(sys.argv)>2 else r'http_service\.\(\*HttpService\)\.[A-Za-z]*([Pp]repare|[Bb]uild|[Rr]egister)[A-Za-z]*Router'
     secs=sections(b)
-    syms=subprocess.run(['go','tool','nm',b],capture_output=True,text=True).stdout
+    syms=subprocess.run(['go','tool','nm',b],capture_output=True,text=True, check=False).stdout
     names=[]
     for l in syms.splitlines():
         p=l.split()
         if len(p)>=3 and p[1] in ('t','T') and re.search(pat,p[2]) and not p[2].endswith('-fm'):
             names.append(p[2])
     for name in sorted(set(names)):
-        out=subprocess.run(['go','tool','objdump','-s','^'+re.escape(name)+'$',b],capture_output=True,text=True).stdout
+        out=subprocess.run(['go','tool','objdump','-s','^'+re.escape(name)+'$',b],capture_output=True,text=True, check=False).stdout
         if not out.strip(): continue
         lines=out.splitlines()
         # closure -> scope
@@ -70,8 +70,7 @@ def main():
                         break
                 if ptr_ is not None: closure_scope[m2.group(1)]=ptr_
         print(f"\n## {name}")
-        regs={}; slot_prefix={}; cur_prefix=''; started=False
-        lastslot_load=None; lastslot_store=None
+        regs={}; slot_prefix={}; started=False
         pending_group=None; ax_prefix=None; ax_source=None
         recent=[]
         for line in lines:
@@ -98,7 +97,7 @@ def main():
             # slot loads: MOVQ 0xNN(SP), REG
             m5=re.match(r'MOVQ\s+0x([0-9a-f]+)\(SP\), (\w+)',ins)
             if m5:
-                off=int(m5.group(1),16); r=m5.group(2); regs[r]=('slot',off); lastslot_load=(off,r)
+                off=int(m5.group(1),16); r=m5.group(2); regs[r]=('slot',off)
                 if r=='AX': ax_source=('slot',off); ax_prefix=None
             m5b=re.match(r'MOVQ\s+0x([0-9a-f]+)\((?!SP\))(\w+)\), AX',ins)
             if m5b:
@@ -136,7 +135,7 @@ def main():
                     print(f"  {src}:{ln} GROUP {full!r} mw={mws}")
                     pending_group=full; ax_prefix=full; ax_source='group'; recent=[]
                 elif meth in METHODS:
-                    def gs(rp,rl):
+                    def gs(rp,rl, regs=regs):
                         p=regs.get(rp); l=regs.get(rl)
                         if p and p[0]=='mem' and l and l[0]=='imm':
                             raw=vread(b,secs,p[1],l[1] or 0)
@@ -155,8 +154,10 @@ def main():
                     for e in recent[-30:]:
                         if e[0]=='sym' and e[2].startswith('unifi-access-be/') and e[2]!=name:
                             f=e[2]
-                            if 'http_service.(*HttpService).prepare' in f or 'http_service.(*HttpService).build' in f:
-                                if f not in closure_scope: continue
+                            if (('http_service.(*HttpService).prepare' in f
+                                 or 'http_service.(*HttpService).build' in f)
+                                    and f not in closure_scope):
+                                continue
                             if f not in [x[0] for x in funcs]:
                                 funcs.append((f, closure_scope.get(f)))
                     fs='; '.join((f.split('/')[-1]+('['+sc+']' if sc else '')) for f,sc in funcs[-6:])

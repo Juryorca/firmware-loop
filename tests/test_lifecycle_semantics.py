@@ -88,7 +88,7 @@ def test_pause_and_resume_do_not_count_as_rounds(tmp_path):
 # ---------- 双输出:按 Attempt 交代,不能用"目标级有一条观察"糊过去 ----------
 
 def test_dual_output_is_per_attempt(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, _root = _setup(tmp_path)
     dom.add_observation("t1", "前期某次随便看了下")           # 存在一条目标级观察
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "diff")
@@ -100,7 +100,7 @@ def test_dual_output_is_per_attempt(tmp_path):
 
 
 def test_observation_outcome_new_requires_actual_observation(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, _root = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "diff")
     with pytest.raises(InvariantViolation):
@@ -110,7 +110,7 @@ def test_observation_outcome_new_requires_actual_observation(tmp_path):
 
 
 def test_no_observation_requires_reason(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, _root = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "diff")
     with pytest.raises(InvariantViolation):
@@ -120,7 +120,7 @@ def test_no_observation_requires_reason(tmp_path):
 # ---------- 证据:ID 必须真实存在且归属正确 ----------
 
 def test_finish_attempt_rejects_bogus_evidence_ids(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, _root = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "m")
     with pytest.raises(NotFound):
@@ -128,7 +128,7 @@ def test_finish_attempt_rejects_bogus_evidence_ids(tmp_path):
 
 
 def test_finish_attempt_rejects_foreign_evidence(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, _root = _setup(tmp_path)
     h1 = dom.add_hypothesis("t1", "a")
     a1 = dom.start_attempt(h1, "m")
     h2 = dom.add_hypothesis("t1", "b")
@@ -139,7 +139,7 @@ def test_finish_attempt_rejects_foreign_evidence(tmp_path):
 
 
 def test_hypothesis_surface_link_must_exist(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, dom, _root = _setup(tmp_path)
     with pytest.raises(InvariantViolation):
         dom.add_hypothesis("t1", "h", surface_key="不存在的面")
     dom.add_surface("t1", "12080 /x")
@@ -153,7 +153,7 @@ def test_hypothesis_surface_link_must_exist(tmp_path):
 # ---------- 失联判定:不误伤活跃运行 ----------
 
 def test_recover_stale_ignores_active_runs(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = _runner(con, root, [FINAL])
     rid = r.start("t1")                       # 刚启动 ⇒ 心跳新鲜、pid = 本进程
     assert r.recover_stale() == []
@@ -161,7 +161,7 @@ def test_recover_stale_ignores_active_runs(tmp_path):
 
 
 def test_recover_stale_requires_dead_pid_or_missing_pid(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = _runner(con, root, [FINAL])
     rid = r.start("t1")
     # 心跳超期但 pid 仍活着(可能在跑长任务)⇒ **不得**回收
@@ -174,7 +174,7 @@ def test_recover_stale_requires_dead_pid_or_missing_pid(tmp_path):
 
 
 def test_recover_stale_other_host_is_conservative(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = _runner(con, root, [FINAL])
     rid = r.start("t1")
     con.execute("UPDATE runs SET host='another-host', heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
@@ -224,7 +224,7 @@ def test_advance_stops_after_idle_rounds(tmp_path):
 
 def test_close_requires_user_confirmation(tmp_path):
     """收尾条件满足 ⇒ 只是 awaiting_user_close;用户确认后才 closed。"""
-    con, dom, root = _setup(tmp_path)
+    _con, dom, _root = _setup(tmp_path)
     dom.add_surface("t1", "12080 /x", disposition="no_finding",
                     note="逐条读过该入口,无参数可达")
     hid = dom.add_hypothesis("t1", "h")
@@ -253,7 +253,7 @@ def test_request_user_input_is_legit_handback(tmp_path):
 def test_authorized_shell_runs_without_per_call_confirm(tmp_path):
     from fwcore.policy import Authz, Policy
     from fwcore.tools import ToolContext, default_registry
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     az = Authz(roots=[root], allow_shell=True, allow_high_risk=True, reason="研究授权")
     ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az))
     out = default_registry().call(ctx, "shell_exec", {"command": "echo hi"})
@@ -265,7 +265,7 @@ def test_revoked_or_expired_authorization_denies(tmp_path):
 
     from fwcore.policy import Authz, Policy
     from fwcore.tools import ToolContext, default_registry
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     for az in (Authz(roots=[root], revoked=True, reason="用户撤回"),
                Authz(roots=[root], expires_at=_t.time() - 1, reason="过期")):
         ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az))
@@ -276,7 +276,7 @@ def test_revoked_or_expired_authorization_denies(tmp_path):
 def test_external_tool_always_needs_confirm(tmp_path):
     from fwcore.policy import Authz, Policy
     from fwcore.tools import Registry, ToolContext, ToolSpec
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     reg = Registry()
     reg.register(ToolSpec("submit_report", "公开提交(外部)", {"type": "object", "properties": {}},
                           lambda ctx, a: {"status": "ok"}, risk="low", external=True))
@@ -303,7 +303,7 @@ def test_authz_root_check_does_not_sandbox_process(tmp_path):
     from fwcore.policy import Authz, Policy
     from fwcore.tools import ToolContext, default_registry
 
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     az = Authz(roots=[root], allow_shell=True, allow_high_risk=True)
     ctx = ToolContext(domain=dom, root=root, policy=Policy(authorization=az))
     outside = tmp_path.parent

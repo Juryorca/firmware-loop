@@ -28,14 +28,14 @@ def _ctx(dom, root, az=None):
 
 
 def test_default_deny_without_grant(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     out = default_registry().call(_ctx(dom, root), "shell_exec", {"command": "echo hi"})
     assert out["status"] == "cancelled"
     assert "authz grant" in out["error"], "默认拒绝时必须告诉用户怎么授权(可发现性)"
 
 
 def test_grant_allows_shell_within_roots(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     az_mod.grant(root, "t1", roots=[root], hours=1, note="本目标研究")
     az = az_mod.load(root, "t1")
     assert az is not None and az.active()
@@ -47,7 +47,7 @@ def test_grant_allows_shell_within_roots(tmp_path):
 
 
 def test_expired_and_revoked_deny(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     az_mod.grant(root, "t1", roots=[root], hours=1)
     az = az_mod.load(root, "t1")
     assert az is not None
@@ -63,7 +63,7 @@ def test_expired_and_revoked_deny(tmp_path):
 
 
 def test_runner_autoloads_grant_and_audits(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     az_mod.grant(root, "t1", roots=[root], hours=1, note="CI 授权")
     r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: ok", "tool_calls": []}]),
                limits=Limits(max_model_calls=2))       # 注意:policy 未显式给授权
@@ -75,7 +75,7 @@ def test_runner_autoloads_grant_and_audits(tmp_path):
 
 
 def test_describe_reports_authorized_state(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     assert az_mod.describe(root, "t1")["authorized"] is False
     az_mod.grant(root, "t1", roots=[root], hours=1)
     d = az_mod.describe(root, "t1")

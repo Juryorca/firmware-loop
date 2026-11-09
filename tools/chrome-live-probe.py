@@ -30,7 +30,7 @@ def main():
     try:
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, bufsize=1)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"ENV 起不来: {e}"); return 2
     err = []
     threading.Thread(target=lambda: [err.append(l) for l in p.stderr], daemon=True).start()
@@ -41,7 +41,7 @@ def main():
             line = p.stdout.readline()
             if not line: return None
             try: m = json.loads(line)
-            except Exception: continue
+            except Exception: continue  # noqa: BLE001, S112
             if m.get("id") == want: return m
         return None
     try:
@@ -65,7 +65,7 @@ def main():
         print("   " + txt[:300]); return 0
     finally:
         try: p.kill()
-        except Exception: pass
+        except Exception: pass  # noqa: BLE001, S110
 
 if __name__ == "__main__":
     sys.exit(main())

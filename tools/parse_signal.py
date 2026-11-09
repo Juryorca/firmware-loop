@@ -8,7 +8,8 @@ import sys
 log = sys.argv[1] if len(sys.argv) > 1 else "/tmp/emu_strace.log"
 mark = sys.argv[2] if len(sys.argv) > 2 else ""
 try:
-    text = open(log, errors="ignore").read()
+    with open(log, errors="ignore") as fh:
+        text = fh.read()
 except FileNotFoundError:
     print("MISS: no log"); sys.exit(1)
 pats = {

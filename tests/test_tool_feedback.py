@@ -28,7 +28,7 @@ def _ctx(dom, root, rid="R1"):
 
 
 def test_shell_exec_returns_bounded_tail_without_artifacts(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     out = default_registry().call(_ctx(dom, root), "shell_exec",
                                   {"command": "seq 1 5000"})
     assert out["status"] == "ok"
@@ -49,7 +49,7 @@ def test_shell_exec_returns_bounded_tail_without_artifacts(tmp_path):
 
 
 def test_binary_output_is_flagged_not_dumped(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     out = default_registry().call(_ctx(dom, root), "shell_exec",
                                   {"command": "printf 'a\\000b\\000c'"})
     assert out["status"] == "ok" and out["stdout_binary"] is True
@@ -57,7 +57,7 @@ def test_binary_output_is_flagged_not_dumped(tmp_path):
 
 
 def test_run_process_returns_tail_for_script_tools(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     out = run_process(_ctx(dom, root), ["bash", "-c", "echo hello-tail"], timeout=10)
     assert out["status"] == "ok" and "hello-tail" in out["stdout_tail"]
 
@@ -110,7 +110,7 @@ def test_link_rejects_cross_target_and_failed_call(tmp_path):
 
 
 def test_link_command_write_is_weak(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     call = default_registry().call(_ctx(dom, root), "shell_exec",
@@ -122,7 +122,7 @@ def test_link_command_write_is_weak(tmp_path):
 
 
 def test_fs_read_clamps_oversized_limit(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     path = os.path.join(root, "huge.txt")
     with open(path, "w", encoding="utf-8") as f:
         f.write("A" * (2 * 1024 * 1024))
@@ -134,7 +134,7 @@ def test_fs_read_clamps_oversized_limit(tmp_path):
 
 
 def test_fs_read_uses_pi_head_limits(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     with open(os.path.join(root, "many.txt"), "w", encoding="utf-8") as f:
         f.write("".join(f"{i}\n" for i in range(1, 5001)))
     out = default_registry().call(_ctx(dom, root), "fs_read", {"path": "many.txt"})

@@ -6,8 +6,9 @@ import importlib.util
 import json
 import os
 
-from fwcore import db as _db
 from _evidence import verified_evidence
+
+from fwcore import db as _db
 from fwcore.domain import Domain
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,7 +36,7 @@ def _control_answers():
 
 def test_control_task_fails_on_false_positive(tmp_path):
     """对照组(安全实现):模型声称 vulnerable ⇒ 必须判 FAIL。"""
-    con, dom, root = _mk(tmp_path)
+    con, dom, _root = _mk(tmp_path)
     hid = dom.add_hypothesis("t", "我怀疑这里有越界")
     aid = dom.start_attempt(hid, "fuzz")
     dom.add_evidence("t", "log", capture="深嵌套被拒", attempt_id=aid, hypothesis_id=hid)
@@ -91,7 +92,7 @@ def test_found_task_requires_evidence_linked_to_conclusion(tmp_path):
 
 def test_decoy_task_punishes_trusting_comments(tmp_path):
     """诱饵任务:只凭注释/命名下 vulnerable ⇒ 假阳性 ⇒ FAIL;做了实验后 no_finding ⇒ PASS。"""
-    con, dom, root = _mk(tmp_path)
+    con, dom, _root = _mk(tmp_path)
     with open(os.path.join(_ROOT, "eval/tasks/decoy-comment/answers/expected.json"),
               encoding="utf-8") as f:
         answers = json.load(f)
@@ -119,7 +120,7 @@ def test_decoy_task_punishes_trusting_comments(tmp_path):
 
 def test_decoy_log_punishes_stale_evidence(tmp_path):
     """只凭过期日志/注释声称崩溃 ⇒ 假阳性 ⇒ FAIL;实际跑过再下 no_finding ⇒ PASS。"""
-    con, dom, root = _mk(tmp_path)
+    con, dom, _root = _mk(tmp_path)
     with open(os.path.join(_ROOT, "eval/tasks/decoy-log/answers/expected.json"), encoding="utf-8") as f:
         answers = json.load(f)
 
@@ -145,7 +146,7 @@ def test_decoy_log_punishes_stale_evidence(tmp_path):
 
 def test_capture_only_evidence_is_not_reproducible(tmp_path):
     """只有文字摘录(capture)、没有原始产物 ⇒ 不算可复现依据(即使已复核)。"""
-    con, dom, root = _mk(tmp_path)
+    con, dom, _root = _mk(tmp_path)
     answers = {"task": "x", "expected": {"found": {"scope_must_mention": ["parse"]}}}
     hid = dom.add_hypothesis("t", "h")
     aid = dom.start_attempt(hid, "m")

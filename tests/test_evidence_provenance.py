@@ -58,7 +58,7 @@ def test_tool_call_evidence_carries_source_hash_version_and_is_unverified(tmp_pa
 
 
 def test_failed_tool_call_cannot_be_evidence_source(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     out = default_registry().call(_ctx(dom, root), "shell_exec", {"command": "exit 3", "timeout": 10})
     assert out["status"] != "ok"
     with pytest.raises(InvariantViolation):
@@ -107,7 +107,7 @@ def test_manual_evidence_is_unverified_until_checked(tmp_path):
 
 
 def test_evidence_missing_artifact_is_rejected(tmp_path):
-    con, dom, _root = _setup(tmp_path)
+    _con, dom, _root = _setup(tmp_path)
     with pytest.raises(NotFound):
         dom.add_evidence("t1", "tool_output", path="state/artifacts/nope.bin")
 
@@ -137,7 +137,7 @@ def test_rebaseline_tool_preserves_rows(tmp_path):
     con.close()
 
     r = subprocess.run([sys.executable, "tools/db_rebaseline.py", path],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "备份" in r.stdout or "backup" in r.stdout
 

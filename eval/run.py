@@ -24,11 +24,11 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcore import db as _db  # noqa: E402
-from fwcore.domain import Domain  # noqa: E402
-from fwcore.models import build_adapter, load_model_config  # noqa: E402
-from fwcore.policy import Authz, Policy  # noqa: E402
-from fwcore.runtime import Runner  # noqa: E402
+from fwcore import db as _db
+from fwcore.domain import Domain
+from fwcore.models import build_adapter, load_model_config
+from fwcore.policy import Authz, Policy
+from fwcore.runtime import Runner
 
 TASKS = os.path.join(ROOT, "eval", "tasks")
 
@@ -103,7 +103,7 @@ def _score(task: str, answers: dict, con, target_id: str) -> dict:
 
     if os.path.join(ROOT, "eval") not in _sys.path:
         _sys.path.insert(0, os.path.join(ROOT, "eval"))
-    import scoring  # noqa: PLC0415
+    import scoring
 
     out = scoring.score(answers, con, target_id)
     out["expected_why"] = out.get("expected_why") or answers["expected"].get("why", "")

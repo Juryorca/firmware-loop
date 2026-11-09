@@ -19,7 +19,7 @@ def test_derived_check_fails_without_db():
         with open(os.path.join(tdir, "notes.md"), "w", encoding="utf-8") as f:
             f.write("## 假设池\n- **H-01** 只有 Markdown,没有 DB\n")
         r = subprocess.run(["bash", "tools/derived_check.sh", NAME], cwd=ROOT,
-                           capture_output=True, text=True, timeout=180)
+                           capture_output=True, text=True, timeout=180, check=False)
         assert "缺权威状态" in r.stdout
         assert "=== derived_check: FAIL" in r.stdout
     finally:
@@ -31,7 +31,7 @@ def test_cli_gates_fails_for_unknown_target(tmp_path):
     env = dict(os.environ, PYTHONPATH=ROOT)
     r = subprocess.run([sys.executable, "-m", "fwcore", "--root", str(tmp_path),
                         "--db", db, "gates", "no-such-target"],
-                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 2
     assert "目标不存在" in r.stderr
 
@@ -52,7 +52,7 @@ def test_derived_check_no_notes_uses_db(tmp_path):
     _make_target(root)
     r = subprocess.run(["bash", "tools/derived_check.sh", "t1"], cwd=ROOT,
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
-                       text=True, timeout=180)
+                       text=True, timeout=180, check=False)
     assert "=== derived_check: PASS" in r.stdout
     assert "notes.md" not in r.stdout
 
@@ -64,7 +64,7 @@ def test_stale_notes_do_not_override_db(tmp_path):
         f.write("## 假设池\n- **H-01** 旧 notes 说还有未处理项\n")
     r = subprocess.run(["bash", "tools/derived_check.sh", "t1"], cwd=ROOT,
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
-                       text=True, timeout=180)
+                       text=True, timeout=180, check=False)
     assert "=== derived_check: PASS" in r.stdout
     assert "H-01" not in r.stdout.split("队列一致性")[-1]
 
@@ -90,7 +90,7 @@ def test_derived_check_closure_reads_db_not_notes(tmp_path):
     _make_target(root)
     r = subprocess.run(["bash", "tools/derived_check.sh", "t1", "--closure"], cwd=ROOT,
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
-                       text=True, timeout=180)
+                       text=True, timeout=180, check=False)
     assert "=== derived_check: FAIL" in r.stdout
     assert "没有任何假设" in r.stdout
     assert "notes.md" not in r.stdout
@@ -107,7 +107,7 @@ def test_derived_check_round_logs_are_per_record(tmp_path):
                 "本轮目标: H-02\n本轮: H-02 → no_finding + evidence")
     r = subprocess.run(["bash", "tools/derived_check.sh", "t1", "--closure"], cwd=ROOT,
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
-                       text=True, timeout=180)
+                       text=True, timeout=180, check=False)
     assert "2 条 round 记录逐条检查无异常" in r.stdout
     assert "轮结构: 最近" not in r.stdout
 
@@ -120,7 +120,7 @@ def test_derived_check_falls_through_empty_local_db(tmp_path):
     _db.connect(local).close()          # local DB exists but has no target
     r = subprocess.run(["bash", "tools/derived_check.sh", "t1"], cwd=ROOT,
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
-                       text=True, timeout=180)
+                       text=True, timeout=180, check=False)
     assert "=== derived_check: PASS" in r.stdout
 
 
@@ -130,12 +130,13 @@ def test_derived_check_db_only_target_after_real_init(tmp_path):
     r = subprocess.run(
         [sys.executable, "-m", "fwcore", "--root", root, "init", "db-only"],
         cwd=ROOT, env=env, capture_output=True, text=True, timeout=180,
+        check=False,
     )
     assert r.returncode == 0, r.stderr + r.stdout
     assert not os.path.isdir(os.path.join(root, "state", "db-only"))
     r = subprocess.run(["bash", "tools/derived_check.sh", "db-only"], cwd=ROOT,
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
-                       text=True, timeout=180)
+                       text=True, timeout=180, check=False)
     assert "目标目录不存在" not in r.stdout
     assert "=== derived_check: PASS" in r.stdout
 
@@ -149,7 +150,7 @@ def test_derived_check_release_marker_is_per_reference(tmp_path):
         f.write("- t1/not-there-a（已释放）\n- t1/not-there-b\n")
     r = subprocess.run(["bash", "tools/derived_check.sh", "t1"], cwd=ROOT,
                        env=dict(os.environ, FW_ROOT=root), capture_output=True,
-                       text=True, timeout=180)
+                       text=True, timeout=180, check=False)
     assert "断链引用未标注(1 处)" in r.stdout, r.stdout
     assert "not-there-b" in r.stdout
     assert "=== derived_check: FAIL" in r.stdout

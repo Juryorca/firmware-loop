@@ -14,7 +14,7 @@ GIN = 'github.com/gin-gonic/gin.(*RouterGroup).'
 METHODS = {'GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS','Any','Group','Use','Static','StaticFS','StaticFile','Handle','handle'}
 
 def sections(b):
-    out = subprocess.run(['readelf','-S','-W',b],capture_output=True,text=True).stdout
+    out = subprocess.run(['readelf','-S','-W',b],capture_output=True,text=True, check=False).stdout
     secs=[]
     for l in out.splitlines():
         m=re.match(r'\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)',l)
@@ -32,11 +32,11 @@ def vread(b, secs, addr, n):
 def main():
     b=sys.argv[1]; pat=sys.argv[2] if len(sys.argv)>2 else r'http_service\.\(\*HttpService\)\.(prepare|build).*Router'
     secs=sections(b)
-    syms=subprocess.run(['go','tool','nm',b],capture_output=True,text=True).stdout
+    syms=subprocess.run(['go','tool','nm',b],capture_output=True,text=True, check=False).stdout
     names=[l.split()[2] for l in syms.splitlines() if len(l.split())>=3 and re.search(pat,l.split()[2]) and l.split()[1] in ('t','T')]
     names=[n for n in names if not n.endswith('-fm')]
     for name in sorted(set(names)):
-        out=subprocess.run(['go','tool','objdump','-s','^'+re.escape(name)+'$',b],capture_output=True,text=True).stdout
+        out=subprocess.run(['go','tool','objdump','-s','^'+re.escape(name)+'$',b],capture_output=True,text=True, check=False).stdout
         if not out.strip(): continue
         print(f"\n### {name}")
         # pre-scan: map scopes.go closures -> captured scope string
@@ -64,7 +64,7 @@ def main():
                         if raw is not None: ptr_=raw.decode('utf-8','replace')
                         break
                 if ptr_ is not None: closure_scope[m2.group(1)]=ptr_
-        regs={}; lastcall=None; recent=[]; started=False
+        regs={}; recent=[]; started=False
         for line in out.splitlines():
             if line.startswith('TEXT '):
                 if started: break
@@ -93,7 +93,7 @@ def main():
             if m5:
                 meth=m5.group(1)
                 if meth in METHODS:
-                    def getstr(rp, rl):
+                    def getstr(rp, rl, regs=regs):
                         ptr=regs.get(rp); ln_=regs.get(rl)
                         if ptr and ptr[0]=='mem' and ln_ and ln_[0]=='imm':
                             raw=vread(b,secs,ptr[1],ln_[1] or 0)

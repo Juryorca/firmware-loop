@@ -91,7 +91,7 @@ def main() -> int:
     if args.elf and os.path.isfile(args.elf):
         print("\n## AArch64 解码质量")
         dis = subprocess.run(["aarch64-linux-gnu-objdump", "-d", "--no-show-raw-insn", args.elf],
-                             capture_output=True, text=True, timeout=300).stdout
+                             capture_output=True, text=True, timeout=300, check=False).stdout
         lines = [ln for ln in dis.splitlines() if re.match(r"\s*[0-9a-f]+:", ln)]
         udf = [ln for ln in lines if re.search(r"\b(udf|unallocated|\.inst)\b", ln)]
         pro = [ln for ln in lines if "stp\tx29, x30" in ln or "stp x29, x30" in ln]

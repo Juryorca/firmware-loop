@@ -50,7 +50,7 @@ def test_recheck_sha256_rejects_tampered_artifact(tmp_path):
 
 
 def test_text_only_claim_cannot_verify(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, dom, _root = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "m")
     ev = dom.add_evidence("t1", "log", capture="我看到了崩溃", attempt_id=aid, hypothesis_id=hid)
@@ -65,7 +65,7 @@ def test_text_only_claim_cannot_verify(tmp_path):
 
 
 def test_cross_check_needs_artifact_and_detail(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "m")
     ev = dom.add_evidence("t1", "log", capture="x", attempt_id=aid, hypothesis_id=hid)
@@ -93,7 +93,7 @@ def test_reproduce_attempt_requires_supported_same_hypothesis(tmp_path):
 
 
 def test_unknown_method_is_rejected(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     _hid, _aid, ev, _rel = _evidence_with_file(dom, root)
     with pytest.raises(InvariantViolation):
         dom.verify_evidence(ev, "looks-good-to-me")
@@ -111,7 +111,7 @@ def test_cli_verify_and_status_are_real_path(tmp_path):
 
     def cli(*a):
         return subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db, *a],
-                              capture_output=True, text=True, timeout=120, env=env)
+                              capture_output=True, text=True, timeout=120, env=env, check=False)
 
     assert cli("init", "t1", "--version", "5.0").returncode == 0
     hid = cli("hyp", "add", "t1", "参数溢出").stdout.strip()      # 输出是 id 文本
@@ -130,7 +130,7 @@ def test_cli_verify_and_status_are_real_path(tmp_path):
 
 def test_hash_only_verification_cannot_support_vulnerable(tmp_path):
     """只做 recheck-sha256(产物完整性)⇒ 不能给 vulnerable 结论当证明。"""
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     hid, aid, ev, _rel = _evidence_with_file(dom, root)
     dom.finish_attempt(aid, "supported", "复现成功", obs_outcome="none",
                        obs_reason="与预期一致,无新观察")

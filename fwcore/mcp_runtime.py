@@ -151,6 +151,8 @@ class MCPBridge:
                 "detail": self.config_error,
             }
         for spec in self.specs:
+            if self.closed:
+                return self.status
             if not spec.enabled:
                 self.status[spec.name] = {"status": "disabled", "state": "disabled"}
                 continue
@@ -184,6 +186,11 @@ class MCPBridge:
                     continue
                 tools = []
                 tools_error = str(e)[:300]
+            if self.closed:
+                # close() may race a slow background connect; never publish a
+                # client (or its process group) after the bridge was closed.
+                client.close()
+                return self.status
             self.clients[spec.name] = client
             names = []
             hidden_tools: list[str] = []
@@ -252,6 +259,8 @@ class MCPBridge:
                 st["tools_error"] = tools_error
                 st["resources"] = bool(client.supports_resources)
             self.status[spec.name] = st
+        if self.closed:
+            return self.status
         self._register_resource_tools()
         return self.status
 
@@ -260,9 +269,15 @@ class MCPBridge:
         return os.path.join(self.root, "state", "artifacts", "mcp-content")
 
     def _resource_servers(self) -> list[tuple[str, MCPClient]]:
+        if self.closed:
+            return []
         specs = {spec.name: spec for spec in self.specs}
         out: list[tuple[str, MCPClient]] = []
         for name, client in sorted(self.clients.items()):
+            if not getattr(client, "alive", True):
+                client = self._reconnect(name)
+                if client is None:
+                    continue
             if not client.supports_resources:
                 continue
             spec = specs.get(name)
@@ -595,6 +610,8 @@ class MCPBridge:
 
     def _reconnect(self, server: str):
         """Reconnect one server and restore its tools; never retries a tools/call."""
+        if self.closed:
+            return None
         spec = next((s for s in self.specs if s.name == server), None)
         if spec is None or not spec.enabled:
             return None
@@ -757,6 +774,7 @@ class MCPBridge:
 
     def close(self) -> None:
         """幂等:重复调用安全(关闭后 clients 为空、closed=True)。"""
+        self.closed = True
         if self._bg_thread is not None and self._bg_thread.is_alive():
             self._bg_thread.join(timeout=5.0)
         self.close_errors.clear()
@@ -768,7 +786,6 @@ class MCPBridge:
             finally:
                 self.clients.pop(name, None)
         self._unregister_all()
-        self.closed = True
 
     def health(self) -> dict:
         """看护/CLI 可观测:MCP 是否还活着、注册了哪些工具。"""

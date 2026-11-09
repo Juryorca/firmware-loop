@@ -104,6 +104,8 @@ def test_codemode_forwards_image_without_base64_text(tmp_path):
     _con, _dom, reg, ctx = _workspace(tmp_path)
     image_path = tmp_path / "image.png"
     image_path.write_bytes(b"not-a-real-png-but-a-file")
+    outside_path = tmp_path.parent / "outside.png"
+    outside_path.write_bytes(b"outside-workspace")
     reg.register(
         ToolSpec(
             "screenshot",
@@ -119,10 +121,15 @@ def test_codemode_forwards_image_without_base64_text(tmp_path):
         )
     )
     out = CodemodeExecutor(reg, ctx).run(
-        "const r = await tools.screenshot({}); image(r.images[0]); return 'done';"
+        "const r = await tools.screenshot({}); image(r.images[0]); "
+        f"image({{path: {outside_path.as_posix()!r}, mimeType: 'image/png'}}); "
+        "return 'done';"
     )
     assert out["status"] == "ok", out
-    assert any(p.get("type") == "image" for p in out["parts"])
+    assert [p for p in out["parts"] if p.get("type") == "image"] == [
+        p for p in out["parts"] if p.get("type") == "image" and p.get("path") == str(image_path)
+    ]
+    assert "outside the research workspace" in out["text"]
     assert "not-a-real-png" not in out["text"]
 
 

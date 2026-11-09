@@ -21,7 +21,7 @@ NOW = "2026-01-01T00:00:00.000000"
 def _run(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
     env = dict(os.environ, PYTHONPATH=ROOT)
     return subprocess.run([sys.executable, "-m", "fwcore", *args], cwd=ROOT, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=timeout, check=False)
 
 
 def _mk_workspace(tmp_path) -> tuple[str, str]:

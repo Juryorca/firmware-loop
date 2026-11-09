@@ -122,7 +122,7 @@ def test_ghidra_configured_missing_does_not_fallback(tmp_path, monkeypatch):
 
 
 def test_inventory_does_not_read_python_env_queue(monkeypatch, tmp_path):
-    import fwcore.pyenvs as pyenvs
+    from fwcore import pyenvs
     monkeypatch.setattr(pyenvs, "select", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not use pyenvs")))
     monkeypatch.setattr(pyenvs, "load", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not use pyenvs")))
     inv = inventory(str(tmp_path))

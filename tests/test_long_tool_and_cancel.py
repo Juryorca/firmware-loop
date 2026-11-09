@@ -77,7 +77,7 @@ def test_watchdog_still_pauses_when_tool_exceeds_grace(tmp_path):
 
 def test_cancel_marks_inflight_tool_cancelled(tmp_path):
     con, dom, root = _setup(tmp_path)
-    r, rid = _mk_run(con, dom, root)
+    _r, rid = _mk_run(con, dom, root)
     out_box: dict = {}
 
     def _run_tool():
@@ -110,7 +110,7 @@ def test_cancel_marks_inflight_tool_cancelled(tmp_path):
 
 
 def test_same_call_key_does_not_repeat_side_effect(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     path = os.path.join(root, "state", "artifacts", "side.txt")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     ctx = _ctx(dom, root)

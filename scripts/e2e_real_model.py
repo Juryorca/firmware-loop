@@ -20,12 +20,12 @@ from typing import Any
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from fwcore import db as _db  # noqa: E402
-from fwcore.domain import Domain  # noqa: E402
-from fwcore.model_client import to_api_messages  # noqa: E402
-from fwcore.models import build_adapter  # noqa: E402
-from fwcore.policy import Authz, Policy  # noqa: E402
-from fwcore.runtime import Runner  # noqa: E402
+from fwcore import db as _db
+from fwcore.domain import Domain
+from fwcore.model_client import to_api_messages
+from fwcore.models import build_adapter
+from fwcore.policy import Authz, Policy
+from fwcore.runtime import Runner
 
 
 def load_credentials() -> tuple[str, str, str]:
@@ -110,8 +110,8 @@ def render(con, *, model: str, base: str, phases: list[tuple[str, Any]],
         *[f"  - {a['id']} result={a['result']} note={(a['note'] or '')[:80]}" for a in atts],
         f"- 观察 {len(obs)} 条",
         *[f"  - {o['text'][:120]}" for o in obs],
-        f"- 证据 {len(evs)} 条(已复核 {sum(1 for e in evs if e['verified'])}),"
-        f"复核记录 {len(checks)} 条",
+        (f"- 证据 {len(evs)} 条(已复核 {sum(1 for e in evs if e['verified'])}),"
+        f"复核记录 {len(checks)} 条"),
         "",
         "## 结局",
         "",

@@ -52,7 +52,7 @@ def test_state_add_log_tool_registered_and_writes(tmp_path):
 
 def test_state_prompt_shows_recent_logs_and_review_count(tmp_path):
     """跨 run 连续性:决策/停止/下一步要进动态状态;needs_review 只报条数不灌正文。"""
-    con, dom, root = _mk(tmp_path)
+    _con, dom, root = _mk(tmp_path)
     dom.add_log("t", "decision", "选了 A 方案", "理由:B 代价更高")
     dom.add_log("t", "needs_review", "没归类的段落", "正文不应进提示")
     sp = Research(root, dom).state_prompt("t")

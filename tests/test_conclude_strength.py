@@ -20,7 +20,7 @@ def _setup(tmp_path):
 
 
 def test_no_finding_rejects_unverified_evidence(tmp_path):
-    con, dom, root, hid = _setup(tmp_path)
+    _con, dom, _root, hid = _setup(tmp_path)
     aid = dom.start_attempt(hid, "审计 call sites")
     eid = dom.add_evidence("t1", "log", capture="23 call sites", attempt_id=aid, hypothesis_id=hid)
     dom.finish_attempt(aid, "refuted", "无外部可控参数", evidence=[eid],
@@ -31,7 +31,7 @@ def test_no_finding_rejects_unverified_evidence(tmp_path):
 
 
 def test_no_finding_accepts_verified_evidence(tmp_path):
-    con, dom, root, hid = _setup(tmp_path)
+    _con, dom, root, hid = _setup(tmp_path)
     aid = dom.start_attempt(hid, "审计 call sites")
     os.makedirs(os.path.join(root, "report", "artifacts"), exist_ok=True)
     art = os.path.join(root, "report", "artifacts", "call_sites.txt")

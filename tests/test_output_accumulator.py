@@ -6,11 +6,11 @@ import os
 
 from fwcore.output import (
     DEFAULT_MAX_BYTES,
-    limit_structured_for_model,
-    truncate_middle,
     DEFAULT_MAX_LINES,
     OutputAccumulator,
+    limit_structured_for_model,
     truncate_head,
+    truncate_middle,
     truncate_tail,
 )
 

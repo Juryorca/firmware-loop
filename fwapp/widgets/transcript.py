@@ -45,7 +45,7 @@ class TranscriptView(VerticalScroll):
     def at_bottom(self) -> bool:
         try:
             return self.scroll_offset.y >= self.max_scroll_y - 2
-        except Exception:
+        except Exception:  # noqa: BLE001
             return True
 
     def append(self, widget) -> None:

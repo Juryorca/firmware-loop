@@ -31,8 +31,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from .output import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES,
-                     combined_output_text, truncate_tail)
+from .output import (
+    DEFAULT_MAX_BYTES,
+    DEFAULT_MAX_LINES,
+    combined_output_text,
+    truncate_tail,
+)
 from .tools import Registry, ToolContext, ToolSpec, _capture_process
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -416,7 +420,7 @@ def _cancel_requested(ctx: ToolContext) -> bool:
     try:
         row = ctx.domain.con.execute("SELECT handback_reason FROM runs WHERE id=?",
                                      (ctx.run_id,)).fetchone()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
     return bool(row and (row["handback_reason"] or "").startswith("user_stop"))
 
@@ -473,7 +477,7 @@ def build_spec(reg: Registry, root: str, m: Manifest) -> ToolSpec:
             if observer_fn is not None:
                 try:
                     out["observation"] = observer_fn(text)
-                except Exception as e:            # 解析失败不改变工具结论,但要如实标注
+                except Exception as e:            # 解析失败不改变工具结论,但要如实标注  # noqa: BLE001
                     out["observation"] = {"status": "unparsed",
                                           "error": f"{type(e).__name__}: {e}"}
         meta = dict(out.get("meta") or {})
@@ -633,7 +637,21 @@ def close_feature_adapters(reg: Registry) -> None:
     reg.closed_adapters = closed           # 幂等:重复调用不会重复 close
 
 
-__all__ = ["Manifest", "ManifestError", "load_manifests", "register_manifests", "select_tool",
-           "build_spec", "run_process", "sha256_file", "capability_index",
-           "register_feature", "feature_adapter", "FeatureAdapter", "PythonAdapter",
-           "ScriptAdapter", "Adapter", "close_feature_adapters"]
+__all__ = [
+    "Adapter",
+    "FeatureAdapter",
+    "Manifest",
+    "ManifestError",
+    "PythonAdapter",
+    "ScriptAdapter",
+    "build_spec",
+    "capability_index",
+    "close_feature_adapters",
+    "feature_adapter",
+    "load_manifests",
+    "register_feature",
+    "register_manifests",
+    "run_process",
+    "select_tool",
+    "sha256_file",
+]

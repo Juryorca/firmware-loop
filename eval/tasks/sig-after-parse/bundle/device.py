@@ -38,7 +38,8 @@ def main() -> int:
         print("device: config endpoint (pre-auth reachable)\nparses body, then verifies signature")
         return 0
     if len(sys.argv) >= 3 and sys.argv[1] == "request":
-        raw = open(sys.argv[2], "rb").read()
+        with open(sys.argv[2], "rb") as fh:
+            raw = fh.read()
         try:
             print(json.dumps(handle(raw, b""), ensure_ascii=False)[:200])
         except PermissionError as e:

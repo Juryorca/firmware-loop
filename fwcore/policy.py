@@ -43,9 +43,7 @@ class Authz:
 
         if self.revoked:
             return False
-        if self.expires_at is not None and (_t.time() > self.expires_at):
-            return False
-        return True
+        return not (self.expires_at is not None and _t.time() > self.expires_at)
 
     def describe(self) -> dict:
         return {"roots": list(self.roots), "allow_shell": self.allow_shell,
@@ -63,7 +61,7 @@ class Authz:
 class Policy:
     allow_high_risk: bool = False
     authorization: Authz | None = None
-    confirm: "Callable[[str], bool] | None" = None
+    confirm: Callable[[str], bool] | None = None
     max_timeout: float = 120.0
     sandbox_roots: list[str] = field(default_factory=list)
     require_path_within: bool = True
@@ -105,12 +103,12 @@ class Policy:
             try:
                 if not self.confirm(f"{tool} {args}"):
                     return False, "用户未确认外部动作"
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 return False, f"confirm 异常: {e}"
             return True, ""
-        if az is not None and az.allow_high_risk:
-            if risk == "high" and az.allow_shell:
-                return True, ""              # 授权范围内自主运行分析工具
+        if (az is not None and az.allow_high_risk
+                and risk == "high" and az.allow_shell):
+            return True, ""                  # 授权范围内自主运行分析工具
         if risk == "high":
             if self.authorization is None and self.confirm is None and not self.allow_high_risk:
                 # 可发现性:没有授权文件时要告诉用户**怎么授权**(而不是只说"被拒")
@@ -122,7 +120,7 @@ class Policy:
                 try:
                     if not self.confirm(f"{tool} {args}"):
                         return False, "用户未确认"
-                except Exception as e:  # confirm 自己坏了也不能放行
+                except Exception as e:  # confirm 自己坏了也不能放行  # noqa: BLE001
                     return False, f"confirm 异常: {e}"
         return True, ""
 

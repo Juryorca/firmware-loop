@@ -197,7 +197,7 @@ class Registry:
                     " VALUES(?,?,?,?,?,'running',?)",
                     (cid, call_key, ctx.run_id, name, json.dumps(args, ensure_ascii=False), _now()),
                 )
-        except Exception as e:      # 唯一索引冲突 = 另一个执行者已在跑同一次调用
+        except Exception as e:      # 唯一索引冲突 = 另一个执行者已在跑同一次调用  # noqa: BLE001
             return {"status": "cancelled", "error": f"重复调用被拒(幂等保护): {e}"}
         out: dict[str, Any] = {}
         try:
@@ -205,7 +205,7 @@ class Registry:
             status = out.get("status", "ok")
             if status not in ("ok", "error", "timeout", "cancelled"):
                 status = "ok"
-        except Exception as e:  # 工具抛异常 = 工具失败,不是研究结论
+        except Exception as e:  # 工具抛异常 = 工具失败,不是研究结论  # noqa: BLE001
             out = {"status": "error", "error": f"{type(e).__name__}: {e}"}
             status = "error"
         # 运行被取消时,在飞工具的中断是**取消**而不是工具失败:
@@ -442,7 +442,7 @@ def _cancel_requested(ctx) -> bool:
     try:
         row = ctx.domain.con.execute("SELECT handback_reason FROM runs WHERE id=?",
                                      (ctx.run_id,)).fetchone()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return False
     return bool(row and (row["handback_reason"] or "").startswith("user_stop"))
 
@@ -518,7 +518,7 @@ def fs_read(ctx: ToolContext, args: dict) -> dict:
     pol = ctx.policy or Policy()
     try:
         p = pol.resolve_path(ctx.root, args["path"])
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": f"路径不合法: {e}"}
     rel = os.path.relpath(p, ctx.root)
     if _is_internal(rel):
@@ -562,7 +562,7 @@ def fs_hash(ctx: ToolContext, args: dict) -> dict:
     pol = ctx.policy or Policy()
     try:
         p = pol.resolve_path(ctx.root, args["path"])
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": f"路径不合法: {e}"}
     rel = os.path.relpath(p, ctx.root)
     if _is_internal(rel):
@@ -657,7 +657,7 @@ def state_add_evidence(ctx: ToolContext, args: dict) -> dict:
             info = ctx.domain.link_evidence_source(eid, tid, note="建证时按路径判定来源")
             link_relation = info.get("relation")
             out_link = f"{link_relation}:{tid}"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             weak_hint = f"relation-unproven: {str(e)[:120]}"
     out = {"status": "ok", "evidence_id": eid, "linked_tool_call_id": tid,
            "relation": relation, "link_relation": link_relation, "verified": False,

@@ -28,7 +28,7 @@ def _mk(tmp_path):
 
 
 def test_watchdog_pauses_stalled_run_and_kills_tool_process_group(tmp_path):
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, hid = _mk(tmp_path)
     # 模拟"工具进程还在跑、循环已经卡死"
     child = subprocess.Popen(["sleep", "120"], start_new_session=True)
     try:
@@ -54,7 +54,7 @@ def test_watchdog_pauses_stalled_run_and_kills_tool_process_group(tmp_path):
 
 
 def test_watchdog_pauses_on_db_growth(tmp_path):
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, dom, root, rid, _hid = _mk(tmp_path)
     dom.con.execute("INSERT INTO tool_calls(id,run_id,tool,args,status,created_at)"
                     " VALUES('TC1',?,'x','{}','ok','2026-01-01')", (rid,))
     acts = Watchdog(con, root, Limits(max_db_bytes=1)).scan_once()
@@ -63,7 +63,7 @@ def test_watchdog_pauses_on_db_growth(tmp_path):
 
 
 def test_watchdog_leaves_healthy_run_alone(tmp_path):
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     con.execute("UPDATE runs SET heartbeat_at=? WHERE id=?",
                 (time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()), rid))
     assert Watchdog(con, root, Limits(), heartbeat_timeout_s=600).scan_once() == []
@@ -73,7 +73,7 @@ def test_watchdog_leaves_healthy_run_alone(tmp_path):
 def test_watchdog_daemon_is_independent_and_stoppable(tmp_path):
     import threading
 
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     stop = threading.Event()
     wd = Watchdog(con, root, Limits(), poll_s=0.05)
     th = wd.start_daemon(stop)
@@ -89,7 +89,7 @@ def test_watchdog_daemon_is_independent_and_stoppable(tmp_path):
 
 def test_daemon_uses_own_connection_from_thread(tmp_path):
     """sqlite Connection 不能跨线程使用 ⇒ 守护线程必须用**自己的**连接(db_path)。"""
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     # 把心跳做旧,让看护该动手
     con.execute("UPDATE runs SET heartbeat_at='2000-01-01T00:00:00+00:00', pid=999999 WHERE id=?", (rid,))
     db_path = os.path.join(root, "state", "fwcore.sqlite3")
@@ -112,7 +112,7 @@ def test_daemon_uses_own_connection_from_thread(tmp_path):
 
 def test_daemon_stops_after_consecutive_errors(tmp_path):
     """看护自身持续失败时不能空转:连续 N 次失败后自行停止并记录原因。"""
-    con, dom, root, rid, hid = _mk(tmp_path)
+    _con, _dom, root, _rid, _hid = _mk(tmp_path)
     bogus = os.path.join(root, "state")          # 一个**目录**:sqlite 打不开 ⇒ 每次扫描都抛错
     wd = Watchdog(con=None, root=root, limits=Limits(), db_path=bogus,
                   poll_s=0.01, max_consecutive_errors=3)
@@ -163,7 +163,7 @@ def test_kill_pgids_refuses_reused_pid(tmp_path):
     """pgid 已被复用(starttime 不匹配)⇒ 绝不能杀;匹配才杀。"""
     from fwcore.tools import _proc_starttime
 
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     child = subprocess.Popen(["sleep", "60"], start_new_session=True)
     try:
         pg = os.getpgid(child.pid)
@@ -192,7 +192,7 @@ def test_runner_progress_exposes_watchdog_health(tmp_path):
     from fwcore.models import ScriptedAdapter
     from fwcore.runtime import Runner
 
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: 收工", "tool_calls": []}]),
                limits=Limits(max_model_calls=2), policy=Policy(allow_high_risk=True),
                watchdog=True, watchdog_poll_s=0.02)
@@ -205,7 +205,7 @@ def test_runner_progress_exposes_watchdog_health(tmp_path):
 
 def test_watchdog_does_not_clobber_finished_run(tmp_path):
     """扫描到更新之间 run 已 finished ⇒ 看护不能把它改成 paused(条件更新保护)。"""
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     con.execute("UPDATE runs SET state='finished', pid=999999, pid_starttime=1,"
                 " heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rid,))
     acts = Watchdog(con, root, Limits(), heartbeat_timeout_s=60).scan_once()
@@ -217,7 +217,7 @@ def test_watchdog_does_not_clobber_finished_run(tmp_path):
 
 def test_watchdog_stale_branch_does_not_clobber_finished_run(tmp_path):
     """owner 还活着但心跳过期(长工具/挂起)时,stale 分支也不能把 finished 改成 paused。"""
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     con.execute("UPDATE runs SET state='finished', pid=?, pid_starttime=?, "
                 " heartbeat_at='2000-01-01T00:00:00+00:00' WHERE id=?",
                 (os.getpid(), _proc_starttime(os.getpid()), rid))
@@ -232,7 +232,7 @@ def test_watchdog_does_not_kill_pgids_of_finished_run(tmp_path):
     """扫描与更新之间 run 已 finished ⇒ 不能提前 kill 它的进程组(会误杀新 owner 的工具)。"""
     from fwcore.watchdog import _proc_starttime as _pst
 
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     child = subprocess.Popen(["sleep", "60"], start_new_session=True)
     try:
         art = os.path.join(root, "state", "artifacts", rid)
@@ -250,7 +250,7 @@ def test_watchdog_does_not_kill_pgids_of_finished_run(tmp_path):
 
 def test_recover_stale_does_not_kill_pgids_cross_host(tmp_path):
     """跨主机 recover:pgid 是主机本地概念,不能按别的 host 写的 .pgids 杀本机进程。"""
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     child = subprocess.Popen(["sleep", "60"], start_new_session=True)
     try:
         art = os.path.join(root, "state", "artifacts", rid)
@@ -270,7 +270,7 @@ def test_recover_stale_does_not_kill_pgids_cross_host(tmp_path):
 
 def test_kill_pgids_skips_entries_without_starttime(tmp_path):
     """旧格式 .pgids(只有 pgid)无法证明未被复用 ⇒ 看护不得 kill(防误伤无关进程)。"""
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     child = subprocess.Popen(["sleep", "60"], start_new_session=True)
     try:
         art = os.path.join(root, "state", "artifacts", rid)
@@ -287,7 +287,7 @@ def test_kill_pgids_skips_entries_without_starttime(tmp_path):
 
 def test_recover_stale_does_not_kill_without_recorded_pid(tmp_path):
     """同主机但 run 没有 pid 记录(旧库):没有 owner 证据 ⇒ 只暂停,不杀 pgid。"""
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     child = subprocess.Popen(["sleep", "60"], start_new_session=True)
     try:
         art = os.path.join(root, "state", "artifacts", rid)
@@ -308,7 +308,7 @@ def test_watchdog_scan_does_not_pause_owner_taken_over_mid_scan(tmp_path, monkey
     """扫描读到旧 owner(stale)后、更新前发生接管:旧扫描不能暂停/误杀新 owner。"""
     import fwcore.watchdog as wdm
 
-    con, dom, root, rid, hid = _mk(tmp_path)
+    con, _dom, root, rid, _hid = _mk(tmp_path)
     child = subprocess.Popen(["sleep", "60"], start_new_session=True)
     try:
         art = os.path.join(root, "state", "artifacts", rid)

@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from . import db as _db
 from .limits import MB, Limits
 
-
 log = logging.getLogger("fwcore.watchdog")
 
 
@@ -296,4 +295,4 @@ def _now() -> str:
     return _d.datetime.now(_d.UTC).isoformat(timespec="seconds")
 
 
-__all__ = ["Watchdog", "MB"]
+__all__ = ["MB", "Watchdog"]

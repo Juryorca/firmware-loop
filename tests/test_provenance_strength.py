@@ -36,7 +36,7 @@ def _ws(tmp_path):
 
 
 def test_observation_relation_is_classified(tmp_path):
-    con, root, dom, art = _ws(tmp_path)
+    con, root, dom, _art = _ws(tmp_path)
     o1 = dom.add_observation("t1", "直接读到的地址", tool_call_id="TC-D",
                              path="report/artifacts/out.txt")
     o2 = dom.add_observation("t1", "命令里提到过", tool_call_id="TC-W",
@@ -50,7 +50,7 @@ def test_observation_relation_is_classified(tmp_path):
 
 
 def test_assess_does_not_count_weak_as_direct(tmp_path):
-    con, root, dom, art = _ws(tmp_path)
+    con, root, dom, _art = _ws(tmp_path)
     hid = dom.add_hypothesis("t1", "op 分发是否检查权限", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "静态")
     eid = dom.add_evidence("t1", "log", path="report/artifacts/out.txt", attempt_id=aid,
@@ -77,7 +77,7 @@ def test_assess_does_not_count_weak_as_direct(tmp_path):
 
 def test_relation_survives_reopen(tmp_path):
     """来源强度落库而不是内存态:重开数据库仍是 direct/weak 原值。"""
-    con, root, dom, art = _ws(tmp_path)
+    con, root, dom, _art = _ws(tmp_path)
     o1 = dom.add_observation("t1", "直接", tool_call_id="TC-D", path="report/artifacts/out.txt")
     o2 = dom.add_observation("t1", "弱", tool_call_id="TC-W", path="report/artifacts/out.txt")
     con.close()

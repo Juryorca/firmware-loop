@@ -168,8 +168,8 @@ def test_malformed_tools_list_is_reported_without_crashing(tmp_path):
 
 
 def test_runner_executes_mcp_tool_and_records_provider(tmp_path):
-    spec, cfg = _spec(tmp_path)
-    con, dom, root = _setup(tmp_path)
+    _, cfg = _spec(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     call = {
         "id": "c1",
         "type": "function",
@@ -221,7 +221,7 @@ def test_unreachable_server_is_reported_but_does_not_break_run(tmp_path):
         ),
         encoding="utf-8",
     )
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = Runner(
         con,
         root,
@@ -240,7 +240,7 @@ def test_unreachable_server_is_reported_but_does_not_break_run(tmp_path):
 
 def test_mcp_tool_error_and_timeout_are_distinct(tmp_path):
     spec, _ = _spec(tmp_path)
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     reg = Registry()
     b = MCPBridge(root=root, registry=reg, specs=[spec], call_timeout=0.5)
     b.start()
@@ -266,7 +266,7 @@ def test_mcp_tool_error_and_timeout_are_distinct(tmp_path):
 
 def test_mcp_large_result_uses_pi_middle_truncation_and_structured(tmp_path):
     spec, _ = _spec(tmp_path)
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     reg = Registry()
     b = MCPBridge(root=root, registry=reg, specs=[spec])
     b.start()
@@ -297,7 +297,7 @@ def test_mcp_large_result_uses_pi_middle_truncation_and_structured(tmp_path):
 
 def test_mcp_large_structured_is_bounded_and_full_json_saved(tmp_path):
     spec, _ = _spec(tmp_path)
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     reg = Registry()
     b = MCPBridge(root=root, registry=reg, specs=[spec])
     b.start()
@@ -332,7 +332,7 @@ def test_mcp_large_structured_is_bounded_and_full_json_saved(tmp_path):
 
 def test_mcp_large_error_uses_middle_truncation_and_saves_full(tmp_path):
     spec, _ = _spec(tmp_path)
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     reg = Registry()
     b = MCPBridge(root=root, registry=reg, specs=[spec])
     b.start()

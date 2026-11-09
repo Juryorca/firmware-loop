@@ -62,7 +62,7 @@ def test_mirror_due_is_target_scoped(tmp_path):
 def test_dangling_attachment_refs(tmp_path):
     from fwcore.gates_db import dangling_attachment_refs
 
-    con, dom, root = _mk(tmp_path)
+    con, _dom, root = _mk(tmp_path)
     rdir = tmp_path / "state" / "t1" / "report"
     rdir.mkdir(parents=True)
     (rdir / "a.md").write_text("![x](attachments/pkg/a.bin)\n", encoding="utf-8")

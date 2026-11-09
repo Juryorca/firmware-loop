@@ -140,12 +140,12 @@ def _disp_of(s: str) -> str | None:
 
 def _verdict_of(status: str) -> tuple[str, str | None]:
     s = status or ""
-    if re.search(r"成立|vulnerable|VR-\d", s, re.I):
+    if re.search(r"成立|vulnerable|VR-\d", s, re.IGNORECASE):
         return "concluded", "vulnerable"
-    if re.search(r"定论|结论", s, re.I) and re.search(
-            r"No finding|无发现|无漏洞|否证|已解除|已覆盖|已解决|已排除", s, re.I):
+    if re.search(r"定论|结论", s, re.IGNORECASE) and re.search(
+            r"No finding|无发现|无漏洞|否证|已解除|已覆盖|已解决|已排除", s, re.IGNORECASE):
         return "concluded", "no_finding"
-    if re.search(r"降级|Blocked|放弃|搁置", s, re.I):
+    if re.search(r"降级|Blocked|放弃|搁置", s, re.IGNORECASE):
         return "dropped", None
     return "open", None
 
@@ -339,7 +339,7 @@ def parse_evidence(notes: str, tdir: str = "") -> list[dict]:
         m = RE_BULLET_H.match(ln)
         if m:
             cur_h = m.group(1)
-        if not re.search(r"证据|evidence|复核|复现|截图", ln, re.I):
+        if not re.search(r"证据|evidence|复核|复现|截图", ln, re.IGNORECASE):
             continue
         for p in RE_PATH.findall(ln):
             path = _material_path(tdir, p)
@@ -347,8 +347,8 @@ def parse_evidence(notes: str, tdir: str = "") -> list[dict]:
                 continue
             out.append({"path": path, "text": _clean(ln)[:500],
                         "hypothesis_raw": cur_h, "line": i,
-                        "kind": ("screenshot" if re.search(r"\.(png|jpe?g|gif|webp)$", path, re.I)
-                                 else "poc" if re.search(r"poc|exploit", path, re.I) else "file")})
+                        "kind": ("screenshot" if re.search(r"\.(png|jpe?g|gif|webp)$", path, re.IGNORECASE)
+                                 else "poc" if re.search(r"poc|exploit", path, re.IGNORECASE) else "file")})
     return out
 
 
@@ -537,7 +537,7 @@ def migrate_target(con: sqlite3.Connection, root: str, name: str, dry_run: bool 
                     "notes,verified,created_at) VALUES(?,?,?,?,?,?,?,?,0,?)",
                     (eid, tid, hid_map.get(ev["hypothesis_raw"]), ev["kind"], meta["version"],
                      ev["path"], sha, ev["text"], created))
-                if re.search(r"复核|复现|verify", ev["text"], re.I):
+                if re.search(r"复核|复现|verify", ev["text"], re.IGNORECASE):
                     chk = _det("K", name, ev["path"], ev["line"])
                     c.execute("INSERT OR IGNORE INTO evidence_checks(id,evidence_id,method,"
                               "artifact_path,artifact_sha256,detail,created_at) VALUES(?,?,?,?,?,?,?)",

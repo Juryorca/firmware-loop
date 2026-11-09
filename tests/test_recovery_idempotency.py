@@ -32,7 +32,7 @@ def _setup(tmp_path):
 
 
 def test_resume_does_not_repeat_side_effect_after_lost_checkpoint(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     r = Runner(con, root, ScriptedAdapter(script=[{"content": "", "tool_calls": [CALL]},
                                                  {"content": "FINAL: 第一轮结束", "tool_calls": []}]),
                limits=Limits(max_model_calls=4), policy=Policy(allow_high_risk=True))
@@ -60,7 +60,7 @@ def test_resume_does_not_repeat_side_effect_after_lost_checkpoint(tmp_path):
 
 def test_partial_tool_state_is_visible_not_silently_ok(tmp_path):
     """工具调用若停在 running(进程被杀),状态必须如实为 running,不能伪装成 ok。"""
-    con, dom, root = _setup(tmp_path)
+    con, _dom, _root = _setup(tmp_path)
     con.execute("INSERT INTO tool_calls(id,call_key,run_id,tool,args,status,created_at)"
                 " VALUES('TC-x','crashed-call','R-x','shell_exec','{}','running','2026-01-01')")
     st = con.execute("SELECT status FROM tool_calls WHERE id='TC-x'").fetchone()["status"]

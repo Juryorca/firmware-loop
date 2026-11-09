@@ -154,7 +154,7 @@ class AgentSession:
                     self.services.domain.add_conversation(
                         run, "user", text, status="cancelled", client_id=cid,
                         meta={"source": "tui-queue", "cancelled": True})
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     self.emit("error", f"关闭时排队消息状态写入失败: {e}")
         self._closed = True
         self._q.put(None)
@@ -216,7 +216,7 @@ class AgentSession:
                     self.services.domain.add_conversation(
                         run_id, "user", text, status="queued",
                         client_id=client_id, meta={"source": "tui-queue"})
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     self.emit("error", f"排队消息写入失败(仍会尝试执行): {e}")
             with self._lock:
                 self._pending.append((text, client_id, target, run_id))
@@ -339,7 +339,7 @@ class AgentSession:
                 ctl.cancel(rid, reason)
                 paused = True
                 break
-            except Exception as e:              # LockedError 等:控制已发,再试落库
+            except Exception as e:              # LockedError 等:控制已发,再试落库  # noqa: BLE001
                 last_error = e
                 time.sleep(0.05)
         if not (closed or paused):
@@ -354,7 +354,7 @@ class AgentSession:
                 self.services.domain.add_conversation(
                     queued_run or rid, "user", text, status="cancelled", client_id=cid,
                     meta={"source": "tui-queue", "cancelled": True})
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 self.emit("error", f"取消排队消息状态写入失败: {e}")
         self.emit("cancelled", reason, run=rid)
         return True
@@ -370,7 +370,7 @@ class AgentSession:
                     self.services.domain.add_conversation(
                         run, "user", text, status="cancelled", client_id=cid,
                         meta={"source": "tui-queue", "cancelled": True})
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     self.emit("error", f"取回排队消息状态写入失败: {e}")
         return [item[0] for item in items]
 
@@ -386,7 +386,7 @@ class AgentSession:
                 runner = self._make_runner(con)
                 self._runner_ref = runner
                 self._runner_model_name = self.model_name
-                runner._ensure_mcp(None, background=True)  # noqa: SLF001 - session-owned runner
+                runner._ensure_mcp(None, background=True)
             except Exception as e:  # noqa: BLE001 - app layer must surface setup errors
                 self._last_error = str(e)
             while not self._closed:
@@ -420,7 +420,7 @@ class AgentSession:
                         runner = self._make_runner(con)
                         self._runner_ref = runner
                         self._runner_model_name = self.model_name
-                except Exception as e:                 # 应用层兜底:显示,不吞
+                except Exception as e:                 # 应用层兜底:显示,不吞  # noqa: BLE001
                     self._last_error = str(e)
                     self.emit("error", str(e), cmd=kind)
                 finally:
@@ -777,8 +777,7 @@ class AgentSession:
                     else:
                         anchor = max((i for i, c in enumerate(conv) if c["role"] == "user"),
                                      default=last_anchor)
-                        if anchor < last_anchor:
-                            anchor = last_anchor
+                        anchor = max(anchor, last_anchor)
                     if ex["content"]:
                         add_after(anchor, TranscriptItem("assistant", ex["content"]))
                     last_anchor = anchor

@@ -41,7 +41,7 @@ def _setup(tmp_path):
 
 
 def test_derived_and_queue_are_structured(tmp_path):
-    con, dom, root, reg, ctx = _setup(tmp_path)
+    con, _dom, _root, reg, ctx = _setup(tmp_path)
     d = reg.call(ctx, "research_derived", {"target": "t1"})
     obs = d["observation"]
     assert obs["status"] == "fail" and obs["fail_count"] == 1 and obs["ok_count"] == 1
@@ -55,7 +55,7 @@ def test_derived_and_queue_are_structured(tmp_path):
 
 
 def test_signal_and_fuzz_structured(tmp_path):
-    con, dom, root, reg, ctx = _setup(tmp_path)
+    _con, _dom, _root, reg, ctx = _setup(tmp_path)
     sig = reg.call(ctx, "research_signal", {"log": "/dev/null"})["observation"]
     assert sig["status"] == "hit" and sig["hit_count"] == 1
     fz = reg.call(ctx, "fuzz_cgi", {"cgi": "/bin/true", "rootfs": "/",
@@ -92,7 +92,7 @@ def test_ida_query_structured_json_and_fallback(tmp_path):
 
 
 def test_ida_tool_registered_and_uses_lifecycle(tmp_path, monkeypatch):
-    con, dom, root, reg, ctx = _setup(tmp_path)
+    con, _dom, root, _reg, ctx = _setup(tmp_path)
     monkeypatch.setenv("FW_IDA_PROBE", "0")     # 测试里不探测真实 Windows supervisor
     _stub(root, "tools/ida_start.sh", '#!/bin/sh\necho started\n')
     _stub(root, "tools/ida_call.sh", '#!/bin/sh\necho "{\\"functions\\": [], \\"count\\": 0}"\n')
@@ -116,7 +116,7 @@ def test_ghidra_missing_capability_is_honest_error(tmp_path, monkeypatch):
             return (None, type("P", (), {"status": "missing", "detail": "未安装"})())
 
     monkeypatch.setattr(pv, "default_capabilities", lambda root: {"debug.ghidra": _Missing()})
-    con, dom, root, reg, ctx = _setup(tmp_path)
+    _con, _dom, root, _reg, ctx = _setup(tmp_path)
     _stub(root, "tools/ghidra_scripts/dummy.java", "// stub\n")
     # 统一契约:工具由 manifest 声明,入口脚本缺失就不注册(诚实报告能力缺失)
     _stub(root, "tools/ghidra_run.sh", '#!/bin/sh\necho stub\n')
@@ -131,7 +131,7 @@ def test_ghidra_missing_capability_is_honest_error(tmp_path, monkeypatch):
 
 def test_ghidra_structured_when_runner_exists(tmp_path, monkeypatch):
     """存在 tools/ghidra_run.sh 且能力可用时:输出结构化 + 记录 provider。"""
-    con, dom, root, reg, ctx = _setup(tmp_path)
+    con, _dom, root, _reg, ctx = _setup(tmp_path)
     _stub(root, "tools/ghidra_scripts/dummy.java", "// stub\n")
     _stub(root, "tools/ghidra_run.sh", '#!/bin/sh\necho "{\\"functions\\": 3, \\"decompiled\\": true}"\n')
     # 让能力探针假装可用(不依赖本机是否装 Ghidra)

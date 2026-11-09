@@ -17,7 +17,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def _run(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
     env = dict(os.environ, PYTHONPATH=ROOT)
     return subprocess.run([sys.executable, "-m", "fwcore", *args], cwd=ROOT, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, timeout=timeout, check=False)
 
 
 def test_help_runs():
@@ -80,7 +80,7 @@ def test_run_command_works_end_to_end(tmp_path):
     env = dict(os.environ, PYTHONPATH=ROOT, FW_TARGET="t")
     r = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
                         "run", "t", "--model", "scripted"],
-                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 0, r.stderr[-800:]
     out = json.loads(r.stdout)
     assert out["state"] in ("finished", "paused")
@@ -96,19 +96,19 @@ def test_resume_and_advance_cli_paths(tmp_path):
 
     r1 = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
                          "run", "t", "--model", "scripted", "--steps", "1"],
-                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
     assert r1.returncode == 0, r1.stderr[-500:]
     rid = json.loads(r1.stdout)["run_id"]
 
     r2 = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
                          "resume", rid, "--model", "scripted", "--steps", "1"],
-                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
     assert r2.returncode == 0, r2.stderr[-500:]
     assert "UnboundLocalError" not in r2.stderr
 
     r3 = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
                          "advance", "t", "--model", "scripted", "--rounds", "1", "--steps", "1"],
-                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+                        cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
     assert r3.returncode == 0, r3.stderr[-500:]
     assert "UnboundLocalError" not in r3.stderr
 
@@ -121,9 +121,9 @@ def test_cli_watchdog_flags_exist_and_no_watchdog_runs(tmp_path):
     assert _run("--root", root, "--db", db, "init", "t", "--version", "1").returncode == 0
     r = subprocess.run([sys.executable, "-m", "fwcore", "--root", root, "--db", db,
                         "run", "t", "--model", "scripted", "--steps", "1", "--no-watchdog"],
-                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=120, check=False)
     assert r.returncode == 0, r.stderr[-500:]
     # 帮助里必须出现默认开关(可发现性)
     h = subprocess.run([sys.executable, "-m", "fwcore", "run", "--help"],
-                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+                       cwd=ROOT, env=env, capture_output=True, text=True, timeout=60, check=False)
     assert "--no-watchdog" in h.stdout and "--watchdog-poll" in h.stdout

@@ -15,8 +15,7 @@ from fwcore import db as _db
 from fwcore import mcp_content
 from fwcore.domain import Domain
 from fwcore.mcp_client import ServerSpec
-from fwcore.mcp_content import (MAX_IMAGE_BYTES, MAX_IMAGES_PER_RESULT,
-                                 content_parts)
+from fwcore.mcp_content import MAX_IMAGE_BYTES, MAX_IMAGES_PER_RESULT, content_parts
 from fwcore.mcp_runtime import MCPBridge
 from fwcore.model_client import to_api_messages
 from fwcore.models import OpenAICompatAdapter, OpenAIResponsesAdapter, ScriptedAdapter
@@ -183,7 +182,7 @@ def _cleanup(out):
 
 
 def test_mcp_mixed_text_and_image_are_ordered(tmp_path):
-    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
+    _con, _dom, _root, _cfg, reg, bridge, ctx = _start(tmp_path)
     out: dict = {}
     try:
         out = reg.call(ctx, "mcp__fake__mix", {})
@@ -199,7 +198,7 @@ def test_mcp_mixed_text_and_image_are_ordered(tmp_path):
 
 
 def test_mcp_multiple_images_and_long_text_keep_images(tmp_path):
-    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
+    _con, _dom, _root, _cfg, reg, bridge, ctx = _start(tmp_path)
     long: dict = {}
     try:
         multi = reg.call(ctx, "mcp__fake__multi", {})
@@ -216,12 +215,12 @@ def test_mcp_multiple_images_and_long_text_keep_images(tmp_path):
 
 
 def test_mcp_error_with_image_and_invalid_images_are_honest(tmp_path):
-    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
+    _con, _dom, _root, _cfg, reg, bridge, ctx = _start(tmp_path)
     err: dict = {}
     try:
         err = reg.call(ctx, "mcp__fake__errimg", {})
         assert err["status"] == "error" and len(_paths(err)) == 1
-        assert err["text"] if "text" in err else True
+        assert err.get("text", True)
         bad = reg.call(ctx, "mcp__fake__badimg", {})
         assert bad["status"] == "ok" and not _paths(bad)
         assert "invalid base64" in bad["text"] and "unsupported MIME" in bad["text"]
@@ -231,7 +230,7 @@ def test_mcp_error_with_image_and_invalid_images_are_honest(tmp_path):
 
 
 def test_resource_tools_list_pages_read_types_and_link(tmp_path):
-    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
+    _con, _dom, _root, _cfg, reg, bridge, ctx = _start(tmp_path)
     try:
         names = {s["name"] for s in reg.describe()}
         assert {"list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"} <= names
@@ -297,7 +296,7 @@ def test_content_parts_rejects_oversized_audio(tmp_path, monkeypatch):
 
 
 def test_resource_tools_inherit_external_gate(tmp_path):
-    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path, external=None)
+    _con, dom, root, _cfg, reg, bridge, _ctx = _start(tmp_path, external=None)
     try:
         assert reg.specs["read_mcp_resource"].external is True
         strict = ToolContext(domain=dom, root=root,
@@ -345,7 +344,7 @@ def test_model_adapter_receives_images_without_fake_user_message(tmp_path):
 
 
 def test_checkpoint_persists_image_reference_without_base64(tmp_path):
-    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
+    con, _dom, root, cfg, _reg, bridge, _ctx = _start(tmp_path)
     bridge.close()
     call = {"id": "c1", "type": "function",
             "function": {"name": "mcp__fake__mix", "arguments": "{}"}}
@@ -446,7 +445,7 @@ def test_openai_responses_adapter_uses_legal_tool_image_output(tmp_path):
 
 
 def test_bridge_parts_reach_model_adapter_end_to_end(tmp_path):
-    con, dom, root, cfg, reg, bridge, ctx = _start(tmp_path)
+    _con, _dom, _root, _cfg, reg, bridge, ctx = _start(tmp_path)
     out = {}
     try:
         out = reg.call(ctx, "mcp__fake__mix", {})

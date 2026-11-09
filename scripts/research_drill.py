@@ -293,7 +293,7 @@ def assess(con, root: str, profile: dict | None = None) -> dict:
         return [h for h in hyps.values() if obj.lower() in (h["title"] or "").lower()]
 
     scope_ok, scope_detail = True, []
-    for _key, spec in profile.items():
+    for spec in profile.values():
         if spec["expect"] == "any":
             # 真实固件模式:**不按标题猜对象**;只认"带适用范围的结论"。
             # 多对象 profile:每个对象还必须被某条结论关联的证据路径覆盖
@@ -409,9 +409,8 @@ def _write_report(out: str, rep: dict, verdict: dict, *, smoke: bool) -> None:
             f.write(f"- 结果: `{json.dumps(rep['run'], ensure_ascii=False)}`\n\n")
             f.write(f"## 闭环判定: **{verdict['status']}**\n\n")
             f.write("| 判据 | ok | 说明 |\n|---|---|---|\n")
-            for name, c in verdict["checks"].items():
-                f.write(f"| {name}{'' if c['critical'] else '(非关键)'} | "
-                        f"{'✅' if c['ok'] else '❌'} | {c['detail']} |\n")
+            f.writelines(f"| {name}{'' if c['critical'] else '(非关键)'} | "
+                        f"{'✅' if c['ok'] else '❌'} | {c['detail']} |\n" for name, c in verdict["checks"].items())
             f.write("\n")
             for section, title in (("tool_calls", "工具调用"), ("hypotheses", "假设"),
                                    ("attempts", "尝试"), ("observations", "观测"),

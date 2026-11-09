@@ -86,13 +86,12 @@ class ScriptedAdapter:
 
         reply = self.chat(messages, tools)
         yield StreamEvent("start")
-        emitted = 0
-        for part in _chunks(reply.content or "", max(1, int(self.chunk_size))):
+        for emitted, part in enumerate(
+                _chunks(reply.content or "", max(1, int(self.chunk_size))), start=1):
             if control is not None:
                 control.raise_if_cancelled()
             if self.stream_delay:
                 time.sleep(self.stream_delay)
-            emitted += 1
             if self.fail_after_chunks is not None and emitted > self.fail_after_chunks:
                 raise StreamError("模拟流中断")
             yield StreamEvent("text_delta", text=part)

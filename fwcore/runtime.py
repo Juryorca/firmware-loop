@@ -292,7 +292,7 @@ class Runner:
         def _call():
             try:
                 box["out"] = prep(payload)
-            except Exception as e:                      # 钩子自己坏了也不能毁掉研究
+            except Exception as e:                      # 钩子自己坏了也不能毁掉研究  # noqa: BLE001
                 box["err"] = f"{type(e).__name__}: {e}"
 
         th = threading.Thread(target=_call, name="fwcore-prepare", daemon=True)
@@ -365,7 +365,7 @@ class Runner:
         cur = None
         with _db.Tx(self.con) as c:
             # nosemgrep: python-sql-injection
-            cur = c.execute(  # noqa: S608  # set_sql 是内部固定片段，值全部走参数绑定
+            cur = c.execute(  # set_sql 是内部固定片段，值全部走参数绑定
                 "UPDATE runs SET " + set_sql +
                 " WHERE id=? AND state='running'"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -385,7 +385,7 @@ class Runner:
         cur = None
         with _db.Tx(self.con) as c:
             # nosemgrep: python-sql-injection
-            cur = c.execute(  # noqa: S608  # set_sql 是内部固定片段，值全部走参数绑定
+            cur = c.execute(  # set_sql 是内部固定片段，值全部走参数绑定
                 "UPDATE runs SET " + set_sql +
                 f" WHERE id=? AND state IN ({marks})"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -622,7 +622,7 @@ class Runner:
         for attempt in range(3):
             try:
                 return self.domain.add_conversation(*args, **kwargs)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 last = e
                 if isinstance(e, _db.LockedError) or "locked" in str(e).lower():
                     time.sleep(0.05 * (attempt + 1))
@@ -675,8 +675,8 @@ class Runner:
             try:
                 args = json.loads(raw or "{}")
                 if not isinstance(args, dict):
-                    raise ValueError("tool arguments 不是对象")
-            except (json.JSONDecodeError, ValueError):
+                    raise TypeError("tool arguments 不是对象")
+            except (json.JSONDecodeError, TypeError):
                 args = {"__invalid_json__": raw}
                 invalid = True
             out.append({"id": slot.get("id") or f"call_{idx}",
@@ -1006,7 +1006,7 @@ class Runner:
                             max_calls=self.limits.summarize_max_calls)
                         if not _info.get("compacted"):        # 切不出东西 ⇒ 不动历史
                             raise RuntimeError("没有可压缩的完整协议组(keep_recent 过大)")
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         # 失败:历史原样保留 + 明确事件 + 冷却(不无限重试、不重复付费)
                         _event(self.con, "run.compact_failed", rid,
                                {"tokens": before, "error": str(e)[:300]})
@@ -1753,8 +1753,8 @@ def _context_stats(system: str, history: list[dict]) -> dict:
 
 def _render_for_summary(messages: list[dict], limit: int = 2_000_000) -> str:
     """把要压缩的旧消息渲染成摘要请求(保留事实/地址/路径与 tool_call_id,不编造)。"""
-    lines = ["把下面这段固件研究对话压成**结构化摘要**,保留:目标、已确认的技术事实(地址/字段/结论)、"
-             "未解决问题、关键产物路径与 db_tool_call_id;不要添加原文没有的结论。只输出摘要。"]
+    lines = [("把下面这段固件研究对话压成**结构化摘要**,保留:目标、已确认的技术事实(地址/字段/结论)、"
+             "未解决问题、关键产物路径与 db_tool_call_id;不要添加原文没有的结论。只输出摘要。")]
     for m in messages:
         role = m.get("role")
         c = m.get("content") or ""
@@ -1886,7 +1886,7 @@ def _sanitize_history(history: list[dict], lookup=None) -> list[dict]:
         if lookup:
             try:
                 rec = lookup(m.get("tool_call_id")) or {}
-            except Exception:
+            except Exception:  # noqa: BLE001
                 rec = {}
         payload = {"status": "unknown", "history_corrupt": True,
                    "note": "历史工具回复是旧版硬截断产物(非法 JSON);原始内容需用工具重新读取",
@@ -1940,7 +1940,7 @@ def _db_bytes(con) -> int:
             if os.path.exists(fp):
                 total += os.path.getsize(fp)
         return total
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 0
 
 
@@ -1989,7 +1989,7 @@ def _epoch(ts: str) -> float:
 
     try:
         return _d.datetime.fromisoformat(ts).timestamp()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return 0.0
 
 

@@ -13,7 +13,7 @@ from fwcore.mcp_client import MCPClient, ServerSpec
 class _SSEHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def do_POST(self):  # noqa: N802
+    def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         req = json.loads(self.rfile.read(n) or b"{}")
         rid = req.get("id")
@@ -29,7 +29,7 @@ class _SSEHandler(http.server.BaseHTTPRequestHandler):
         # 故意保持连接不关；客户端必须在拿到匹配响应后立即返回。
         time.sleep(0.4)
 
-    def log_message(self, format, *args):  # noqa: A002
+    def log_message(self, format, *args):
         return
 
 

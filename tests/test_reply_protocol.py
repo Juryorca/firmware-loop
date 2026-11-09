@@ -57,7 +57,7 @@ def _events(con, kind):
 def test_text_only_replies_pause_and_emit_classification(tmp_path):
     con, root = _setup(tmp_path)
     script = [{"content": "我还在想(1)"}, {"content": "我还在想(2)"}, {"content": "我还在想(3)"}]
-    res, f, rid = _run(con, root, script)
+    res, f, _rid = _run(con, root, script)
     assert res.state == "paused" and f.calls == 3
     ev = _events(con, "model.reply")
     assert ev and all(e["class"] == "text_only" and e["tool_calls"] == 0 for e in ev)
@@ -72,7 +72,7 @@ def test_reasoning_only_is_recorded_not_blank(tmp_path):
     script = [{"content": "", "reasoning": "先想想"}, {"content": "", "reasoning": "再想想"},
               {"content": "", "reasoning": "还想"},
               {"content": "FINAL: 收束", "tool_calls": []}]
-    res, _f, rid = _run(con, root, script)
+    res, _f, _rid = _run(con, root, script)
     ev = _events(con, "model.reply")
     assert ev and ev[0]["class"] == "reasoning_only" and ev[0]["reasoning_len"] > 0
     ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()

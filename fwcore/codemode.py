@@ -105,7 +105,7 @@ def _tool_meta(registry) -> list[dict]:
     return out
 
 
-def _image_part(item: dict) -> dict:
+def _image_part(item: dict, root: str) -> dict:
     """Convert a worker image block without turning it into base64 text."""
     mime = str(item.get("mimeType") or "").split(";", 1)[0].strip().lower()
     if mime not in ("image/png", "image/jpeg", "image/gif", "image/webp"):
@@ -119,6 +119,11 @@ def _image_part(item: dict) -> dict:
         if size > MAX_IMAGE_BYTES:
             return {"type": "text",
                     "text": f"[image {path} omitted: {size} bytes exceeds {MAX_IMAGE_BYTES} byte limit]"}
+        real = os.path.realpath(path)
+        root_real = os.path.realpath(root)
+        if real != root_real and not real.startswith(root_real + os.sep):
+            return {"type": "text",
+                    "text": f"[image {path} omitted: outside the research workspace]"}
         return {"type": "image", "mimeType": mime, "path": path,
                 "bytes": size, "sha256": _file_sha(path)}
     data = item.get("data")
@@ -151,7 +156,7 @@ def _bounded_text(text: str, max_tokens: int) -> tuple[str, str | None, bool]:
     return truncated + where, full_path, True
 
 
-def _format_result(worker: dict, elapsed_ms: int, max_tokens: int) -> dict:
+def _format_result(worker: dict, elapsed_ms: int, max_tokens: int, root: str) -> dict:
     outputs = worker.get("outputs") or []
     console = worker.get("console") or []
     error = worker.get("error")
@@ -161,10 +166,14 @@ def _format_result(worker: dict, elapsed_ms: int, max_tokens: int) -> dict:
         if not isinstance(item, dict):
             continue
         if item.get("type") == "image":
-            part = _image_part(item)
+            part = _image_part(item, root)
             image_parts.append(part)
             if part.get("type") == "image":
                 text_items.append(f"[image: {part.get('path')}]")
+            else:
+                # An omitted image must stay visible in text; silently dropping
+                # the explanation makes the script look like it produced nothing.
+                text_items.append(str(part.get("text") or ""))
         else:
             text_items.append(str(item.get("text") or ""))
     header = "Script failed" if error else "Script completed"
@@ -401,7 +410,7 @@ class CodemodeExecutor:
             return {"status": "error", "error": f"codemode worker exited: {err}"[:5000],
                     "text": f"Script failed in {elapsed_ms / 1000:.2f}s\nScript error:\n{err}",
                     "tool_calls": calls, "elapsed_ms": elapsed_ms}
-        result = _format_result(worker_result, elapsed_ms, max_tokens)
+        result = _format_result(worker_result, elapsed_ms, max_tokens, self.ctx.root)
         result["tool_calls"] = calls
         result["script_exit"] = bool(worker_result.get("exit"))
         return result

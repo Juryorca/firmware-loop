@@ -17,7 +17,7 @@ class TestTimedOut(Exception):
     pass
 
 
-def _on_alarm(signum, frame):  # noqa: ARG001
+def _on_alarm(signum, frame):
     raise TestTimedOut(f"用例超过 {TIMEOUT_S}s 未结束(执行边界保护)")
 
 

@@ -104,7 +104,7 @@ def test_tool_call_shape_from_api(tmp_path):
 
 def test_second_paragraph_final_finishes_in_one_call(tmp_path):
     api = Api([_resp({"content": "总结如下……\n\nFINAL: 研究收口"})])
-    con, runner, rid = _runner(tmp_path, _adapter(api))
+    _con, runner, rid = _runner(tmp_path, _adapter(api))
     res = runner.run(rid, "t1")
     assert res.state == "finished"
     assert len(api.sent) == 1

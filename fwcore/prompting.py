@@ -41,8 +41,8 @@ def _skill_section(root: str) -> str:
     for s in items:
         desc = " ".join((s["description"] or "").split())
         lines.append(f"- `{s['name']}`: {desc[:240]}")
-    lines += ["", "用法：先按任务选择 Skill，再调用 `skill_read(name=..., reference=...)`；"
-                  "不要一次加载全部 Skills。"]
+    lines += ["", ("用法：先按任务选择 Skill，再调用 `skill_read(name=..., reference=...)`；"
+                  "不要一次加载全部 Skills。")]
     return "\n".join(lines)
 
 

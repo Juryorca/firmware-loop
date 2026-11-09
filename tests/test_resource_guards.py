@@ -48,7 +48,7 @@ def _setup(root):
 
 
 def test_endless_model_pauses_at_call_limit_without_touching_research(tmp_path):
-    con, dom, hid = _setup(str(tmp_path))
+    con, _dom, hid = _setup(str(tmp_path))
     r = Runner(con, str(tmp_path), EndlessAdapter(), limits=Limits(max_model_calls=5),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
@@ -66,7 +66,7 @@ def test_endless_model_pauses_at_call_limit_without_touching_research(tmp_path):
 
 
 def test_checkpoint_pruning_keeps_resume_correct(tmp_path):
-    con, dom, hid = _setup(str(tmp_path))
+    con, _dom, _hid = _setup(str(tmp_path))
     r = Runner(con, str(tmp_path), EndlessAdapter(), limits=Limits(max_model_calls=12, checkpoints_keep=3),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
@@ -88,7 +88,7 @@ def test_checkpoint_pruning_keeps_resume_correct(tmp_path):
 
 
 def test_db_cap_pauses_instead_of_growing(tmp_path):
-    con, dom, hid = _setup(str(tmp_path))
+    con, _dom, hid = _setup(str(tmp_path))
     r = Runner(con, str(tmp_path), EndlessAdapter(),
                limits=Limits(max_model_calls=0, max_db_bytes=48 * 1024, checkpoints_keep=20),
                policy=Policy(allow_high_risk=True))
@@ -103,7 +103,7 @@ def test_db_cap_pauses_instead_of_growing(tmp_path):
 
 def test_unbounded_still_keeps_hard_disk_guard(tmp_path):
     """显式选择"不限步/不限时"时,磁盘硬顶仍然生效。"""
-    con, dom, hid = _setup(str(tmp_path))
+    con, _dom, _hid = _setup(str(tmp_path))
     lim = Limits.unbounded()
     lim.max_db_bytes = 48 * 1024
     lim.checkpoints_keep = 20
@@ -116,7 +116,7 @@ def test_tool_timeout_kills_whole_process_group(tmp_path):
     """超时必须杀掉整组子进程,不能留下继续写盘的进程。"""
     from fwcore.tools import ToolContext, default_registry
 
-    con, dom, hid = _setup(str(tmp_path))
+    _con, dom, _hid = _setup(str(tmp_path))
     ctx = ToolContext(domain=dom, root=str(tmp_path), policy=Policy(allow_high_risk=True))
     marker = os.path.join(str(tmp_path), "child.pid")
     out = default_registry().call(ctx, "shell_exec", {
@@ -126,5 +126,5 @@ def test_tool_timeout_kills_whole_process_group(tmp_path):
     assert os.path.isfile(marker), "子进程应先起来(否则这条测试没意义)"
     with open(marker, encoding="utf-8") as f:
         child = int(f.read().strip())
-    alive = subprocess.run(["kill", "-0", str(child)], capture_output=True).returncode == 0
+    alive = subprocess.run(["kill", "-0", str(child)], capture_output=True, check=False).returncode == 0
     assert not alive, "超时后子进程必须已被杀掉"

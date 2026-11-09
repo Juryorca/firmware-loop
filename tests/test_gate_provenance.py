@@ -33,7 +33,7 @@ def _ws(tmp_path):
 
 
 def test_gate_reports_provenance_and_integrity_advisory(tmp_path):
-    con, root, dom, art = _ws(tmp_path)
+    con, root, dom, _art = _ws(tmp_path)
     hid = dom.add_hypothesis("t1", "命令注入", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "审计")
     e1 = dom.add_evidence("t1", "log", path="report/artifacts/a.txt", attempt_id=aid,

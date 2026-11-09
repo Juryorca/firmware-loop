@@ -133,7 +133,7 @@ def _target(tmp_path):
 
 
 def test_mcp_to_conclusion_end_to_end(tmp_path):
-    con, dom, root, cfg = _target(tmp_path)
+    con, _dom, root, cfg = _target(tmp_path)
     r = Runner(con, root, ChainModel(), mcp=True, mcp_config_paths=[cfg],
                limits=__import__("fwcore.limits", fromlist=["Limits"]).Limits(max_model_calls=12),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
@@ -168,7 +168,7 @@ def test_mcp_to_conclusion_end_to_end(tmp_path):
 
 def test_chain_stops_if_verification_is_missing(tmp_path):
     """反例:不做复核就下结论 ⇒ domain 拒绝(端到端也堵住)。"""
-    con, dom, root, cfg = _target(tmp_path)
+    _con, dom, _root, _cfg = _target(tmp_path)
     hid = dom.add_hypothesis("t1", "h", body="b", source="[RE]")
     aid = dom.start_attempt(hid, "poc")
     ev = dom.add_evidence("t1", "log", capture="看到崩溃", attempt_id=aid, hypothesis_id=hid)

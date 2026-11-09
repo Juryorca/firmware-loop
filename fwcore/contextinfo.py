@@ -51,9 +51,9 @@ class ContextStatus:
                  f" + state {self.parts.get('state', 0):,} + tools {self.parts.get('schema', 0):,}"
                  f" + protocol {self.parts.get('protocol', 0):,})") if self.parts else ""
         lines = [
-            f"[Context status] model={model} window={window} estimated_input={est}{scope} "
+            (f"[Context status] model={model} window={window} estimated_input={est}{scope} "
             f"output_reserve={self.output_reserve:,} available={avail} "
-            f"auto_compact={'on' if self.compaction_enabled else 'off'} threshold={thr}.",
+            f"auto_compact={'on' if self.compaction_enabled else 'off'} threshold={thr}."),
             f"{last}. estimated_input is an estimate (chars/2.0), not provider usage.",
         ]
         if self.compaction_enabled:

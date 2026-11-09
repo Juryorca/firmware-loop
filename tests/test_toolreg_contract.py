@@ -77,7 +77,7 @@ def test_mixed_part_and_empty_values():
 # ---------------- ② run_process:pgid 登记 / 清理 / 输出上限 ----------------
 
 def test_run_process_registers_pgid_with_starttime(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     r = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], start_new_session=True)
     try:
         # 先登记(与 run_process 内部同一条路径),再核对"能按 starttime 找到这个组"
@@ -94,7 +94,7 @@ def test_run_process_registers_pgid_with_starttime(tmp_path):
 
 
 def test_run_process_caps_output_size(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     out = run_process(_ctx(dom, root, rid="R1"),
                       ["bash", "-c", "head -c 200000 /dev/zero | tr '\\0' 'a'"], timeout=20,
                       max_output_bytes=1000)
@@ -104,7 +104,7 @@ def test_run_process_caps_output_size(tmp_path):
 
 def test_run_process_cancel_kills_group(tmp_path):
     """取消路径:启动后立即取消,整组杀掉并返回 cancelled。"""
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     out = run_process(_ctx(dom, root, rid="R1"), ["bash", "-c", "sleep 30"],
                       timeout=10, cancel_check=lambda: True)
     assert out["status"] == "cancelled"
@@ -142,7 +142,7 @@ def test_watchdog_reaps_inflight_script_tool(tmp_path):
 # ---------------- ③ 同名 manifest:工作区优先,不崩 ----------------
 
 def test_workspace_manifest_overrides_framework(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     reg_dir = os.path.join(root, "tools", "registry")
     os.makedirs(reg_dir, exist_ok=True)
     with open(os.path.join(reg_dir, "research_queue.json"), "w", encoding="utf-8") as f:
@@ -159,7 +159,7 @@ def test_workspace_manifest_overrides_framework(tmp_path):
 # ---------------- ④ 适配器实例生命周期 ----------------
 
 def test_close_feature_adapters_uses_existing_instances(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     reg_dir = os.path.join(root, "tools", "registry")
     os.makedirs(reg_dir, exist_ok=True)
     with open(os.path.join(reg_dir, "feat.json"), "w", encoding="utf-8") as f:
@@ -244,7 +244,7 @@ def test_capability_index_and_selection_are_different(tmp_path):
 
 def test_ok_exit_codes_declare_meaningful_negative_results(tmp_path):
     """有些工具用非 0 表达研究结论(如 signal MISS=1):按工具声明,不全局放宽。"""
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     script = os.path.join(root, "tools", "miss.sh")
     os.makedirs(os.path.dirname(script), exist_ok=True)
     with open(script, "w", encoding="utf-8") as f:

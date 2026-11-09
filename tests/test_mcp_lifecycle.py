@@ -76,7 +76,7 @@ def _cli(root, db, *a, env_extra=None, timeout=180):
                PI_CODING_AGENT_DIR=os.path.join(root, ".agent"))
     env.update(env_extra or {})
     return subprocess.run([sys.executable, "-m", "fwcore", "--root", str(root), "--db", str(db), *a],
-                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
+                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout, check=False)
 
 
 # ---------------- 1) 正式 CLI 路径 ----------------
@@ -151,7 +151,7 @@ def _mk(tmp_path):
 
 
 def test_advance_keeps_mcp_alive_across_rounds(tmp_path):
-    con, dom, root = _mk(tmp_path)
+    con, _dom, root = _mk(tmp_path)
     _write_mcp_cfg(root, _fake_server(tmp_path))
     echo = {"tool_calls": [{"name": "mcp__fake__echo", "args": {"text": "r"}}]}
     script = [echo, {"content": "FINAL: 第1轮", "tool_calls": []},
@@ -171,7 +171,7 @@ def test_advance_keeps_mcp_alive_across_rounds(tmp_path):
 
 
 def test_runner_reopens_mcp_if_closed_between_turns(tmp_path):
-    con, dom, root = _mk(tmp_path)
+    con, _dom, root = _mk(tmp_path)
     _write_mcp_cfg(root, _fake_server(tmp_path))
     echo = {"tool_calls": [{"name": "mcp__fake__echo", "args": {"text": "again"}}]}
     pol = Policy(authorization=Authz(roots=[root]), allow_high_risk=True)
@@ -198,7 +198,7 @@ class _Boom(ScriptedAdapter):
 
 
 def test_exception_path_closes_mcp_and_watchdog(tmp_path):
-    con, dom, root = _mk(tmp_path)
+    con, _dom, root = _mk(tmp_path)
     _write_mcp_cfg(root, _fake_server(tmp_path))
     r = Runner(con, root, _Boom(script=[]), limits=Limits(max_model_calls=2),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True),
@@ -219,7 +219,7 @@ def test_exception_path_closes_mcp_and_watchdog(tmp_path):
 
 
 def test_close_is_idempotent(tmp_path):
-    con, dom, root = _mk(tmp_path)
+    con, _dom, root = _mk(tmp_path)
     _write_mcp_cfg(root, _fake_server(tmp_path))
     r = Runner(con, root, ScriptedAdapter(script=[]), mcp=True,
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True),

@@ -32,7 +32,8 @@ def is_qelf(d):
 def recover_keystream(enc_files, model_files):
     mod=[collections.Counter() for _ in range(4)]
     for f in model_files:
-        d=open(f,'rb').read()
+        with open(f,'rb') as fh:
+            d=fh.read()
         if not is_qelf(d) and d[:4]==b'\x7fELF':
             _,off,sz=shdr(d,'.text')
             if off:
@@ -41,7 +42,9 @@ def recover_keystream(enc_files, model_files):
     logp=[[math.log((m.get(b,0)+1)/sum(m.values())) for b in range(256)] for m in mod]
     pages=[]
     for f in enc_files:
-        d=open(f,'rb').read(); _,off,sz=shdr(d,'.text'); p=off&~0xfff
+        with open(f,'rb') as fh:
+            d=fh.read()
+        _,off,sz=shdr(d,'.text'); p=off&~0xfff
         while p+4096<=off+sz:
             if p>=off: pages.append(d[p:p+4096])
             p+=4096
@@ -56,7 +59,8 @@ def recover_keystream(enc_files, model_files):
     return K
 
 def decrypt_file(path, K, out=None):
-    d=bytearray(open(path,'rb').read())
+    with open(path,'rb') as fh:
+        d=bytearray(fh.read())
     if not is_qelf(d): return None, 'not qelf'
     eo,off,sz=shdr(d,'.text')
     start_page=off&~0xfff
@@ -74,19 +78,28 @@ def decrypt_file(path, K, out=None):
     struct.pack_into('<I', d, 0x30, 0)                      # e_flags = 0
     if eo is not None: struct.pack_into('<Q', d, eo+8, 0x6) # .text sh_flags
     out=out or (path+'.dec')
-    open(out,'wb').write(d)
+    with open(out,'wb') as fh:
+        fh.write(d)
     return out, None
 
 if __name__=='__main__':
     base=sys.argv[1] if len(sys.argv)>1 else '.'
     cfgs=sorted(glob.glob(os.path.join(base,'**','*.cgi'),recursive=True))
-    enc=[f for f in cfgs if is_qelf(open(f,'rb').read())]
+    enc=[]
+    for f in cfgs:
+        with open(f,'rb') as fh:
+            if is_qelf(fh.read()):
+                enc.append(f)
     print('encrypted:',len(enc))
     K=recover_keystream(enc, cfgs)
-    open(os.path.join(base,'qelf_keystream.bin'),'wb').write(K)
+    with open(os.path.join(base,'qelf_keystream.bin'),'wb') as fh:
+        fh.write(K)
     md=Cs(CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN)
     for f in enc:
         o,err=decrypt_file(f,K)
-        d=open(o,'rb').read(); _,off,sz=shdr(d,'.text')
+        with open(o,'rb') as fh:
+            d=fh.read()
+        _,off,sz=shdr(d,'.text')
         dec=d[off:off+sz]; ins=list(md.disasm(dec,0))
-        print('%-40s -> %s  decode %.1f%%'%(f,o,100*len(ins)/(len(dec)//4)))
+        pct=100*len(ins)/(len(dec)//4)
+        print(f"{f:<40} -> {o}  decode {pct:.1f}%")

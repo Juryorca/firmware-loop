@@ -46,7 +46,7 @@ def test_shell_exec_records_statuses(setup):
 
 
 def test_high_risk_tool_requires_confirmation(setup):
-    con, dom, root = setup
+    _con, dom, root = setup
     ctx = ToolContext(domain=dom, root=root, artifacts_dir=os.path.join(root, "art"),
                       policy=Policy(confirm=lambda _s: False))
     out = default_registry().call(ctx, "shell_exec", {"command": "echo hi"})
@@ -55,14 +55,14 @@ def test_high_risk_tool_requires_confirmation(setup):
 
 def test_high_risk_denied_by_default(setup):
     """没有 confirm、也没有 allow_high_risk ⇒ 默认拒绝(不能悄悄放行)。"""
-    con, dom, root = setup
+    _con, dom, root = setup
     ctx = ToolContext(domain=dom, root=root, policy=Policy())
     out = default_registry().call(ctx, "shell_exec", {"command": "echo hi"})
     assert out["status"] == "cancelled" and "确认" in out["error"]
 
 
 def test_args_validated_before_handler(setup):
-    con, dom, root = setup
+    _con, dom, root = setup
     ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
     out = default_registry().call(ctx, "fs_read", {})            # 缺必填
     assert out["status"] == "error" and "必填" in out["error"]
@@ -71,14 +71,14 @@ def test_args_validated_before_handler(setup):
 
 
 def test_path_escape_blocked(setup, tmp_path):
-    con, dom, root = setup
+    _con, dom, root = setup
     ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
     out = default_registry().call(ctx, "fs_read", {"path": "../../../../etc/passwd"})
     assert out["status"] == "error" and "越界" in out["error"] or "不存在" in out["error"]
 
 
 def test_timeout_is_clamped(setup):
-    con, dom, root = setup
+    _con, dom, root = setup
     ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True, max_timeout=1))
     t0 = __import__("time").time()
     out = default_registry().call(ctx, "shell_exec", {"command": "sleep 5", "timeout": 999})
@@ -86,7 +86,7 @@ def test_timeout_is_clamped(setup):
 
 
 def test_unknown_tool(setup):
-    con, dom, root = setup
+    _con, dom, root = setup
     out = default_registry().call(ToolContext(domain=dom, root=root), "nope", {})
     assert out["status"] == "error"
 
@@ -104,7 +104,7 @@ def test_run_executes_tool_calls_and_finishes(setup):
                                           "args": {"target": "t1", "title": "解析器越界"}}]},
         {"content": "FINAL: 完成", "tool_calls": []},
     ]
-    con, dom, root, r = _runner(setup, script)
+    con, _dom, _root, r = _runner(setup, script)
     rid = r.start("t1", goal="smoke")
     res = r.run(rid, "t1", goal="smoke")
     assert res["state"] == "finished" and res["final"].startswith("FINAL:")
@@ -144,7 +144,7 @@ def test_interruption_pauses_and_keeps_hypothesis_state(setup):
 
 
 def test_resume_continues_from_checkpoint(setup):
-    con, dom, root, r = _runner(setup, [
+    con, _dom, _root, r = _runner(setup, [
         {"content": "一步", "tool_calls": []},
         {"content": "FINAL: done", "tool_calls": []},
     ], steps=10)
@@ -157,7 +157,7 @@ def test_resume_continues_from_checkpoint(setup):
 
 
 def test_step_limit_pauses_not_concludes(setup):
-    con, dom, root, r = _runner(setup, [{"content": "循环", "tool_calls": []}] * 5, steps=2)
+    _con, _dom, _root, r = _runner(setup, [{"content": "循环", "tool_calls": []}] * 5, steps=2)
     rid = r.start("t1")
     res = r.run(rid, "t1")
     assert res["state"] == "paused" and res["steps"] == 2
@@ -180,7 +180,7 @@ NOTES = """# t1
 
 
 def test_migrate_is_lossless_and_idempotent(setup, tmp_path):
-    con, dom, root = setup
+    con, _dom, root = setup
     p = tmp_path / "state" / "t1" / "notes.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(NOTES, encoding="utf-8")
@@ -195,7 +195,7 @@ def test_migrate_is_lossless_and_idempotent(setup, tmp_path):
 
 def test_migration_maps_only_explicit_status(setup, tmp_path):
     """显式"定论:No finding"⇒ concluded;模糊"部分完成"⇒ 仍 open + needs_review。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     p = tmp_path / "state" / "t1" / "notes.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(NOTES, encoding="utf-8")
@@ -233,7 +233,7 @@ def test_resume_reowns_run_and_clears_stale_handback(setup):
     """resume 必须接管 owner(pid+starttime)并清掉旧 handback,否则看护会误判 owner_dead 立刻暂停。"""
     from fwcore.watchdog import _proc_starttime
 
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
@@ -257,7 +257,7 @@ def test_resume_refuses_live_owner(setup):
 
     from fwcore.runtime import _host, _proc_starttime
 
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
@@ -278,7 +278,7 @@ def test_resume_refuses_live_owner(setup):
 
 def test_owner_loss_mid_turn_does_not_overwrite(setup):
     """模型调用期间 run 被别的进程接管 ⇒ 旧 owner 不得写 state/checkpoint。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     rid_box = {}
 
     class Steal(ScriptedModel):
@@ -302,7 +302,7 @@ def test_owner_loss_mid_turn_does_not_overwrite(setup):
 
 def test_cancel_finished_run_keeps_finished(setup):
     """cancel 与 FINAL 竞争:cancel 不能把已 finished 的 run 改回 paused。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
@@ -318,7 +318,7 @@ def test_resume_kills_orphan_tool_pgids_of_dead_owner(setup):
     import subprocess
     import time
 
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
@@ -343,7 +343,7 @@ def test_resume_kills_orphan_tool_pgids_of_dead_owner(setup):
 
 def test_heartbeat_does_not_steal_ownership(setup):
     """B 的下一轮心跳不能用无条件 UPDATE 把 owner 抢回来(否则两进程来回抢)。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
     con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (rid,))
@@ -354,7 +354,7 @@ def test_heartbeat_does_not_steal_ownership(setup):
 
 def test_owner_loss_cancels_remaining_tool_batch(setup):
     """模型调用期间被接管:同一回复里的后续工具(尤其 state_* 写操作)不得执行。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     box = {}
 
     class Steal:
@@ -393,7 +393,7 @@ def test_request_user_input_ignored_on_finished_run(setup):
 
 def test_resume_cancels_stale_running_tool_calls(setup):
     """崩溃 owner 留下的 running 工具行:接管时必须标 cancelled(否则状态永远失真/重放被挡)。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}]),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
@@ -409,7 +409,7 @@ def test_resume_cancels_stale_running_tool_calls(setup):
 
 
 def test_stale_awaiting_handback_is_not_reported_for_paused_run(setup):
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
     con.execute("UPDATE runs SET state='paused', handback_reason='awaiting_user_close' WHERE id=?",
@@ -421,7 +421,7 @@ def test_stale_awaiting_handback_is_not_reported_for_paused_run(setup):
 
 def test_finish_state_does_not_override_external_pause(setup):
     """取消/看护已把 run 暂停后,迟到的 finished 不能覆盖 paused/handback。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
     con.execute("UPDATE runs SET state='paused', handback_reason='user_stop: x' WHERE id=?", (rid,))
@@ -432,7 +432,7 @@ def test_finish_state_does_not_override_external_pause(setup):
 
 
 def test_limit_hit_does_not_override_external_pause(setup):
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[]), policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
     con.execute("UPDATE runs SET state='paused', handback_reason='user_stop: x' WHERE id=?", (rid,))
@@ -445,7 +445,7 @@ def test_limit_hit_does_not_override_external_pause(setup):
 
 def test_persist_never_lowers_counters(setup):
     """迟到的计数写不能把并发推进的更大计数改小(MAX 单调)。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     box = {}
 
     class Bump(ScriptedModel):
@@ -464,7 +464,7 @@ def test_persist_never_lowers_counters(setup):
 
 def test_lifecycle_writes_require_current_owner(setup):
     """接管后:预算预留/计数/checkpoint 都不能由旧进程写入。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     r = Runner(con, root, ScriptedModel(script=[]), mcp=False, watchdog=False)
     rid = r.start("t1")
     con.execute("UPDATE runs SET pid=999999, pid_starttime=1 WHERE id=?", (rid,))
@@ -480,7 +480,7 @@ def test_lifecycle_writes_require_current_owner(setup):
 
 def test_exception_does_not_pause_after_takeover(setup):
     """异常路径也不能无条件 SET paused;旧 owner 不得覆盖新 owner。"""
-    con, dom, root = setup
+    con, _dom, root = setup
     box = {}
 
     class StealThenBoom(ScriptedModel):
@@ -500,7 +500,7 @@ def test_exception_does_not_pause_after_takeover(setup):
 
 
 def test_turn_refuses_user_stop_and_foreign_owner(setup):
-    con, dom, root = setup
+    con, _dom, root = setup
     model = ScriptedModel(script=[{"content": "FINAL: x", "tool_calls": []}])
     r = Runner(con, root, model, mcp=False, watchdog=False)
     rid = r.start("t1")
@@ -530,7 +530,7 @@ def _compact_hist():
 
 
 def test_reserve_then_takeover_blocks_ordinary_model_call(setup):
-    con, dom, root = setup
+    con, _dom, root = setup
     model = ScriptedModel(script=[{"content": "FINAL: 不应调用", "tool_calls": []}])
     r = Runner(con, root, model, mcp=False, watchdog=False)
     rid = r.start("t1")
@@ -551,7 +551,7 @@ def test_reserve_then_takeover_blocks_ordinary_model_call(setup):
 
 
 def test_reserve_then_cancel_blocks_ordinary_model_call(setup):
-    con, dom, root = setup
+    con, _dom, root = setup
     model = ScriptedModel(script=[{"content": "FINAL: 不应调用", "tool_calls": []}])
     r = Runner(con, root, model, mcp=False, watchdog=False)
     rid = r.start("t1")
@@ -572,7 +572,7 @@ def test_reserve_then_cancel_blocks_ordinary_model_call(setup):
 
 
 def test_summary_reserve_then_takeover_blocks_model_call(setup):
-    con, dom, root = setup
+    con, _dom, root = setup
     model = ScriptedModel(script=[])
     r = Runner(con, root, model,
                limits=Limits(max_model_calls=10, context_tokens=1000,
@@ -597,7 +597,7 @@ def test_summary_reserve_then_takeover_blocks_model_call(setup):
 
 
 def test_summary_reserve_then_cancel_blocks_model_call(setup):
-    con, dom, root = setup
+    con, _dom, root = setup
     model = ScriptedModel(script=[])
     r = Runner(con, root, model,
                limits=Limits(max_model_calls=10, context_tokens=1000,

@@ -155,7 +155,7 @@ def test_hard_crash_then_recover_and_resume(tmp_path):
     child = os.path.join(root, "child.py")
     with open(child, "w", encoding="utf-8") as f:
         f.write(CHILD)
-    proc = subprocess.run([sys.executable, child, root, rid, os.getcwd()], capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, child, root, rid, os.getcwd()], capture_output=True, text=True, check=False)
     assert proc.returncode == 9, proc.stderr
 
     con2 = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
@@ -183,14 +183,14 @@ def _mk(root):
 
 
 def test_pool_ordering_prefers_preauth_and_parsers(tmp_path):
-    con, dom = _mk(str(tmp_path))
+    _con, dom = _mk(str(tmp_path))
     dom.add_surface("t1", "12080 /api/parse", reachability="pre-auth",
                     input_control="报文", complexity="解析器")
     dom.add_surface("t1", "443 /admin", reachability="auth")
     a = dom.add_hypothesis("t1", "12080 /api/parse 的反序列化越界", source="观察")
     b = dom.add_hypothesis("t1", "443 /admin 的 CSRF", source="观察")
     q = Research(str(tmp_path), dom).pool("t1")
-    assert [h["id"] for h in q][0] == a and q[-1]["id"] == b
+    assert next(h["id"] for h in q) == a and q[-1]["id"] == b
 
 
 def test_mirror_due_and_blocker(tmp_path):
@@ -221,7 +221,7 @@ def test_mirror_due_and_blocker(tmp_path):
 
 def test_dual_output_is_enforced_per_attempt_only(tmp_path):
     """旧的"目标级没有任何 observation"规则已删:全部 Attempt 合法声明 none 也应放行。"""
-    con, dom = _mk(str(tmp_path))
+    _con, dom = _mk(str(tmp_path))
     hid = dom.add_hypothesis("t1", "h")
     aid = dom.start_attempt(hid, "diff")
     dom.finish_attempt(aid, "inconclusive", "只跑了外层")            # 未交代 ⇒ 领域层阻塞
@@ -232,7 +232,7 @@ def test_dual_output_is_enforced_per_attempt_only(tmp_path):
 
 
 def test_repo_tools_are_discoverable(tmp_path):
-    con, dom = _mk(str(tmp_path))
+    con, _dom = _mk(str(tmp_path))
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     r = Runner(con, repo_root, ScriptedModel(script=[]))     # 用真实仓库根 ⇒ 才能发现 tools/*
     names = {t["name"] for t in r.registry.describe()}
@@ -267,7 +267,7 @@ def test_empty_reasoning_content_is_preserved():
 # ---------------- ⑤ 研究载体:提示确实来自仓库规则/池/三镜/KB ----------------
 
 def test_system_prompt_is_built_from_repo_rules(tmp_path):
-    con, dom = _mk(str(tmp_path))
+    _con, dom = _mk(str(tmp_path))
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     hid = dom.add_hypothesis("t1", "签名前的解析路径仍要独立判断")
     prompt = Research(repo, dom).system_prompt("t1", goal="验证解析器")

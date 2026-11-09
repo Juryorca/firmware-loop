@@ -88,7 +88,7 @@ def _cfg(tmp_path, *specs, external: bool | None = None):
 
 
 def test_no_authorization_means_no_server_spawned(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     pidfile = tmp_path / "pid"
     cfg = _cfg(tmp_path, _server(tmp_path, pidfile=pidfile, external=False))
     r = Runner(con, root, ScriptedAdapter(script=[]), mcp=True, mcp_config_paths=[cfg])
@@ -101,7 +101,7 @@ def test_no_authorization_means_no_server_spawned(tmp_path):
 
 
 def test_expired_and_revoked_authorization_do_not_start_mcp(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    con, _dom, root = _setup(tmp_path)
     pidfile = tmp_path / "pid"
     cfg = _cfg(tmp_path, _server(tmp_path, pidfile=pidfile, external=False))
 
@@ -171,7 +171,7 @@ def test_allow_mcp_false_skips_and_policy_denies(tmp_path):
 
 
 def test_undeclared_server_is_external_and_needs_confirmation(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     az = Authz(roots=[root])  # allow_external_mcp=False(默认)
     reg_bridge = MCPBridge(
         root=root,
@@ -195,7 +195,7 @@ def test_undeclared_server_is_external_and_needs_confirmation(tmp_path):
 
 def test_keyword_name_does_not_override_explicit_external_false(tmp_path):
     """名字像外部动作,但服务器显式声明 external=false:仍按配置走,并留审计提示。"""
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     az = Authz(roots=[root])
     b = MCPBridge(
         root=root,
@@ -220,7 +220,7 @@ def test_keyword_name_does_not_override_explicit_external_false(tmp_path):
 
 
 def test_authorization_can_allow_external_mcp_without_percall_confirm(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, dom, root = _setup(tmp_path)
     az = Authz(roots=[root], allow_external_mcp=True)
     b = MCPBridge(
         root=root,
@@ -252,7 +252,7 @@ def test_collision_between_servers_is_deterministic_not_silent():
 
 
 def test_same_tool_reopened_is_idempotent(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     from fwcore.tools import Registry
 
     reg = Registry()
@@ -268,7 +268,7 @@ def test_same_tool_reopened_is_idempotent(tmp_path):
 
 def test_hidden_exposure_does_not_register_tools(tmp_path):
     """Pi exposure=hidden must not silently become a direct fwcore tool."""
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     spec = _server(tmp_path, external=False)
     spec.exposure = "hidden"
     b = MCPBridge(
@@ -287,7 +287,7 @@ def test_hidden_exposure_does_not_register_tools(tmp_path):
 
 
 def test_hidden_tool_override_does_not_register(tmp_path):
-    con, dom, root = _setup(tmp_path)
+    _con, _dom, root = _setup(tmp_path)
     spec = _server(tmp_path, external=False)
     spec.tool_exposure = {"echo": "hidden"}
     b = MCPBridge(

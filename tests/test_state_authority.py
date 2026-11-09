@@ -27,7 +27,7 @@ def _mk(tmp_path):
 
 
 def test_derive_and_gates_agree(tmp_path):
-    root, _con, _dom, d, rep = _mk(tmp_path)
+    _root, _con, _dom, d, rep = _mk(tmp_path)
     nonzero = {k: v for k, v in d["surfaces"].items() if v}
     assert nonzero == rep.surfaces
     assert set(d["closure_blockers"]) == set(rep.blockers)
