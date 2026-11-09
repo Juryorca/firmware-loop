@@ -19,7 +19,7 @@ from fwcore.winenv import load
 raise SystemExit(1 if load(".").problems() else 0)
 EOF
 then ok "IDA 配置(winenv)"
-else bad "IDA 配置(winenv;见 tools/ida_env.sh --help 或 state/ida.json)"; fi
+else bad "IDA 配置(winenv;见 tools/ida/ida_env.sh --help 或 state/ida.json)"; fi
 command -v binwalk >/dev/null && ok "binwalk" || bad "binwalk"
 command -v qemu-arm >/dev/null && ok "qemu-arm" || bad "qemu-arm"
 command -v qemu-mipsel >/dev/null && ok "qemu-mipsel" || bad "qemu-mipsel"

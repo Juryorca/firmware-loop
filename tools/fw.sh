@@ -6,8 +6,8 @@ bash tools/check.sh || echo "[fw] 预检有 FAIL,确认后继续"
 mkdir -p state
 
 cleanup() {
-  bash tools/ida_stop.sh 2>/dev/null
-  bash tools/ida_clean.sh 2>/dev/null
+  bash tools/ida/ida_stop.sh 2>/dev/null
+  bash tools/ida/ida_clean.sh 2>/dev/null
   echo "[fw] 会话结束,supervisor/workers 已回收,暂存区已清空"
 }
 trap cleanup EXIT

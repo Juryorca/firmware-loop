@@ -306,7 +306,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 
 入口：`python3 -m fwcore toolset` / TUI `/tools`。定义在 `fwcore/toolset.py`，不是第二套注册系统。
 
-- **仓库资产**：`tools/ida_*`、`tools/ghidra_run.sh`、`tools/ghidra_scripts/`、`tools/fw_extract.sh`、`tools/cgi_fuzz.sh`、研究辅助脚本；
+- **仓库资产**：`tools/ida/ida_*`、`tools/ghidra_run.sh`、`tools/ghidra_scripts/`、`tools/fw_extract.sh`、`tools/cgi_fuzz.sh`、研究辅助脚本；
   检查存在/可执行，不运行有副作用的脚本。
 - **外部依赖**：QEMU user、AFL++、Docker/bwrap、IDA/Ghidra、binwalk/unblob、Sasquatch、strace 等，复用 `providers` 的探针。
 - **能力/服务**：区分 `ready / partial / missing / deps_missing / not_started / arch_mismatch`；

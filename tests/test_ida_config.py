@@ -75,11 +75,12 @@ def test_problems_name_the_missing_thing(tmp_path):
 
 def test_scripts_have_no_hardcoded_paths_or_ports():
     """脚本必须用配置;不允许再出现开发机的路径/端口字面量。"""
-    files = [f for f in os.listdir("tools") if f.startswith("ida_") and f.endswith(".sh")]
-    assert files, "没找到 ida_*.sh"
+    suite = os.path.join("tools", "ida")
+    files = [f for f in os.listdir(suite) if f.startswith("ida_") and f.endswith(".sh")]
+    assert files, "没找到 tools/ida/ida_*.sh"
     bad = []
     for name in files:
-        with open(os.path.join("tools", name), encoding="utf-8") as f:
+        with open(os.path.join(suite, name), encoding="utf-8") as f:
             text = f.read()
         for needle in ("/mnt/d/", "Users/30104", "python313", ":8745"):
             if needle in text:
@@ -105,7 +106,7 @@ def test_stop_only_kills_own_supervisor_and_matching_workers(tmp_path):
         env = dict(os.environ, FW_IDA_STAGE=str(stage), FW_IDA_WIN_STAGE=r"D:\ida_test",
                    FW_IDA_URL="http://127.0.0.1:9/mcp", FW_IDA_INSTANCES=str(inst),
                    FW_IDA_WSL_STAGE=str(stage))
-        out = subprocess.run(["bash", "tools/ida_stop.sh"], env=env,
+        out = subprocess.run(["bash", "tools/ida/ida_stop.sh"], env=env,
                              capture_output=True, text=True, timeout=120, check=False)
         assert out.returncode == 0, out.stderr
         # 轮询而不是固定 sleep:Windows 互操作(taskkill.exe)可能慢,固定等待会 flaky

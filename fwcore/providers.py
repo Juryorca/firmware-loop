@@ -359,7 +359,7 @@ def ghidra_provider(root: str) -> Provider:
 
 
 def windows_ida_provider(root: str) -> Provider:
-    """复用现有 IDA 生命周期封装(tools/ida_*.sh),配置来自 winenv(单一来源)。"""
+    """复用现有 IDA 生命周期封装(tools/ida/ida_*.sh),配置来自 winenv(单一来源)。"""
     from .winenv import load as _ida_load
 
     def probe() -> Probe:
@@ -379,13 +379,13 @@ def windows_ida_provider(root: str) -> Provider:
         up = started or http not in ("", "000")
         return Probe(READY if up else NOT_STARTED,
                      "IDA supervisor 已启动(端口文件/HTTP 可达)" if up
-                     else f"IDA 未启动(用 tools/ida_start.sh;配置来源 {cfg.source})",
+                     else f"IDA 未启动(用 tools/ida/ida_start.sh;配置来源 {cfg.source})",
                      path=cfg.mcp_exe, evidence="reachable" if up else "configured")
 
     def resolve() -> dict:
         cfg = _ida_load(root)
-        return {"argv_prefix": ["bash", os.path.join(root, "tools/ida_call.sh")],
-                "lifecycle": os.path.join(root, "tools/ida_start.sh"),
+        return {"argv_prefix": ["bash", os.path.join(root, "tools/ida/ida_call.sh")],
+                "lifecycle": os.path.join(root, "tools/ida/ida_start.sh"),
                 "stage": cfg.stage, "url": cfg.url, "config_source": cfg.source}
 
     return Provider(id="ida-windows-wsl", kind="windows", resolve=resolve, probe=probe)
@@ -462,7 +462,7 @@ def default_capabilities(root: str, home: str | None = None) -> dict[str, Capabi
         "trace.strace": Capability("trace.strace", "系统调用追踪", [system_tool_provider(root, "strace", ["-V"])]),
         "debug.ghidra": Capability("debug.ghidra", "Ghidra 无头分析(脚本见 tools/ghidra_scripts)",
                                   [ghidra_provider(root)]),
-        "debug.ida": Capability("debug.ida", "Windows IDA 无头(经 WSL,复用 tools/ida_*)",
+        "debug.ida": Capability("debug.ida", "Windows IDA 无头(经 WSL,复用 tools/ida/ida_*)",
                                 [windows_ida_provider(root)]),
         "mcp.chrome": Capability("mcp.chrome", "浏览器自动化(取件/提交)", [
             mcp_provider("chrome-devtools", _mcp_paths(root)),

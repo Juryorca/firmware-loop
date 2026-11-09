@@ -1,7 +1,9 @@
 # IDA / Windows 接入配置(`fw-core ida-env`)
 
 单一来源:`fwcore/winenv.py`。优先级 **环境变量 `FW_IDA_*` > `state/ida.json` > 兼容默认值**。
-`tools/ida_*.sh` 通过 `tools/ida_env.sh` 自动获取同一份配置,不写死路径/端口。
+`tools/ida/ida_*.sh` 通过 `tools/ida/ida_env.sh` 自动获取同一份配置,不写死路径/端口。
+
+工具套件的命令、会话参数与生命周期见 [`tools/ida/README.md`](../tools/ida/README.md)。
 
 ## 键
 

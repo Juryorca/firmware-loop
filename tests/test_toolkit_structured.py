@@ -94,8 +94,8 @@ def test_ida_query_structured_json_and_fallback(tmp_path):
 def test_ida_tool_registered_and_uses_lifecycle(tmp_path, monkeypatch):
     con, _dom, root, _reg, ctx = _setup(tmp_path)
     monkeypatch.setenv("FW_IDA_PROBE", "0")     # 测试里不探测真实 Windows supervisor
-    _stub(root, "tools/ida_start.sh", '#!/bin/sh\necho started\n')
-    _stub(root, "tools/ida_call.sh", '#!/bin/sh\necho "{\\"functions\\": [], \\"count\\": 0}"\n')
+    _stub(root, "tools/ida/ida_start.sh", '#!/bin/sh\necho started\n')
+    _stub(root, "tools/ida/ida_call.sh", '#!/bin/sh\necho "{\\"functions\\": [], \\"count\\": 0}"\n')
     reg2 = Registry()
     register_repo_tools(reg2, root)
     assert "ida_query" in {s["name"] for s in reg2.describe()}

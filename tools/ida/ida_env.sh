@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 被 tools/ida_*.sh source 的公共前置:加载**唯一一份**配置(fwcore/winenv.py)。
+# 被 tools/ida/ida_*.sh source 的公共前置:加载**唯一一份**配置(fwcore/winenv.py)。
 # 环境变量(显式设置)优先;否则问 fw-core 要(它自己也按 环境>配置>默认 解析)。
 # 这里不写死任何路径:配置缺失就**明确报错**,而不是默默用一个开发者的机器路径。
 set -u
-IDA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+IDA_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # 总是解析一次配置:显式环境变量由 fw-core 自己优先(它读同一批 env),
 # 这样只设置 FW_IDA_STAGE 也不会丢掉 URL/INSTANCES 等其它键。

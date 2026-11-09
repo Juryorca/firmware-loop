@@ -27,5 +27,5 @@
   "risk": "high",
   "capability": "debug.ida",
   "provider": "ida:supervisor",
-  "requires_file": "tools/ida_call.sh"
+  "requires_file": "tools/ida/ida_call.sh"
 }

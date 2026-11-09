@@ -320,7 +320,7 @@ sdk-bloodlines/exploits-validated` 正文不进入 system prompt;`misreports/vul
 | 资产 | 当前状态 | 说明 |
 |---|---|---|
 | `tools/termshot.sh` + `ansi2png.py` | 报告模板/手工 shell 可用;无 registry | 截图规范存在,但 fwcore 无 screenshot guard;是否注册为工具待定 |
-| `tools/ida_start.sh` / `ida_call.sh` / `ida_stop.sh` | IDA 能力经 `ida_query` adapter 可用;生命周期脚本未注册 | 不建议把生命周期做成研究工具;保持环境脚本 |
+| `tools/ida/ida_start.sh` / `ida_call.sh` / `ida_stop.sh` | IDA 能力经 `ida_query` adapter 可用;生命周期脚本未注册 | 不建议把生命周期做成研究工具;保持环境脚本 |
 | `tools/chrome-live-probe.py` | 提交探活脚本;未注册 | 只在用户要求提交时用,不是研究工具 |
 | `tools/win_stage.sh` | 提交附件中转;未注册 | Windows 路径专用,按需手动 |
 
