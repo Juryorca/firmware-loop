@@ -131,7 +131,7 @@
 1. 信号判定: `tools/parse_signal.py` 覆盖的类别以其输出为准;不覆盖的类别(DoS/信息泄露/逻辑缺陷/权限等)用**自定义差分·对比实验**验证,同样构成发现 —— 禁止无证据宣称成功。
 2. 每完成一个阶段 → 用 `state_*` 工具写**权威状态**(假设/证据/结论/下一步);`notes.md` 可选，仅历史叙述，不再是研究过程的必需记录。
 3. 失败先分诊(**假设 / 环境 / 信号**三层),修正后重跑,禁止盲目重试(判据见 `research-loop` Skill(`references/LOOP.md`)「失败分诊」)。
-4. Windows IDA: `tools/ida_start.sh`(幂等)→ `tools/ida_call.sh` 查询 → `tools/ida_stop.sh` 停止。
+4. Windows IDA: 使用 `tools/ida_*.sh` wrapper；具体命令、`database` 参数与生命周期见 `.agents/skills/firmware-reversing/SKILL.md`「IDA headless wrapper」。
 5. 范围门控: 仅 PoC 级验证、仅授权目标;不做武器化、不做沙箱逃逸(探测/交付边界见下方「交付原则」)。
 6. 前提验证: 任务/用户给的前提(如"已加密")同为待验证假设 —— 先指纹实证;证伪即改道,并把"前提修正"用 `knowledge_propose` 记为 `guideline`（tags 含对应工具/前提）。
 7. 工作区清理(收尾必做,**不等用户问**): **规则见 `research-loop` Skill(`references/LOOP.md`)「清理与生命周期」(唯一所在)**;只有两档 —— **使用中 / 收尾未归档(含"提交中、等厂商回复")处理相同**:只清垃圾(`/tmp`、会话日志、运行残留、队列用不到的 `artifacts/`),**不释放运行载体与原件**;只有**用户宣布「归档/不要了」**后一次性释放 运行载体·派生物·原件(原件须满足"可重下"三条件);**只说"收尾"时运行载体照留**(复核/PoC 要用)⇒ 知识 / 对外材料(`report/`)/ 重下凭据永久保留(**`artifacts/` 是内部证据,不属永久保留** ⇒ 见 `research-loop` Skill 两档表 ✓)。
