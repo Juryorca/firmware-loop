@@ -248,3 +248,19 @@ def test_resume_rebuilds_same_model_visible_prefix(tmp_path):
     got = cap.requests[0]
     assert got[0].get("role") == "system"
     assert got[1:1 + len(before)] == before
+
+
+def test_invalid_compaction_cut_falls_back_to_previous_valid_one(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    r = _runner(con, root, ScriptedAdapter(script=[]))
+    rid = r.start("t1", "原始问题")
+    first = con.execute("SELECT id FROM conversation_entries WHERE run_id=?"
+                        " ORDER BY rowid LIMIT 1", (rid,)).fetchone()["id"]
+    dom.add_compaction(rid, "有效摘要", first)
+    dom.add_conversation(rid, "assistant", "保留回答", client_id="kept")
+    dom.add_compaction(rid, "无效摘要", "CV-missing")
+
+    text = "\n".join(str(m.get("content") or "") for m in r._load_history(rid))
+    assert "有效摘要" in text
+    assert "无效摘要" not in text
+    assert "原始问题" in text and "保留回答" in text
