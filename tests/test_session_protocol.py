@@ -264,3 +264,28 @@ def test_invalid_compaction_cut_falls_back_to_previous_valid_one(tmp_path):
     assert "有效摘要" in text
     assert "无效摘要" not in text
     assert "原始问题" in text and "保留回答" in text
+
+
+def test_stream_assistant_persist_failure_pauses_without_fake_history(tmp_path):
+    con, _dom, root = _setup(tmp_path)
+
+    class StreamDone(ScriptedAdapter):
+        def stream(self, messages, tools, *, control=None):
+            yield StreamEvent("start")
+            yield StreamEvent("text_delta", text="部分回复")
+            yield StreamEvent("done", finish_reason="stop")
+
+    r = _runner(con, root, StreamDone(script=[]))
+    rid = r.start("t1", "开始")
+    orig = r._conversation_write
+
+    def fail_assistant(*args, **kwargs):
+        if len(args) > 1 and args[1] == "assistant":
+            raise ConversationPersistError("模拟 assistant 写入失败")
+        return orig(*args, **kwargs)
+
+    r._conversation_write = fail_assistant
+    res = r.run(rid, "t1")
+    assert res.state == "paused"
+    assert "conversation_error" in (res.handback or "")
+    assert not [e for e in _dom.conversation(rid) if e["role"] == "assistant"]

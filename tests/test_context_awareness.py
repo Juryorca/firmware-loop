@@ -147,3 +147,32 @@ def test_non_object_model_config_is_rejected(tmp_path, monkeypatch):
         limits_config(str(tmp_path))
     with pytest.raises(ValueError):
         load_model_config(str(tmp_path))
+
+
+def _usage_event(con, rid, usage, *, kind=None):
+    payload = {"usage": usage, "prompt_tokens": usage.get("prompt_tokens"),
+               "cached_tokens": (usage.get("prompt_tokens_details") or {}).get("cached_tokens")}
+    if kind:
+        payload["kind"] = kind
+    con.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                ("2026-01-01T00:00:00+00:00", "model.call", rid, json.dumps(payload)))
+
+
+def test_latest_main_without_usage_is_unknown_not_older_usage(tmp_path):
+    con, root = _ws(tmp_path)
+    r = Runner(con, root, Rec(), mcp=False, watchdog=False)
+    rid = r.start("t1", "usage ordering")
+    _usage_event(con, rid, {"prompt_tokens": 11})
+    _usage_event(con, rid, {})
+    _usage_event(con, rid, {"prompt_tokens": 99_999}, kind="summarize")
+    assert r._last_main_usage(rid) == {}
+    assert r._last_main_prompt_tokens(rid) is None
+
+
+def test_summarize_usage_is_ignored_for_last_main_usage(tmp_path):
+    con, root = _ws(tmp_path)
+    r = Runner(con, root, Rec(), mcp=False, watchdog=False)
+    rid = r.start("t1", "usage ordering")
+    _usage_event(con, rid, {"prompt_tokens": 11})
+    _usage_event(con, rid, {"prompt_tokens": 99_999}, kind="summarize")
+    assert r._last_main_usage(rid)["prompt_tokens"] == 11

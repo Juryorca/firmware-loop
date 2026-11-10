@@ -1011,6 +1011,10 @@ class Runner:
                                "tool_calls": len(safe.tool_calls)})
             self._persist_assistant(rid, safe, status=status, call_seq=call_seq)
             return safe
+        except ConversationPersistError:
+            # The assistant session write failed; turn() owns the pause path.
+            # Re-persisting it as a stream error would duplicate or mislabel it.
+            raise
         except StreamCancelled as exc:
             reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
             safe = self._protocol_safe_reply(reply, "cancelled")
@@ -1411,6 +1415,10 @@ class Runner:
                     self._last_usage = {"prompt_tokens": _u.get("prompt_tokens"),
                                         "cached_tokens": (_u.get("prompt_tokens_details") or {}).get(
                                             "cached_tokens", _u.get("prompt_cache_hit_tokens"))}
+                else:
+                    # Do not let a previous main call's usage masquerade as
+                    # the current context measurement.
+                    self._last_usage = {}
                 _event(self.con, "model.call", rid, {
                     "step": step, "n_messages": len(msgs),
                     "system_chars": _ctx["system"], "history_chars": _ctx["total"],
@@ -1677,12 +1685,17 @@ class Runner:
                 continue
             if payload.get("kind") == "summarize":
                 continue
+            # The first non-summarize event is the latest main call.  If it
+            # has no provider usage, the measurement is unknown; never fall
+            # back to an older main call's number.
             prompt = payload.get("prompt_tokens")
             if isinstance(prompt, int) and prompt > 0:
                 usage = {"prompt_tokens": prompt,
                          "cached_tokens": payload.get("cached_tokens")}
                 self._last_usage = usage
                 return dict(usage)
+            self._last_usage = {}
+            return {}
         return {}
 
     def _last_main_prompt_tokens(self, rid: str) -> int | None:

@@ -25,7 +25,7 @@ def _run(*args: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
 
 
 def _mk_workspace(tmp_path) -> tuple[str, str]:
-    """两个目标:alpha 小上下文 / beta 大上下文;各自一个 run + checkpoint + usage 事件。"""
+    """两个目标:alpha 小上下文 / beta 大上下文;各自一个 run + provider usage 事件。"""
     root = str(tmp_path)
     db = os.path.join(root, "state", "fwcore.sqlite3")
     con = _db.connect(db)
@@ -67,3 +67,20 @@ def test_context_rejects_foreign_run(tmp_path):
     r = _run("--root", root, "--db", db, "context", "alpha", "--run", "R-B")
     assert r.returncode == 2
     assert "不属于目标" in r.stderr
+
+
+def test_context_ignores_latest_summarize_usage(tmp_path):
+    root, db = _mk_workspace(tmp_path)
+    con = _db.connect(db)
+    con.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                (NOW, "model.call", "R-A",
+                 json.dumps({"kind": "summarize",
+                             "usage": {"prompt_tokens": 999_999}})))
+    con.commit()
+    con.close()
+
+    r = _run("--root", root, "--db", db, "context", "alpha")
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["last_prompt_tokens"] == 11
+    assert out["used_input"] == 11 and out["used_source"] == "provider"

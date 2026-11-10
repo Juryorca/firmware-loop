@@ -329,21 +329,28 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"run {args.run_id} 不属于目标 {args.target}", file=sys.stderr)
                     return 2
                 run_ids = [args.run_id]
-            # 固定 SQL + 绑定参数:run 过滤走 JOIN，不拼接 IN 占位符。
+            # Latest *main* call, not a summarize call.  Summary usage is a
+            # different operation and must not become the context measurement.
             if args.run_id:
-                last = con.execute(
+                recent = con.execute(
                     "SELECT payload FROM events WHERE kind='model.call'"
-                    " AND ref=? ORDER BY ts DESC, id DESC LIMIT 1",
-                    (args.run_id,)).fetchone()
+                    " AND ref=? ORDER BY ts DESC, id DESC LIMIT 32",
+                    (args.run_id,)).fetchall()
             elif run_ids:
-                last = con.execute(
+                recent = con.execute(
                     "SELECT payload FROM events WHERE kind='model.call'"
                     " AND ref IN (SELECT id FROM runs WHERE target_id=?)"
-                    " ORDER BY ts DESC, id DESC LIMIT 1",
-                    (t.id,)).fetchone()
+                    " ORDER BY ts DESC, id DESC LIMIT 32",
+                    (t.id,)).fetchall()
             else:
-                last = None
-            lu = (json.loads(last["payload"]).get("usage") or {}) if last else {}
+                recent = []
+            lu = {}
+            for row in recent:
+                payload = json.loads(row["payload"])
+                if payload.get("kind") == "summarize":
+                    continue
+                lu = payload.get("usage") or {}
+                break
             _k, _b, _m = load_model_config(args.root)
 
             st = build_status(

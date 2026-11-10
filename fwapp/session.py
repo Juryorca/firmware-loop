@@ -677,9 +677,10 @@ class AgentSession:
             out["completion"] += int(u.get("completion_tokens") or p.get("completion_tokens") or 0)
             out["cached"] += cached
             out["calls"] += 1
-            # Pi 的 footer 显示最近一次 assistant 请求的 cache hit rate；
-            # summarize 调用的 usage 不混进这个“当前请求”指标。
-            if p.get("kind") != "summarize" and prompt:
+            # Pi 的 footer 显示最近一次 main 请求的 cache hit rate;
+            # summarize 调用不混进这个指标。最新 main 没有 usage 时必须是 0,
+            # 不能沿用更早 main 的数字。
+            if p.get("kind") != "summarize":
                 out["last_prompt"] = prompt
                 out["last_cached"] = cached
         out["total"] = out["prompt"] + out["completion"]
