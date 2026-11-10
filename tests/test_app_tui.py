@@ -814,8 +814,8 @@ def test_thinking_block_is_visible_and_toggles(tmp_path):
         rt.dispose()
 
 
-def test_context_status_prefers_estimate_over_summarize_prompt():
-    """A summarize call has a tiny prompt; it must not make the footer look empty."""
+def test_context_status_uses_last_main_request_like_pi():
+    """The footer uses the last main request; summarize calls never replace it."""
     from types import SimpleNamespace
 
     from fwapp.widgets.status import format_snapshot
@@ -826,11 +826,11 @@ def test_context_status_prefers_estimate_over_summarize_prompt():
         tokens={"prompt": 100, "cached": 75, "last_prompt": 43_103,
                 "last_cached": 43_000, "completion": 0, "total": 100},
         context={"window": 1_000_000, "estimated": 945_218,
-                 "last_prompt": 43_103, "percent": 94.5},
+                 "last_prompt": 756_111, "percent": 75.6},
         hypotheses={}, evidence=0, blockers=[],
     )
     text = format_snapshot(s).plain
-    assert "上下文 945.2k/1.0M" in text
+    assert "上下文 756.1k/1.0M" in text
     assert "43.1k" not in text
 
 

@@ -669,7 +669,10 @@ class AgentSession:
         # event is tiny (e.g. 43k) and made the TUI footer claim the session
         # was nearly empty right before compaction.
         prompt = int(tokens.get("last_prompt") or 0)
-        used = est or prompt
+        # Match Pi's footer: show the last *main* provider request.  The local
+        # estimate remains available for compaction decisions, but is not the
+        # user-facing "context used" number (it can run ahead of provider usage).
+        used = prompt or est
         return {"estimated": est, "window": window, "last_prompt": prompt,
                 "percent": round(used / window * 100, 1) if window else None}
 
