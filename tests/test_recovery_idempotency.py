@@ -58,6 +58,29 @@ def test_resume_does_not_repeat_side_effect_after_lost_checkpoint(tmp_path):
     assert len(row) == 1 and row[0]["status"] == "ok"
 
 
+class _NoModelCall:
+    name = "never"
+
+    def chat(self, messages, tools):
+        raise AssertionError("没有 checkpoint 时不能拿 user-only 历史调用模型")
+
+
+def test_resume_without_checkpoint_pauses_instead_of_user_only_history(tmp_path):
+    con, _dom, root = _setup(tmp_path)
+    r = Runner(con, root, ScriptedAdapter(script=[{"content": "FINAL: x", "tool_calls": []}]),
+               limits=Limits(max_model_calls=4), policy=Policy(allow_high_risk=True))
+    rid = r.start("t1")
+    con.execute("UPDATE runs SET step=5, state='paused', pid=NULL, pid_starttime=NULL WHERE id=?", (rid,))
+
+    r2 = Runner(con, root, _NoModelCall(), limits=Limits(max_model_calls=4),
+                policy=Policy(allow_high_risk=True))
+    res = r2.resume(rid)
+    assert res.state == "paused" and res.handback == "history_missing"
+    row = con.execute("SELECT state, handback_reason FROM runs WHERE id=?", (rid,)).fetchone()
+    assert row["state"] == "paused" and row["handback_reason"].startswith("history_missing")
+    assert con.execute("SELECT COUNT(*) n FROM events WHERE kind='run.history_missing'").fetchone()["n"] == 1
+
+
 def test_partial_tool_state_is_visible_not_silently_ok(tmp_path):
     """工具调用若停在 running(进程被杀),状态必须如实为 running,不能伪装成 ok。"""
     con, _dom, _root = _setup(tmp_path)

@@ -75,10 +75,9 @@ def test_reasoning_only_is_recorded_not_blank(tmp_path):
     res, _f, _rid = _run(con, root, script)
     ev = _events(con, "model.reply")
     assert ev and ev[0]["class"] == "reasoning_only" and ev[0]["reasoning_len"] > 0
-    ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
-    msgs = json.loads(ck["messages"])
-    assistants = [m for m in msgs if m.get("role") == "assistant"]
-    assert any((m.get("reasoning_content") or "") for m in assistants), "推理内容不能丢成空白"
+    rows = con.execute("SELECT meta FROM conversation_entries WHERE role='assistant'").fetchall()
+    metas = [json.loads(r["meta"] or "{}") for r in rows]
+    assert any((m.get("reasoning") or "") for m in metas), "推理内容不能丢成空白"
     assert res.state in ("paused", "finished")
 
 

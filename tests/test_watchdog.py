@@ -53,15 +53,6 @@ def test_watchdog_pauses_stalled_run_and_kills_tool_process_group(tmp_path):
             child.kill()
 
 
-def test_watchdog_pauses_on_db_growth(tmp_path):
-    con, dom, root, rid, _hid = _mk(tmp_path)
-    dom.con.execute("INSERT INTO tool_calls(id,run_id,tool,args,status,created_at)"
-                    " VALUES('TC1',?,'x','{}','ok','2026-01-01')", (rid,))
-    acts = Watchdog(con, root, Limits(max_db_bytes=1)).scan_once()
-    assert any(a.get("reason") == "max_db_bytes" for a in acts)
-    assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "paused"
-
-
 def test_watchdog_leaves_healthy_run_alone(tmp_path):
     con, _dom, root, rid, _hid = _mk(tmp_path)
     con.execute("UPDATE runs SET heartbeat_at=? WHERE id=?",

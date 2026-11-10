@@ -21,6 +21,7 @@ HANDBACK_LABELS = {
     "model_error": "模型调用失败",
     "watchdog_paused": "执行进程中断，已暂停",
     "recovered_stale": "恢复时发现旧任务，已暂停",
+    "history_missing": "历史检查点不可用，已暂停",
     "owner_dead": "执行进程失联",
     "run_not_running": "任务未在运行",
     "budget": "已达到执行预算",
@@ -162,10 +163,8 @@ def format_snapshot(s: Snapshot) -> Text:
         t.append(" · 缓存 —", style="#66717F")
     ctx = s.context or {}
     if ctx.get("window"):
-        # Pi footer semantics: last main provider request.  The local estimate
-        # is intentionally not shown here; it can overcount and is used by the
-        # compactor, not as the user-facing context meter.
-        used = ctx.get("last_prompt") or ctx.get("estimated") or 0
+        # Pi footer semantics: last main provider request only.
+        used = ctx.get("last_prompt") or 0
         t.append(f" · 上下文 {_fmt_tokens(used)}/{_fmt_tokens(ctx['window'])}",
                  style="#8995A5")
     h = s.hypotheses or {}

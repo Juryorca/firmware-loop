@@ -94,7 +94,7 @@ def test_progress_snapshot_is_structured(tmp_path):
     assert p["run_id"] == rid and p["target"] == "t1"
     assert p["state"] in ("finished", "paused")
     assert p["blockers"], "有未收口假设 ⇒ blockers 必须非空"
-    assert p["limits"]["checkpoints_keep"] > 0 and isinstance(p["recent_events"], list)
+    assert isinstance(p["recent_events"], list)
 
 
 def test_prepare_timeout_does_not_wait_for_hung_hook(tmp_path):

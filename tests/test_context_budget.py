@@ -68,9 +68,9 @@ def test_tool_pairing_survives_checkpoint_resume(tmp_path):
     Domain(con, root).create_target("t1", version="1")
     r = Runner(con, root, _Chatty(4), limits=Limits(max_model_calls=8),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
-    res = r.run(r.start("t1", "配对"), "t1")
-    ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
-    msgs = json.loads(ck["messages"])
+    rid = r.start("t1", "配对")
+    res = r.run(rid, "t1")
+    msgs = r._load_history(rid)
     pending: set[str] = set()
     for m in msgs:
         if m.get("role") == "assistant":

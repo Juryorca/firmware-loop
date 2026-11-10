@@ -2,12 +2,12 @@
 
 为什么必须有这一层(2026-11-04 62GB 事故的教训):
 被保护的循环如果自己写错(例如"空闲检测"漏了、模型永不 FINAL),它就没有机会执行自己的保护。
-因此还需要一个**外部**观察者:只看可观测事实(心跳、库体积、检查点数量、墙钟、进程是否还在),
+因此还需要一个**外部**观察者:只看可观测事实(心跳、墙钟、进程是否还在),
 超阈值就强行把 run 置为 paused 并**杀掉该 run 的工具进程组**,不指望循环配合。
 
 设计要点
 - 只读事实 + 一处写(`runs.state='paused'`)+ 杀进程组;不碰任何研究事实(假设/证据/结论)。
-- 阈值全部来自 `Limits`(硬保护恒在);可单次(`watchdog_once`)或常驻(`start_daemon`)。
+- 阈值来自 `Limits`;可单次(`watchdog_once`)或常驻(`start_daemon`)。
 - 进程组来源:`tool_calls` 里记录过的 pgid(见 tools.shell_exec),或 run 的 run_dir 下 `.pgids`。
 """
 
@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import db as _db
-from .limits import MB, Limits
+from .limits import Limits
 
 log = logging.getLogger("fwcore.watchdog")
 
@@ -123,12 +123,6 @@ class Watchdog:
             return self._scan(con, now, actions)
 
     def _scan(self, con: sqlite3.Connection, now: float, actions: list[dict]) -> list[dict]:
-        # ① 磁盘:库体积超过硬顶 ⇒ 所有 running 的 run 暂停
-        size = self._db_bytes(con)
-        if size > self.limits.max_db_bytes:
-            actions.append({"reason": "max_db_bytes", "db_bytes": size,
-                            "limit": self.limits.max_db_bytes})
-
         rows = con.execute(
             "SELECT r.id, r.heartbeat_at, r.updated_at, r.state, r.pid, r.pid_starttime, r.host"
             " FROM runs r WHERE r.state='running'"
@@ -136,10 +130,6 @@ class Watchdog:
         for r in rows:
             hb = _epoch(r["heartbeat_at"] or r["updated_at"])
             stale = (now - hb) > self.heartbeat_timeout_s if hb else True
-            n_ck = con.execute(
-                "SELECT COUNT(*) n FROM checkpoints WHERE run_id=?", (r["id"],)).fetchone()["n"]
-            too_many = n_ck > max(self.limits.checkpoints_keep * 2, 10)
-            over_db = size > self.limits.max_db_bytes
             # 主运行进程已死(或 pid 被复用)⇒ 这个 run 不可能再推进:
             # 看护作为**独立进程**必须能发现它(否则看护与主进程同生共死 = 没有保护)
             owner_dead = False
@@ -150,13 +140,9 @@ class Watchdog:
                     cur = _proc_starttime(r["pid"])
                     owner_dead = cur is not None and cur != r["pid_starttime"]
 
-            # 硬保护优先:磁盘/检查点超限与"心跳停滞"是两类事 ——
-            # 长工具只能豁免"停滞",**不得**豁免磁盘与检查点硬顶(否则 fuzz 期间库爆盘无人管)
-            hard = [name for name, hit in (("max_db_bytes", over_db),
-                                           ("checkpoints", too_many),
-                                           ("owner_dead", owner_dead)) if hit]
+            hard = ["owner_dead"] if owner_dead else []
             if hard:
-                why = "owner_dead" if "owner_dead" in hard else ",".join(hard)
+                why = "owner_dead"
                 # 扫描时快照 .pgids:接管后的新 owner 会往里追加自己的进程组,
                 # 按"现在的文件"杀会误杀新 owner 的工具
                 snap = self._pgids_entries(r["id"])
@@ -176,11 +162,11 @@ class Watchdog:
                     killed = self._kill_pgids(r["id"], snap)
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
-                               json.dumps({"hard": hard, "checkpoints": n_ck, "db_bytes": size,
+                               json.dumps({"hard": hard,
                                            "stale_s": round(now - hb, 1) if hb else None,
                                            "killed_pgids": killed}, ensure_ascii=False)))
                 actions.append({"run": r["id"], "paused": True, "hard": hard,
-                                "killed_pgids": killed, "checkpoints": n_ck, "db_bytes": size})
+                                "killed_pgids": killed})
                 continue
 
             if stale and not owner_dead:
@@ -222,10 +208,9 @@ class Watchdog:
                     c.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
                               (_now(), "watchdog.paused", r["id"],
                                json.dumps({"stale_s": round(now - hb, 1) if hb else None,
-                                           "checkpoints": n_ck, "killed_pgids": killed,
-                                           "db_bytes": size}, ensure_ascii=False)))
+                                           "killed_pgids": killed}, ensure_ascii=False)))
                 actions.append({"run": r["id"], "paused": True, "killed_pgids": killed,
-                                "stale_s": round(now - hb, 1) if hb else None, "checkpoints": n_ck})
+                                "stale_s": round(now - hb, 1) if hb else None})
         return actions
 
     def start_daemon(self, stop: threading.Event | None = None) -> threading.Thread:
@@ -295,4 +280,4 @@ def _now() -> str:
     return _d.datetime.now(_d.UTC).isoformat(timespec="seconds")
 
 
-__all__ = ["MB", "Watchdog"]
+__all__ = ["Watchdog"]

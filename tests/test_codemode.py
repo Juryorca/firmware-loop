@@ -346,14 +346,10 @@ def test_tool_search_activation_survives_checkpoint_and_resume(tmp_path):
         watchdog=False,
     )
     rid = r.start("t1")
-    history = [
-        {
-            "role": "tool",
-            "name": "tool_search",
-            "content": json.dumps({"status": "ok", "loaded": ["deferred_ida"]}),
-        }
-    ]
-    assert r._checkpoint(rid, 1, history)
+    dom.add_conversation(
+        rid, "tool", json.dumps({"status": "ok", "loaded": ["deferred_ida"]}),
+        tool_call_id="ts1", meta={"tool": "tool_search"})
+    assert r._checkpoint(rid, 1, [])
     r2 = Runner(
         con,
         str(tmp_path),

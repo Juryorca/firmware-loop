@@ -52,9 +52,9 @@ def test_large_fs_read_survives_to_model(tmp_path):
     Domain(con, root).create_target("t1", version="1")
     r = Runner(con, root, _Model(), limits=Limits(max_model_calls=4),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
-    r.run(r.start("t1", "读大文件"), "t1")
-    ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
-    msgs = json.loads(ck["messages"])
+    rid = r.start("t1", "读大文件")
+    r.run(rid, "t1")
+    msgs = r._load_history(rid)
     tool_msgs = [m for m in msgs if m.get("role") == "tool"]
     assert tool_msgs
     payload = json.loads(tool_msgs[0]["content"])     # 模型看到的是合法 JSON

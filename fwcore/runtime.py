@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from . import db as _db
-from .compact import compact_history, estimate_tokens, should_compact
+from .compact import SUMMARY_HEADER, compact_history, estimate_tokens, should_compact
 from .compact import find_cut as _find_cut
 from .contextinfo import build_status
 from .domain import ConversationPersistError, Domain, new_id
@@ -496,23 +496,104 @@ class Runner:
             self.registry.activate_deferred(names)
 
     def _load_history(self, rid: str) -> list[dict]:
-        """从最新检查点恢复历史(含旧版坏 JSON 修复);损坏就返回空并记事件。"""
-        ck = self.con.execute(
-            "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1",
-            (rid,)).fetchone()
-        if not ck:
-            return []
-        try:
-            def _lookup(pid):
-                row = self.con.execute(
-                    "SELECT id, stdout_path, result_path FROM tool_calls"
-                    " WHERE id=? OR call_key=?", (pid, pid)).fetchone()
-                return dict(row) if row else None
+        """Rebuild the active branch from append-only conversation entries.
 
-            return _sanitize_history(json.loads(ck["messages"]), _lookup)
-        except (json.JSONDecodeError, TypeError) as e:
+        Pi keeps session entries and appends a compaction marker; it does not
+        replace the transcript with a full-history checkpoint.  This loader does
+        the same: raw entries stay, and a compaction only changes the projection
+        used for the next request.
+        """
+        rows = self.con.execute(
+            "SELECT * FROM conversation_entries WHERE run_id=?"
+            " AND status IN ('ok','partial') ORDER BY rowid", (rid,)).fetchall()
+        if not rows:
+            return []
+
+        def _tool(cid):
+            row = self.con.execute(
+                "SELECT tool,args FROM tool_calls WHERE id=? OR call_key=?"
+                " ORDER BY rowid DESC LIMIT 1", (cid, cid)).fetchone()
+            return dict(row) if row else None
+
+        comp = self.con.execute(
+            "SELECT summary,first_kept_id FROM compactions WHERE run_id=?"
+            " ORDER BY rowid DESC LIMIT 1", (rid,)).fetchone()
+        start = 0
+        messages: list[dict] = []
+        if comp:
+            if comp["first_kept_id"] is None:
+                start = len(rows)
+            else:
+                for i, row in enumerate(rows):
+                    if row["id"] == comp["first_kept_id"]:
+                        start = i
+                        break
+            # A tool result cannot be the first message after a summary: its
+            # assistant tool_call would be missing.  Walk back to the owning
+            # assistant turn (Pi keeps whole tool groups at the cut boundary).
+            while start > 0 and rows[start]["role"] == "tool":
+                start -= 1
+            messages.append({"role": "assistant",
+                             "content": SUMMARY_HEADER + "\n" + (comp["summary"] or "")})
+
+        for row in rows[start:]:
+            role = row["role"]
+            content = row["content"] or ""
+            meta = {}
+            try:
+                meta = json.loads(row["meta"] or "{}")
+            except (TypeError, ValueError):
+                meta = {}
+            if role == "user":
+                if content.strip():
+                    messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                calls = []
+                full = meta.get("tool_calls_full") or []
+                if full:
+                    for c in full:
+                        calls.append({
+                            "id": c.get("id"), "type": "function",
+                            "function": {"name": c.get("name") or "",
+                                         "arguments": json.dumps(c.get("args") or {}, ensure_ascii=False)}})
+                else:
+                    for cid in meta.get("tool_calls") or []:
+                        tc = _tool(cid)
+                        if tc:
+                            calls.append({
+                                "id": cid, "type": "function",
+                                "function": {"name": tc.get("tool") or "",
+                                             "arguments": tc.get("args") or "{}"}})
+                if content or calls:
+                    msg = {"role": "assistant", "content": content}
+                    if meta.get("reasoning"):
+                        msg["reasoning_content"] = meta["reasoning"]
+                    if calls:
+                        msg["tool_calls"] = calls
+                    messages.append(msg)
+            elif role == "tool" and row["tool_call_id"]:
+                # Keep the model-visible payload shape: the DB call id is
+                # db_tool_call_id, never the protocol tool_call_id.
+                try:
+                    payload = json.loads(content)
+                except (TypeError, ValueError):
+                    payload = None
+                if isinstance(payload, dict) and "tool_call_id" in payload \
+                        and "db_tool_call_id" not in payload:
+                    payload["db_tool_call_id"] = payload.pop("tool_call_id")
+                    content = json.dumps(payload, ensure_ascii=False)
+                msg = {"role": "tool", "tool_call_id": row["tool_call_id"],
+                       "content": content}
+                if meta.get("tool"):
+                    msg["name"] = meta["tool"]
+                if meta.get("parts"):
+                    msg["parts"] = meta["parts"]
+                messages.append(msg)
+        try:
+            return _sanitize_history(messages, _tool)
+        except (TypeError, ValueError) as e:
             with _db.Tx(self.con) as c:
-                _event(c, "run.checkpoint_corrupt", rid, {"error": str(e)[:200]})
+                _event(c, "run.session_corrupt", rid, {"error": str(e)[:200]})
             return []
 
     def _artifact_of(self, tool_call_id: str | None) -> str | None:
@@ -531,19 +612,11 @@ class Runner:
         return os.path.relpath(p, self.root) if os.path.isabs(p) else p
 
     def _checkpoint(self, rid: str, step: int, history: list[dict]) -> bool:
-        """存检查点。
-
-        防爆(2026-11-04 62GB 事故):
-        - **裁剪**:只保留最近 20 条工具输出原文,更早的截断成摘要 —— 恢复仍可用,体积可控;
-        - **保留上限**:只留最近 `limits.checkpoints_keep` 条;
-        - **库体积硬顶**:超过 `limits.max_db_bytes` 继续删最老的检查点,仍超 ⇒ 暂停 run(不写结论)。
-        """
-        payload = json.dumps(_shrink_history(history, artifact_of=self._artifact_of),
-                             ensure_ascii=False)
+        """Advance the run pointer; history lives in append-only conversation entries."""
         me = os.getpid()
         st = _proc_starttime(me)
+        ok = False
         with _db.Tx(self.con) as c:
-            # 检查与写入同一条 UPDATE:扫描后接管也不能让旧 owner 写 checkpoint
             cur = c.execute(
                 "UPDATE runs SET step=?, updated_at=? WHERE id=?"
                 " AND state IN ('running','paused')"
@@ -551,33 +624,16 @@ class Runner:
                 (step, _now(), rid, me, st))
             if not cur.rowcount:
                 return False
-            c.execute("INSERT INTO checkpoints(id,run_id,step,messages,created_at) VALUES(?,?,?,?,?)",
-                      (new_id("CK"), rid, step, payload, _now()))
-            try:
-                keep = max(1, int(self.limits.checkpoints_keep))
-            except (TypeError, ValueError):
-                keep = 120
-            c.execute(
-                "DELETE FROM checkpoints WHERE run_id=? AND id NOT IN "
-                "(SELECT id FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT ?)",
-                (rid, rid, keep))
-        self._enforce_db_cap(rid)
-        return True
-
-    def _enforce_db_cap(self, rid: str) -> None:
-        """库体积硬顶:超了就删最老的检查点;仍超 ⇒ 暂停(保留可恢复性,不改变研究事实)。"""
-        size = _db_bytes(self.con)
-        if size <= self.limits.max_db_bytes:
-            return
-        with _db.Tx(self.con) as c:
-            c.execute("DELETE FROM checkpoints WHERE id IN "
-                      "(SELECT id FROM checkpoints ORDER BY created_at ASC LIMIT 200)")
-        # WAL 截断必须在事务之外;并发写者持有锁时跳过即可
-        with contextlib.suppress(_db.sqlite3.OperationalError):
-            self.con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        size = _db_bytes(self.con)
-        if size > self.limits.max_db_bytes:
-            self._pending_pause = ("max_db_bytes", {"db_bytes": size, "limit": self.limits.max_db_bytes})
+            # The model history is append-only in conversation_entries.  Keep
+            # only tiny step pointers here for compatibility/inspection; never
+            # write a full-history snapshot.
+            c.execute("INSERT INTO checkpoints(id,run_id,step,messages,created_at)"
+                      " VALUES(?,?,?,?,?)", (new_id("CK"), rid, step, '{"type":"pointer"}', _now()))
+            c.execute("DELETE FROM checkpoints WHERE run_id=? AND id NOT IN "
+                      "(SELECT id FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 2)",
+                      (rid, rid))
+            ok = True
+        return ok
 
     def _limit_hit(self, rid: str, reason: str, detail: dict | None = None) -> None:
         """记录"执行边界触发"。**只暂停**,不写任何研究结论。"""
@@ -651,6 +707,9 @@ class Runner:
             "finish_reason": reply.finish_reason or "",
             "usage": reply.usage or {},
             "tool_calls": [c.get("id") for c in reply.tool_calls],
+            "tool_calls_full": [{"id": c.get("id"), "name": c.get("name"),
+                                  "args": c.get("args") or {}} for c in reply.tool_calls],
+            "reasoning": reply.reasoning or "",
             "reasoning_len": len(reply.reasoning or ""),
         }
         if error:
@@ -841,7 +900,8 @@ class Runner:
                 rid, "tool", content, status=cstatus,
                 tool_call_id=call.get("id"),
                 client_id=f"tool:{rid}:{call_id}",
-                meta={"tool": call.get("name"), "status": status})
+                meta={"tool": call.get("name"), "status": status,
+                      "parts": out.get("parts") or []})
         except ConversationPersistError as e:
             self._emit_stream({"type": "conversation_error", "run": rid,
                                "phase": "tool", "tool": call.get("name"),
@@ -903,26 +963,13 @@ class Runner:
             run_calls = run_tools = 0
             run_elapsed = 0.0
         t0 = time.time()
-        # 用户消息本身是 append-only 历史的一部分；不能只塞在每轮临时
-        # state prompt 里。否则下一次请求会改写尾部，前缀缓存从目标处失效。
-        # 以 conversation(权威、append-only)补齐 history 中缺失的用户轮次。
-        conv_users = [
-            (e.get("content") or "").strip()
-            for e in self.domain.conversation(rid, roles=("user",))
-            if (e.get("content") or "").strip()
-        ]
-        existing_users = [
-            (m.get("content") or "").strip()
-            for m in history
-            if m.get("role") == "user" and not m.get("_context_only")
-            and (m.get("content") or "").strip()
-        ]
-        if existing_users == conv_users[:len(existing_users)]:
-            for text in conv_users[len(existing_users):]:
-                history.append({"role": "user", "content": text})
-        elif goal and (not existing_users or existing_users[-1] != goal.strip()):
-            # 直接 turn(未经过 start/resume 持久化)的兼容路径。
-            history.append({"role": "user", "content": goal})
+        # Conversation entries are the append-only session log.  Never invent a
+        # user-only history when the log/checkpoint is missing; only append the
+        # current turn's goal if it is not already the tail.
+        if goal:
+            tail = history[-1] if history else None
+            if not tail or tail.get("role") != "user" or (tail.get("content") or "") != goal:
+                history.append({"role": "user", "content": goal})
 
         def _persist() -> None:
             # 检查与写入同一条 UPDATE;并发接管后旧 owner 不能改计数
@@ -1017,6 +1064,16 @@ class Runner:
                                {"tokens": before, "error": str(e)[:300]})
                         self._compact_cooldown_until = run_calls + self.limits.compact_retry_cooldown_calls
                     else:
+                        summary = new_history[0].get("content", "")
+                        if SUMMARY_HEADER in summary:
+                            summary = summary.split(SUMMARY_HEADER, 1)[1].lstrip("\n")
+                        recent_count = max(0, len(new_history) - 1)
+                        recent = self.con.execute(
+                            "SELECT id FROM conversation_entries WHERE run_id=?"
+                            " AND status IN ('ok','partial') ORDER BY rowid DESC LIMIT ?",
+                            (rid, recent_count)).fetchall()
+                        first_kept_id = recent[-1]["id"] if recent_count and recent else None
+                        self.domain.add_compaction(rid, summary, first_kept_id, before)
                         history = new_history
                         self._last_compact = {"before_tokens": before,
                                               "after_tokens": estimate_tokens(history), **_info}
@@ -1027,16 +1084,14 @@ class Runner:
                 # 用户消息已在 history 中；动态状态只保留程序生成的研究事实。
                 # 这与 Pi 的 append-only custom/context message 语义一致。
                 _state = self.research.state_prompt(target, None, rid)
+                _last_usage = self._last_main_usage(rid)
                 _status = build_status(
                     model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
                     window=self.limits.context_tokens or None,
-                    messages=history,
                     output_reserve=self.limits.output_reserve_tokens,
                     context_tokens=self.limits.context_tokens,
-                    last_prompt_tokens=self._last_usage.get("prompt_tokens"),
-                    last_cached_tokens=self._last_usage.get("cached_tokens"),
-                    system=_sys, state=_state,
-                    schema=json.dumps(self.registry.describe_model(), ensure_ascii=False))
+                    last_prompt_tokens=_last_usage.get("prompt_tokens"),
+                    last_cached_tokens=_last_usage.get("cached_tokens"))
                 _state = _state + "\n\n" + _status.render()
                 _note = self._prepare_state.get("context_note")
                 if _note:
@@ -1415,14 +1470,15 @@ class Runner:
                                             "handback": handback, "blockers": blockers[:5]})
         return RunResult(rid, state, step, rounds, final, ready, blockers, handback, history)
 
-    def _last_main_prompt_tokens(self, rid: str) -> int | None:
-        """Last provider-reported prompt usage from a non-summarize call.
+    def _last_main_usage(self, rid: str) -> dict:
+        """Last provider-reported usage from a non-summarize call.
 
         A fresh resumed Runner has no in-memory usage; replay recent model.call
-        events to keep the Pi-like compaction decision stable across processes.
+        events so both the context meter and compaction use the same Pi-like
+        provider number instead of the local chars/2.0 estimate.
         """
         if self._last_usage.get("prompt_tokens"):
-            return int(self._last_usage["prompt_tokens"])
+            return dict(self._last_usage)
         rows = self.con.execute(
             "SELECT payload FROM events WHERE kind='model.call' AND ref=?"
             " ORDER BY id DESC LIMIT 32", (rid,)).fetchall()
@@ -1435,8 +1491,17 @@ class Runner:
                 continue
             prompt = payload.get("prompt_tokens")
             if isinstance(prompt, int) and prompt > 0:
-                return prompt
-        return None
+                usage = {"prompt_tokens": prompt,
+                         "cached_tokens": payload.get("cached_tokens")}
+                self._last_usage = usage
+                return dict(usage)
+        return {}
+
+    def _last_main_prompt_tokens(self, rid: str) -> int | None:
+        """Last provider-reported prompt usage from a non-summarize call."""
+        usage = self._last_main_usage(rid)
+        prompt = usage.get("prompt_tokens")
+        return int(prompt) if prompt else None
 
     def _round_advanced(self, target: str, since: str) -> bool:
         """本轮是否真的推进了研究:决定性尝试结束 / 假设收口 / 假设被放弃。"""
@@ -1576,6 +1641,15 @@ class Runner:
         # 之前所有工具结果/结论都"消失"(resume 一直是这么做的,advance 漏了)
         hist = list(history) if history is not None else (
             self._load_history(rid) if run_id else [])
+        if run_id and not hist:
+            row = self.con.execute("SELECT step,rounds FROM runs WHERE id=?", (rid,)).fetchone()
+            if row and row["step"] > 0:
+                _event(self.con, "run.history_missing", rid,
+                       {"step": row["step"], "reason": "no checkpoint; refusing user-only history"})
+                self._set_paused(
+                    rid, "history_missing: checkpoint 不可用,拒绝用空历史恢复")
+                return RunResult(rid, "paused", row["step"], row["rounds"], "", False, [],
+                                 "history_missing", [])
         if run_id and goal:
             # Same append-only/user-message semantics as resume(), but before
             # the auto-advance loop starts so the first turn sees the command.
@@ -1663,6 +1737,13 @@ class Runner:
         history = self._load_history(rid)
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)
+        if row["step"] > 0 and not history:
+            _event(self.con, "run.history_missing", rid,
+                   {"step": row["step"], "reason": "no checkpoint; refusing user-only history"})
+            self._set_paused(
+                rid, "history_missing: checkpoint 不可用,拒绝用空历史恢复")
+            return RunResult(rid, "paused", row["step"], row["rounds"], "", False, [],
+                             "history_missing", [])
         if goal:
             # 用户追加指令属于对话历史;client_id 让同一提交重试幂等
             try:

@@ -353,10 +353,10 @@ def test_checkpoint_persists_image_reference_without_base64(tmp_path):
         {"content": "FINAL: ok"}]),
         policy=Policy(authorization=Authz(roots=[root], allow_high_risk=True)),
         mcp=True, mcp_config_paths=[cfg])
-    res = r.run(r.start("t1"), "t1")
+    rid = r.start("t1")
+    res = r.run(rid, "t1")
     assert res.state == "finished"
-    row = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
-    msgs = json.loads(row["messages"])
+    msgs = r._load_history(rid)
     tools = [m for m in msgs if m.get("role") == "tool"]
     assert tools and tools[0].get("parts")
     assert any(p.get("type") == "image" for p in tools[0]["parts"])

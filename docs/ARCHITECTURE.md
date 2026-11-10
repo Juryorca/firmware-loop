@@ -41,7 +41,7 @@ tools/registry/*.json  仓库工具 manifest(9 个); .agents/skills/*/SKILL.md
 
 | 类别 | 存什么 | 谁读 | 进 Git |
 |---|---|---|---|
-| **SQLite**(`state/fwcore.sqlite3`) | 目标/面/假设/尝试/观察/证据/结论;runs/tool_calls/events/usage/checkpoints;**conversation_entries**(面向用户的 append-only 对话) | 程序判定(`gates`/`derive`/`context`/`derived_check`);TUI transcript | 否 |
+| **SQLite**(`state/fwcore.sqlite3`) | 目标/面/假设/尝试/观察/证据/结论;runs/tool_calls/events/usage;append-only **conversation_entries** + **compactions**;少量 checkpoint step 指针 | 程序判定(`gates`/`derive`/`context`/`derived_check`);TUI transcript | 否 |
 | **Artifacts**(`artifacts/`) | 固件/反汇编/原始工具输出/截图/PoC 等原始材料;DB 用 `tool_calls.output_path` 关联回查 | 人复核 + 复现包引用 | 否 |
 | **Markdown**(`notes.md`/`report/`) | `notes.md`=可选历史/人工摘要，不自动维护；`report/`=最终交付(advisory/INDEX/attack-surface/CLOSURE/复现包) | 人 | `report/` 是对外材料；`notes.md` 不承担研究状态 |
 | **临时**(`state/_scratch/`) | 演练/E2E/评测输出、一次性报告 | 当次会话 | 否(有保留期,结束可删) |
@@ -49,7 +49,7 @@ tools/registry/*.json  仓库工具 manifest(9 个); .agents/skills/*/SKILL.md
 | 谁写 | 写什么 | 参与判定 |
 |---|---|---|
 | 模型的 `state_*` 工具 | 假设/尝试/观察/证据/复核/结论/面处置 | ✅ |
-| runtime | `runs`(预算)、`checkpoints`(恢复)、`tool_calls`(产物/来源)、`events`(审计) | ✅ |
+| runtime | `runs`(预算)、`conversation_entries`(append-only 恢复)、`compactions`(投影)、`tool_calls`(产物/来源)、`events`(审计) | ✅ |
 | 模型/人 | `notes.md`(可选历史/人工摘要；不自动维护) | ❌ |
 | finding/收尾时 | `report/`(advisory/INDEX/attack-surface/CLOSURE/复现包) | 材料门读 |
 
@@ -58,11 +58,12 @@ tools/registry/*.json  仓库工具 manifest(9 个); .agents/skills/*/SKILL.md
 旧目标由 `fw-core migrate --all` 一次性导入(`documents` 保原文,结构化内容进各表,模糊内容标 `needs_review`)。
 
 研究表:`targets surfaces hypotheses attempts observations evidence evidence_checks
-conclusions runs checkpoints tool_calls events mirror_checks research_logs documents meta`。
+conclusions runs checkpoints compactions tool_calls events mirror_checks research_logs documents meta`。
 知识表:`knowledge_entries knowledge_entry_versions knowledge_entry_tags knowledge_entry_fts`(FTS5)。
 
-保留机制:`checkpoints_keep=120`/run(写时裁剪)→ `_shrink_history`(老工具输出 2000 字符 +
-保留路径/`tool_call_id`)→ 库超 `max_db_bytes=256MB` 删最老 checkpoint 仍超则暂停。
+会话机制:`conversation_entries` append-only(用户/assistant/tool 原始条目保留);
+`compactions` 追加摘要标记,只改变下一次请求的投影,不删原始条目;`checkpoints` 仅保留少量 step 指针,
+不再每步保存全量 history。没有数据库体积硬顶。
 清理:两档(**使用中/收尾未归档=提交中** 只清垃圾;**归档/不要了** 才释放载体/派生物/原件,需用户明说)。
 
 ## 3b. 生命周期与并发不变量(程序强制,不是约定)
@@ -233,13 +234,13 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 | 真实 API 多轮压缩后的缓存重建 | 未测(只有离线模拟) |
 | 第三方网关缓存行为 | 未测(实测走官方 api.deepseek.com) |
 | 模型切换 / 自动重试 | 未实现(失败上抛、预算暂停) |
-| checkpoint append-only 日志 | 未做(每步全量快照,写入放大已记录) |
+| append-only 会话日志 | 已做(`conversation_entries` + `compactions`;checkpoint 仅为 step 指针) |
 | 报告自动生成 | 未做(advisory 由 agent 写,`derived_check` 校验) |
 | Web/图形界面 | 无(只有 CLI) |
 
 ## 9. 已知限制
 
-1. 每步全量 checkpoint(427 条/114MB 的 drill 库即是例证);`checkpoints_keep` 只按 run 裁剪。
+1. 已移除每步全量 checkpoint;历史由 append-only `conversation_entries` 重建,compaction 只追加摘要标记。
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。

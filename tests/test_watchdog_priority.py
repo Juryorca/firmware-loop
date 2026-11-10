@@ -42,25 +42,6 @@ def _wd(con, root, **limits):
                     heartbeat_timeout_s=300, poll_s=0.01)
 
 
-def test_inflight_tool_does_not_bypass_db_cap(tmp_path):
-    con, _dom, root = _setup(tmp_path)
-    rid = _run_with_inflight_tool(con, root)
-    acts = _wd(con, root, max_db_bytes=1).scan_once()
-    assert any(a.get("hard") == ["max_db_bytes"] for a in acts), acts
-    assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "paused"
-
-
-def test_inflight_tool_does_not_bypass_checkpoint_cap(tmp_path):
-    con, _dom, root = _setup(tmp_path)
-    rid = _run_with_inflight_tool(con, root)
-    for i in range(14):
-        con.execute("INSERT INTO checkpoints(id,run_id,step,messages,created_at) VALUES(?,?,?,?,?)",
-                    (f"CK{i}", rid, i, json.dumps([]), "2026-01-01T00:00:00+00:00"))
-    acts = _wd(con, root, checkpoints_keep=1).scan_once()
-    assert any(a.get("hard") == ["checkpoints"] for a in acts), acts
-    assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] == "paused"
-
-
 def test_inflight_tool_still_kept_alive_when_caps_ok(tmp_path):
     """对照:没有硬超限时长工具仍然保活(不能因为这次改动把宽限也弄坏)。"""
     con, _dom, root = _setup(tmp_path)

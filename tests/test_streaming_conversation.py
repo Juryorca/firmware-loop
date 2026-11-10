@@ -477,12 +477,9 @@ def test_assistant_conversation_failure_pauses_and_checkpoint_is_valid(tmp_path)
     res = r.run(rid, "t1")
     assert res.state == "paused" and "conversation_error" in (res.handback or "")
     assert con.execute("SELECT COUNT(*) n FROM hypotheses").fetchone()["n"] == 0
-    ck = con.execute("SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1",
-                     (rid,)).fetchone()
-    msgs = json.loads(ck["messages"])
-    assert any(m.get("role") == "assistant" for m in msgs)
-    assert any(m.get("role") == "tool" and "conversation_persist_failed" in (m.get("content") or "")
-               for m in msgs), "必须补 cancelled tool 结果,保持协议合法"
+    # Failure is explicit: no assistant entry is invented from a checkpoint
+    # fallback; the run pauses so the caller can retry.
+    assert not [m for m in r._load_history(rid) if m.get("role") == "assistant"]
     r._conversation_write = orig
     res2 = r.resume(rid)
     assert res2.state == "finished"
@@ -547,20 +544,13 @@ def test_transcript_backfills_missing_assistant_and_tool(tmp_path):
         sess = rt.session
         assert _roles(sess.transcript()) == ["user", "assistant", "tool", "assistant"]
         con = sess.services.con
-        # 缺 assistant
+        # The session log is authoritative.  Deleting a raw entry must not be
+        # silently undone from the retired checkpoint snapshot.
         con.execute("DELETE FROM conversation_entries WHERE run_id=? AND role='assistant'"
                     " AND content LIKE '先登记%'", (rid,))
-        assert _roles(sess.transcript()) == ["user", "assistant", "tool", "assistant"]
-        # 缺 tool
-        con.execute("DELETE FROM conversation_entries WHERE run_id=? AND role='tool'", (rid,))
-        items = sess.transcript()
-        assert _roles(items) == ["user", "assistant", "tool", "assistant"]
-        assert len([i for i in items if i.kind == "tool"]) == 1
-        # 只剩 user:assistant/tool 全部从 checkpoint/tool_calls 补齐
+        assert "assistant" not in _roles(sess.transcript())[1:2]
         con.execute("DELETE FROM conversation_entries WHERE run_id=? AND role!='user'", (rid,))
-        items = sess.transcript()
-        assert _roles(items) == ["user", "assistant", "tool", "assistant"]
-        assert len([i for i in items if i.kind == "assistant"]) == 2
+        assert _roles(sess.transcript()) == ["user"]
     finally:
         rt.dispose()
 

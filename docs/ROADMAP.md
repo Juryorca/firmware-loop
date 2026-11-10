@@ -85,7 +85,7 @@ Pi Hook / Pi 桥 / Pi 适配器 / Pi 护栏开关;Pi 侧调用 Gate、Pi 配置�
 ## 已知限制(如实)
 
 1. 真实 >500k 长历史的稳态缓存命中、真实多轮压缩后的 API 重建:未测(只有离线模拟)。
-2. checkpoint 每步全量快照(写入放大);`checkpoints_keep` 只按 run 裁剪;无 append-only 迁移。
+2. 会话已改为 append-only `conversation_entries` + `compactions`;checkpoint 仅保留 step 指针,不再每步全量快照。
 3. 摘要无增量更新;长历史压缩需多次摘要调用(计入预算)。
 4. 单模型(无切换/自动重试);无 Web UI(只有 CLI)。
 5. 真实证据多为 `command-write` 弱来源,报告必须标注。

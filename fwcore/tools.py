@@ -752,6 +752,26 @@ def state_conclude(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "conclusion_id": cid}
 
 
+def state_delete_hypothesis(ctx: ToolContext, args: dict) -> dict:
+    """Remove a hypothesis invalidated by a current conclusion."""
+    hid = args["hypothesis_id"]
+    invalidated_by = args["invalidated_by"]
+    reason = args["reason"].strip()
+    ctx.domain.invalidate_hypothesis(hid, invalidated_by, reason)
+    return {"status": "ok", "hypothesis_id": hid, "invalidated_by": invalidated_by,
+            "state": "dropped", "reason": reason}
+
+
+def state_delete_conclusion(ctx: ToolContext, args: dict) -> dict:
+    """Delete a conclusion invalidated by a newer current conclusion."""
+    cid = args["conclusion_id"]
+    invalidated_by = args["invalidated_by"]
+    reason = args["reason"].strip()
+    ctx.domain.delete_conclusion(cid, invalidated_by, reason)
+    return {"status": "ok", "conclusion_id": cid,
+            "invalidated_by": invalidated_by, "deleted": True, "reason": reason}
+
+
 def _caps(ctx: ToolContext, args: dict) -> dict:
     from .providers import inventory
     from .toolmeta import ToolConfigError
@@ -920,6 +940,28 @@ def default_registry() -> Registry:
             "scope_note": {"type": "string"}},
          "required": ["hypothesis_id", "verdict", "scope_note"]},
         state_conclude))
+    r.register(ToolSpec(
+        "state_delete_hypothesis",
+        "当一条当前结论使某条假设失效时,将该假设从活动研究状态移除(保留历史)。"
+        "必须给 invalidated_by(使其失效的当前结论);invalidated_by 必须晚于该假设。",
+        {"type": "object", "properties": {
+            "hypothesis_id": {"type": "string"},
+            "invalidated_by": {"type": "string",
+                               "description": "使其失效的当前结论 ID"},
+            "reason": {"type": "string"}},
+         "required": ["hypothesis_id", "invalidated_by", "reason"]},
+        state_delete_hypothesis))
+    r.register(ToolSpec(
+        "state_delete_conclusion",
+        "当一条当前结论使某条既有结论失效时,删除该结论并重开其假设。"
+        "必须给 invalidated_by(使其失效的当前结论);它必须晚于被删除的结论。",
+        {"type": "object", "properties": {
+            "conclusion_id": {"type": "string"},
+            "invalidated_by": {"type": "string",
+                               "description": "使其失效的当前结论 ID"},
+            "reason": {"type": "string"}},
+         "required": ["conclusion_id", "invalidated_by", "reason"]},
+        state_delete_conclusion))
 
     def _kb_search(ctx, a):
         from .knowledge import search

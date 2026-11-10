@@ -14,6 +14,7 @@ from fwcore.models import Reply, ScriptedAdapter
 from fwcore.policy import Policy
 from fwcore.research import Research
 from fwcore.runtime import Runner
+from fwcore.tools import ToolContext, default_registry
 
 
 def _setup(tmp_path):
@@ -183,6 +184,62 @@ def test_recover_stale_other_host_is_conservative(tmp_path):
 
 
 # ---------- 幂等:同一 call_key 不重复副作用 ----------
+
+def test_state_delete_hypothesis_requires_a_newer_invalidating_conclusion(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    h1 = dom.add_hypothesis("t1", "假设 A")
+    a1 = dom.start_attempt(h1, "检查")
+    dom.finish_attempt(a1, "inconclusive", "A 暂时无法判定")
+    c1 = dom.conclude(h1, "inconclusive", "A：仅覆盖该入口")
+
+    h2 = dom.add_hypothesis("t1", "假设 B")
+    a2 = dom.start_attempt(h2, "检查")
+    dom.finish_attempt(a2, "inconclusive", "B 暂时无法判定")
+    c2 = dom.conclude(h2, "inconclusive", "B：覆盖另一个入口")
+
+    # 不能让较早的结论去删除较新的假设
+    with pytest.raises(InvariantViolation):
+        dom.invalidate_hypothesis(h2, c1, "试图用较早结论删除较新假设")
+    assert dom.hypothesis(h2)["state"] == "concluded"
+
+    reg = default_registry()
+    assert "state_delete_hypothesis" in reg.specs
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
+    out = reg.specs["state_delete_hypothesis"].handler(
+        ctx, {"hypothesis_id": h1, "invalidated_by": c2,
+              "reason": "当前结论使假设 A 失效"})
+    assert out["status"] == "ok" and out["state"] == "dropped"
+    row = con.execute("SELECT state, scope_note FROM hypotheses WHERE id=?", (h1,)).fetchone()
+    assert row["state"] == "dropped" and c2 in row["scope_note"]
+
+
+def test_state_delete_conclusion_reopens_hypothesis_and_rejects_newer(tmp_path):
+    con, dom, root = _setup(tmp_path)
+    h1 = dom.add_hypothesis("t1", "假设 A")
+    a1 = dom.start_attempt(h1, "检查")
+    dom.finish_attempt(a1, "inconclusive", "A 暂时无法判定")
+    c1 = dom.conclude(h1, "inconclusive", "A：仅覆盖该入口")
+
+    h2 = dom.add_hypothesis("t1", "假设 B")
+    a2 = dom.start_attempt(h2, "检查")
+    dom.finish_attempt(a2, "inconclusive", "B 暂时无法判定")
+    c2 = dom.conclude(h2, "inconclusive", "B：覆盖另一个入口")
+
+    with pytest.raises(InvariantViolation):
+        dom.delete_conclusion(c2, c1, "试图删除较新的结论")
+    assert con.execute("SELECT 1 FROM conclusions WHERE id=?", (c2,)).fetchone()
+
+    reg = default_registry()
+    assert "state_delete_conclusion" in reg.specs
+    ctx = ToolContext(domain=dom, root=root, policy=Policy(allow_high_risk=True))
+    out = reg.specs["state_delete_conclusion"].handler(
+        ctx, {"conclusion_id": c1, "invalidated_by": c2,
+              "reason": "当前结论使结论 A 失效"})
+    assert out["status"] == "ok" and out["deleted"] is True
+    assert con.execute("SELECT 1 FROM conclusions WHERE id=?", (c1,)).fetchone() is None
+    row = con.execute("SELECT state, verdict FROM hypotheses WHERE id=?", (h1,)).fetchone()
+    assert row["state"] == "investigating" and row["verdict"] is None
+
 
 def test_duplicate_tool_call_is_not_executed_twice(tmp_path):
     con, dom, root = _setup(tmp_path)

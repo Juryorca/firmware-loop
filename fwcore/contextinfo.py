@@ -1,8 +1,8 @@
 """上下文状态(给模型看的动态块 + CLI 可观测)。
 
 原则:
-- 数字分三类,不混用:本次请求的**估算**、上一次 API 返回的**真实 usage**、配置的**窗口/阈值**;
-- 配置缺失/估算不可用时如实写 unknown,不编造容量;
+- 容量只使用 provider 返回的真实 usage;不再向模型暴露字符估算接口;
+- 没有真实 usage 时写 unknown,不编造容量;
 - 只放进消息**尾部**(state_prompt),不进 system、不写 history/checkpoint。
 """
 
@@ -10,16 +10,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .compact import estimate_tokens, threshold_tokens
+from .compact import threshold_tokens
 
 
 @dataclass
 class ContextStatus:
     model: str = ""
     window: int | None = None            # 模型上下文窗口(token);None = 未知
-    estimated_input: int | None = None   # 本次请求估算(字符/2.0)
-    # 估算口径:system + history + state + tool schema + 协议开销(全部计入)
-    parts: dict = field(default_factory=dict)
+    used_input: int | None = None        # provider prompt_tokens; None = 未返回
+    used_source: str = "unknown"         # provider | unknown
     output_reserve: int = 0
     threshold: int = 0                   # 压缩触发阈值(0 = 关闭)
     compaction_enabled: bool = False
@@ -30,15 +29,16 @@ class ContextStatus:
 
     @property
     def available(self) -> int | None:
-        if self.window is None or self.estimated_input is None:
+        if self.window is None or self.used_input is None:
             return None
-        return max(0, self.window - self.estimated_input - self.output_reserve)
+        return max(0, self.window - self.used_input - self.output_reserve)
 
     def render(self) -> str:
         """一行(必要时两行)给模型的状态;未知值明确写 unknown。"""
         model = self.model or "unknown"
         window = f"{self.window:,}" if self.window else "unknown"
-        est = f"{self.estimated_input:,}" if self.estimated_input is not None else "unknown"
+        used = f"{self.used_input:,}" if self.used_input is not None else "unknown"
+        used_src = "provider prompt" if self.used_source == "provider" else "provider usage unavailable"
         avail = f"{self.available:,}" if self.available is not None else "unknown"
         thr = f"{self.threshold:,}" if self.threshold else "disabled"
         if self.last_prompt_tokens:
@@ -47,17 +47,18 @@ class ContextStatus:
             last = f"last reply usage: prompt {self.last_prompt_tokens:,}{cached}"
         else:
             last = "last reply usage: unknown"
-        scope = (f" (system {self.parts.get('system', 0):,} + history {self.parts.get('history', 0):,}"
-                 f" + state {self.parts.get('state', 0):,} + tools {self.parts.get('schema', 0):,}"
-                 f" + protocol {self.parts.get('protocol', 0):,})") if self.parts else ""
         lines = [
-            (f"[Context status] model={model} window={window} estimated_input={est}{scope} "
-            f"output_reserve={self.output_reserve:,} available={avail} "
+            (f"[Context status] model={model} window={window} context_used={used} "
+            f"({used_src}) output_reserve={self.output_reserve:,} available={avail} "
             f"auto_compact={'on' if self.compaction_enabled else 'off'} threshold={thr}."),
-            f"{last}. estimated_input is an estimate (chars/2.0), not provider usage.",
+            (f"{last}. Context capacity uses provider-reported prompt usage only; "
+             "there is no local character-estimate fallback in this interface."),
         ]
         if self.compaction_enabled:
-            if self.prepare:
+            if self.used_source != "provider":
+                lines.append("Provider usage not reported yet: capacity is unknown; "
+                             "do not claim the context is nearly full or nearly empty.")
+            elif self.prepare:
                 lines.append("Approaching the compaction threshold: save key progress now; "
                              "the framework will compact automatically at a safe boundary.")
             else:
@@ -70,38 +71,34 @@ class ContextStatus:
     def as_dict(self) -> dict:
         return {
             "model": self.model, "window": self.window,
-            "estimated_input": self.estimated_input,
+            "used_input": self.used_input, "used_source": self.used_source,
             "output_reserve": self.output_reserve,
             "available": self.available, "threshold": self.threshold,
             "compaction_enabled": self.compaction_enabled, "prepare": self.prepare,
             "last_prompt_tokens": self.last_prompt_tokens,
             "last_cached_tokens": self.last_cached_tokens,
-            "parts": self.parts,
         }
 
 
-def build_status(*, model: str, window: int | None, messages: list[dict],
+def build_status(*, model: str, window: int | None,
                  output_reserve: int, context_tokens: int,
                  last_prompt_tokens: int | None = None,
-                 last_cached_tokens: int | None = None,
-                 system: str = "", state: str = "", schema: str = "") -> ContextStatus:
-    """estimated_input **包含整个请求**:system + history + 尾部 state + 工具 schema + 协议开销。
+                 last_cached_tokens: int | None = None) -> ContextStatus:
+    """Build the model-facing capacity block from provider usage only.
 
-    只估 history 会把容量报大(实际请求还有 system/工具定义),这里统一计入并给出分解。
+    The chars/2.0 estimate remains in the compaction path, never in this
+    interface: showing it here made the agent claim 972k used when the
+    provider had actually reported 789k.
     """
-    hist = estimate_tokens(messages) if messages else 0
-    sys_t = estimate_tokens([{"role": "system", "content": system}]) if system else 0
-    state_t = estimate_tokens([{"role": "user", "content": state}]) if state else 0
-    schema_t = estimate_tokens([{"role": "user", "content": schema}]) if schema else 0
-    protocol = 8 * max(0, len(messages))        # 每条消息的角色/分隔/工具协议开销(保守常数)
-    est = hist + sys_t + state_t + schema_t + protocol
     thr = threshold_tokens(context_tokens, output_reserve)
     enabled = context_tokens > 0
-    prepare = bool(thr) and est >= int(thr * 0.9)
-    return ContextStatus(model=model, window=window, estimated_input=est,
+    real = last_prompt_tokens if last_prompt_tokens and last_prompt_tokens > 0 else None
+    used = real
+    source = "provider" if real is not None else "unknown"
+    prepare = bool(thr) and real is not None and real >= int(thr * 0.9)
+    return ContextStatus(model=model, window=window,
+                         used_input=used, used_source=source,
                          output_reserve=output_reserve, threshold=thr,
                          compaction_enabled=enabled, prepare=prepare,
                          last_prompt_tokens=last_prompt_tokens,
-                         last_cached_tokens=last_cached_tokens,
-                         parts={"system": sys_t, "history": hist, "state": state_t,
-                                "schema": schema_t, "protocol": protocol})
+                         last_cached_tokens=last_cached_tokens)

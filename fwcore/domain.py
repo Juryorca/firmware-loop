@@ -516,6 +516,23 @@ class Domain:
                    {"entry": cid, "role": role, "status": status})
         return cid
 
+    def add_compaction(self, run_id: str, summary: str, first_kept_id: str | None,
+                       tokens_before: int | None = None) -> str:
+        """Append a Pi-like compaction marker without deleting raw entries."""
+        if not summary.strip():
+            raise InvariantViolation("压缩摘要不能为空")
+        if not self.con.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone():
+            raise NotFound(f"run 不存在: {run_id}")
+        cid = new_id("CP")
+        with Tx(self.con) as c:
+            c.execute("INSERT INTO compactions(id,run_id,summary,first_kept_id,tokens_before,created_at)"
+                      " VALUES(?,?,?,?,?,?)",
+                      (cid, run_id, summary.strip(), first_kept_id, tokens_before, _now()))
+            _event(c, "compaction.appended", run_id,
+                   {"id": cid, "first_kept_id": first_kept_id,
+                    "tokens_before": tokens_before})
+        return cid
+
     def conversation(self, run_id: str, *, roles: tuple[str, ...] | None = None,
                      limit: int | None = None) -> list[dict]:
         """按追加顺序返回对话;`limit` 保留最近 N 条(仍按时间正序)。
@@ -850,6 +867,63 @@ class Domain:
             c.execute("UPDATE hypotheses SET state='dropped', scope_note=?, updated_at=? WHERE id=?",
                       (reason, _now(), hid))
             _event(c, "hypothesis.dropped", hid, {"reason": reason[:200]})
+
+    def invalidate_hypothesis(self, hid: str, invalidated_by: str, reason: str) -> None:
+        """Remove an invalidated hypothesis from active research, keeping history."""
+        if not reason.strip():
+            raise InvariantViolation("删除假设必须写理由")
+        if not invalidated_by or hid == invalidated_by:
+            raise InvariantViolation("必须指定使其失效的结论")
+        h = self.hypothesis(hid)
+        c = self.con.execute("SELECT * FROM conclusions WHERE id=?", (invalidated_by,)).fetchone()
+        if not c:
+            raise NotFound(f"结论不存在: {invalidated_by}")
+        if h["target_id"] != c["target_id"]:
+            raise InvariantViolation("假设与使其失效的结论不属于同一目标")
+        if h["state"] == "dropped":
+            raise InvariantViolation("假设已经不在活动状态")
+        if str(c["created_at"]) <= str(h["updated_at"]):
+            raise InvariantViolation(
+                "拒绝删除较新的记录:invalidated_by 必须晚于该假设")
+        note = f"由结论 {invalidated_by} 判定失效: {reason.strip()}"
+        with Tx(self.con) as c:
+            c.execute("UPDATE hypotheses SET state='dropped', scope_note=?, updated_at=? WHERE id=?",
+                      (note, _now(), hid))
+            _event(c, "hypothesis.invalidated", hid,
+                   {"invalidated_by": invalidated_by, "reason": reason[:200]})
+
+    def delete_conclusion(self, cid: str, invalidated_by: str, reason: str) -> None:
+        """Delete an invalidated conclusion and reopen its hypothesis."""
+        if not reason.strip():
+            raise InvariantViolation("删除结论必须写理由")
+        if not invalidated_by or cid == invalidated_by:
+            raise InvariantViolation("必须指定使其失效的另一条结论")
+        old = self.con.execute("SELECT * FROM conclusions WHERE id=?", (cid,)).fetchone()
+        new = self.con.execute("SELECT * FROM conclusions WHERE id=?",
+                               (invalidated_by,)).fetchone()
+        if not old:
+            raise NotFound(f"结论不存在: {cid}")
+        if not new:
+            raise NotFound(f"结论不存在: {invalidated_by}")
+        if old["target_id"] != new["target_id"]:
+            raise InvariantViolation("两条结论不属于同一目标")
+        if str(new["created_at"]) <= str(old["created_at"]):
+            raise InvariantViolation(
+                "拒绝删除较新的结论:invalidated_by 必须晚于被删除结论")
+        hid = old["hypothesis_id"]
+        note = f"由结论 {invalidated_by} 判定失效: {reason.strip()}"
+        with Tx(self.con) as c:
+            c.execute("DELETE FROM conclusions WHERE id=?", (cid,))
+            remain = c.execute("SELECT COUNT(*) n FROM conclusions WHERE hypothesis_id=?",
+                               (hid,)).fetchone()["n"]
+            if remain == 0:
+                attempts = c.execute("SELECT COUNT(*) n FROM attempts WHERE hypothesis_id=?",
+                                     (hid,)).fetchone()["n"]
+                state = "investigating" if attempts else "open"
+                c.execute("UPDATE hypotheses SET state=?, verdict=NULL, scope_note=?, updated_at=?"
+                          " WHERE id=?", (state, note, _now(), hid))
+            _event(c, "conclusion.deleted", cid,
+                   {"invalidated_by": invalidated_by, "reason": reason[:200], "hypothesis": hid})
 
     def confirm_close(self, target: str, note: str = "") -> None:
         """用户显式确认收尾。`closed` 只在这一步之后成立(见 runtime._handback)。"""

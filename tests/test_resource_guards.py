@@ -9,7 +9,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import time
@@ -67,13 +66,13 @@ def test_endless_model_pauses_at_call_limit_without_touching_research(tmp_path):
 
 def test_checkpoint_pruning_keeps_resume_correct(tmp_path):
     con, _dom, _hid = _setup(str(tmp_path))
-    r = Runner(con, str(tmp_path), EndlessAdapter(), limits=Limits(max_model_calls=12, checkpoints_keep=3),
+    r = Runner(con, str(tmp_path), EndlessAdapter(), limits=Limits(max_model_calls=12),
                policy=Policy(allow_high_risk=True))
     rid = r.start("t1")
     r.run(rid, "t1")
 
     n_ck = con.execute("SELECT COUNT(*) n FROM checkpoints WHERE run_id=?", (rid,)).fetchone()["n"]
-    assert n_ck <= 3, "检查点必须按保留策略裁剪"
+    assert n_ck <= 2, "只保留少量 step 指针;完整历史在 conversation_entries"
 
     # 裁剪后恢复仍然可用,且历史仍然合法
     from fwcore.models import to_api_messages
@@ -85,31 +84,6 @@ def test_checkpoint_pruning_keeps_resume_correct(tmp_path):
     res = r2.resume(rid)
     assert res.state == "finished"
     to_api_messages(res.history)
-
-
-def test_db_cap_pauses_instead_of_growing(tmp_path):
-    con, _dom, hid = _setup(str(tmp_path))
-    r = Runner(con, str(tmp_path), EndlessAdapter(),
-               limits=Limits(max_model_calls=0, max_db_bytes=48 * 1024, checkpoints_keep=20),
-               policy=Policy(allow_high_risk=True))
-    rid = r.start("t1")
-    res = r.run(rid, "t1")
-    assert res.state == "paused"
-    reasons = [json.loads(r["payload"]).get("reason")
-               for r in con.execute("SELECT payload FROM events WHERE kind='run.limit_hit'")]
-    assert "max_db_bytes" in reasons
-    assert con.execute("SELECT state FROM hypotheses WHERE id=?", (hid,)).fetchone()["state"] == "open"
-
-
-def test_unbounded_still_keeps_hard_disk_guard(tmp_path):
-    """显式选择"不限步/不限时"时,磁盘硬顶仍然生效。"""
-    con, _dom, _hid = _setup(str(tmp_path))
-    lim = Limits.unbounded()
-    lim.max_db_bytes = 48 * 1024
-    lim.checkpoints_keep = 20
-    r = Runner(con, str(tmp_path), EndlessAdapter(), limits=lim, policy=Policy(allow_high_risk=True))
-    res = r.run(r.start("t1"), "t1")
-    assert res.state == "paused"
 
 
 def test_tool_timeout_kills_whole_process_group(tmp_path):

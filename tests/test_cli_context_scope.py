@@ -1,7 +1,7 @@
-"""`fw-core context` 的目标/run 隔离 + 工具 schema 计入。
+"""`fw-core context` 的目标/run 隔离 + 只使用 provider usage。
 
 回归背景:context 曾读**全局最新** checkpoint / model.call 事件 ⇒ 多目标同库时
-会把别的目标的上下文规模报进来(误导压缩判断)。
+会把别的目标的上下文规模报进来(误导压缩判断);也不再暴露字符估算接口。
 """
 
 from __future__ import annotations
@@ -56,10 +56,10 @@ def test_context_reads_only_own_target(tmp_path):
     assert r.returncode == 0, r.stderr
     out = json.loads(r.stdout)
     assert out["last_prompt_tokens"] == 11                  # 不是 beta 的 99,999
+    assert out["used_input"] == 11 and out["used_source"] == "provider"
     assert out["checkpoint_messages"] == 1
     assert out["run_scope"] == "1 run(s)"
-    # 工具 schema 必须计入(此前 CLI 传空串 ⇒ 低估 ~2.7k tokens/请求)
-    assert out["parts"]["schema"] > 0
+    assert "parts" not in out and "estimated_input" not in out
 
 
 def test_context_rejects_foreign_run(tmp_path):

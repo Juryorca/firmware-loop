@@ -24,7 +24,6 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from fwcore import db as _db
-from fwcore.compact import estimate_tokens
 from fwcore.models import ScriptedAdapter
 from fwcore.policy import DirectPolicy
 from fwcore.runtime import Runner, RunResult
@@ -656,25 +655,12 @@ class AgentSession:
         return out
 
     def _context(self, tokens: dict) -> dict:
-        est = 0
-        if self.run_id:
-            ck = self.services.con.execute(
-                "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC, rowid DESC LIMIT 1",
-                (self.run_id,)).fetchone()
-            msgs = _json(ck["messages"], []) if ck else []
-            with contextlib.suppress(Exception):
-                est = estimate_tokens(msgs)
         window = int(getattr(self.cfg.limits, "context_tokens", 0) or 0)
-        # Use the last *main* request, not a summarize call.  A summarize
-        # event is tiny (e.g. 43k) and made the TUI footer claim the session
-        # was nearly empty right before compaction.
+        # Match Pi's footer: only the last *main* provider request is a real
+        # context measurement.  No local chars/2.0 fallback.
         prompt = int(tokens.get("last_prompt") or 0)
-        # Match Pi's footer: show the last *main* provider request.  The local
-        # estimate remains available for compaction decisions, but is not the
-        # user-facing "context used" number (it can run ahead of provider usage).
-        used = prompt or est
-        return {"estimated": est, "window": window, "last_prompt": prompt,
-                "percent": round(used / window * 100, 1) if window else None}
+        return {"window": window, "last_prompt": prompt,
+                "percent": round(prompt / window * 100, 1) if window and prompt else None}
 
     # ---------------- 转录 ----------------
     def transcript(self, limit: int = 400) -> list[TranscriptItem]:
@@ -701,27 +687,22 @@ class AgentSession:
             tools[str(row["id"])] = row
         used_tool_ids: set[str] = set()
         entries = self.services.domain.conversation(self.run_id, limit=limit)
-        ck = con.execute(
-            "SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC, rowid DESC LIMIT 1",
-            (self.run_id,)).fetchone()
-
         if not entries:
-            return self._transcript_from_checkpoint(ck, tools, limit)
+            return []
 
-        # conversation 的 assistant 只保存 reasoning_len；正文/思维链正文在
-        # checkpoint。按 (content, tool_call ids) 找回，重开会话时才能显示
-        # 完整的 thinking 块，而不是只剩“推理过”的长度线索。
-        msgs = _json(ck["messages"], []) if ck else []
+        # Everything visible comes from the append-only session log.  Reasoning
+        # is stored in assistant meta; do not reach into the retired full-history
+        # checkpoint table.
         reasoning_by_key: dict[tuple[str, tuple[str, ...]], str] = {}
-        for m in msgs[-limit:]:
-            if m.get("role") != "assistant":
+        for e in entries:
+            if e.get("role") != "assistant":
                 continue
-            reasoning = (m.get("reasoning_content") or "").strip()
-            if not reasoning:
-                continue
-            key = ((m.get("content") or "").strip(),
-                   tuple(c.get("id") or "" for c in (m.get("tool_calls") or [])))
-            reasoning_by_key[key] = reasoning
+            meta = _json(e.get("meta"), {})
+            reasoning = (meta.get("reasoning") or "").strip()
+            if reasoning:
+                key = ((e.get("content") or "").strip(),
+                       tuple(meta.get("tool_calls") or []))
+                reasoning_by_key[key] = reasoning
 
         def _same_tool_status(a, b) -> bool:
             return a == b or (a == "error" and b in ("error", "timeout")) or (
@@ -783,11 +764,12 @@ class AgentSession:
                          "status": e.get("status")})
 
         execs = []
-        for m in msgs[-limit:]:
-            if m.get("role") != "assistant":
+        for e in entries:
+            if e.get("role") != "assistant":
                 continue
-            content = (m.get("content") or "").strip()
-            call_ids = tuple(c.get("id") or "" for c in (m.get("tool_calls") or []))
+            content = (e.get("content") or "").strip()
+            meta = _json(e.get("meta"), {})
+            call_ids = tuple(meta.get("tool_calls") or [])
             if content or call_ids:
                 execs.append({"content": content, "call_ids": call_ids})
 
@@ -848,47 +830,11 @@ class AgentSession:
                     used_tool_ids.add(row["id"])
                     used_tools.add(cid)
 
-        # 已执行但既不在 conversation、也不在 checkpoint 里的工具:补在末尾
-        for key, row in tools.items():
-            if row["id"] in used_tool_ids or key in used_tools:
-                continue
-            add_after(last_anchor, TranscriptItem("tool", "", {"call": row}))
-            used_tool_ids.add(row["id"])
-            used_tools.add(key)
-
         items: list[TranscriptItem] = list(after.get(-1, []))
         for i, c in enumerate(conv):
             if c["item"] is not None:
                 items.append(c["item"])
             items.extend(after.get(i, []))
-        return items
-
-    def _transcript_from_checkpoint(self, ck, tools: dict, limit: int) -> list[TranscriptItem]:
-        """兼容迁移前/旧 run:从 checkpoint 重建(用户 goal 只显示一次)。"""
-        items: list[TranscriptItem] = []
-        con = self.services.con
-        run = con.execute("SELECT goal FROM runs WHERE id=?", (self.run_id,)).fetchone()
-        if run and run["goal"]:
-            items.append(TranscriptItem("user", run["goal"]))
-        used_tools: set[str] = set()
-        if ck:
-            msgs = _json(ck["messages"], [])
-            for m in msgs[-limit:]:
-                if m.get("role") != "assistant":
-                    continue
-                content = m.get("content") or ""
-                reasoning = m.get("reasoning_content") or ""
-                if content.strip() or reasoning.strip():
-                    items.append(TranscriptItem("assistant", content, {"reasoning": reasoning}))
-                for c in m.get("tool_calls") or []:
-                    key = c.get("id") or ""
-                    row = tools.get(key)
-                    if row:
-                        used_tools.add(key)
-                        items.append(TranscriptItem("tool", "", {"call": row}))
-        for key, row in tools.items():
-            if key not in used_tools:
-                items.append(TranscriptItem("tool", "", {"call": row}))
         return items
 
     def model_updates(self) -> list[dict]:

@@ -169,15 +169,15 @@ def test_summarizer_failure_keeps_history_and_cools_down(tmp_path):
                                              compact_retry_cooldown_calls=5),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True),
                summarizer=bad_summary)
-    r.run(r.start("t1", "失败"), "t1")
+    rid = r.start("t1", "失败")
+    r.run(rid, "t1")
     ev = [json.loads(x["payload"]) for x in
           con.execute("SELECT payload FROM events WHERE kind='run.compact_failed'")]
     assert ev, "压缩失败必须留事件"
     assert "summarizer down" in ev[0]["error"]
     # 冷却:失败后不会每轮重试(test 的调用数应远小于模型调用数)
     assert calls["summaries"] <= 2, calls
-    # 历史没被删:checkpoint 里仍有 tool 消息,且没有空摘要头
-    ck = con.execute("SELECT messages FROM checkpoints ORDER BY step DESC LIMIT 1").fetchone()
-    msgs = json.loads(ck["messages"])
+    # 历史没被删:append-only session 里仍有 tool 消息,且没有空摘要头
+    msgs = r._load_history(rid)
     assert any(m.get("role") == "tool" for m in msgs)
     assert not any("历史摘要" in (m.get("content") or "") for m in msgs)

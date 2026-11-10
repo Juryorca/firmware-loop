@@ -147,10 +147,10 @@ def test_three_compactions_across_resume_and_advance(tmp_path):
     assert con.execute("SELECT state FROM runs WHERE id=?", (rid,)).fetchone()["state"] in (
         "paused", "finished")
 
-    # 三次压缩后:最新 checkpoint 协议配对完整(每次压缩的计数已在上方逐步断言)
-    ck = con.execute("SELECT messages FROM checkpoints WHERE run_id=?"
-                     " ORDER BY step DESC LIMIT 1", (rid,)).fetchone()
-    _verify_pairs(json.loads(ck["messages"]))
+    # 三次压缩后:从 append-only session 重建的上下文协议配对完整
+    probe = Runner(con, root, _M(), limits=Limits(max_model_calls=1),
+                   policy=Policy(allow_high_risk=True))
+    _verify_pairs(probe._load_history(rid))
     # 研究事实未被压缩改动
     assert [tuple(r) for r in con.execute("SELECT id,state,verdict FROM hypotheses")] == before_h
     assert con.execute("SELECT verified FROM evidence WHERE id=?", (ev,)).fetchone()["verified"] == 1
@@ -250,9 +250,8 @@ def test_resume_after_compaction_keeps_prefix_and_pairs(tmp_path):
                summarizer=lambda old: "摘要:继续核对 0x1234")
     rid = r.start("t1", "压缩后续跑")
     r.run(rid, "t1")
-    # 找一个发生过压缩的 checkpoint,模拟 resume 加载
-    ck = con.execute("SELECT messages FROM checkpoints WHERE run_id=? ORDER BY step DESC LIMIT 1", (rid,)).fetchone()
-    msgs = json.loads(ck["messages"])
+    # 模拟 resume 加载:必须从 append-only session + compaction 重建
+    msgs = r._load_history(rid)
     if any("历史摘要" in (m.get("content") or "") for m in msgs):
         _verify_pairs(msgs)
     r2 = Runner(con, root, _M(), limits=Limits(max_model_calls=14, context_tokens=20_000,

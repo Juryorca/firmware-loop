@@ -4,7 +4,8 @@
 - 单一事实源:研究状态存在这里;`notes.md` 只是可读视图/历史材料(见 migrate.py)。
 - 程序独占写权:所有写入走 domain.py 的操作接口,外部不直接 SQL。
 - 一致性:WAL + `BEGIN IMMEDIATE` + busy_timeout ⇒ 多进程并发写会明确失败(LockedError),不会静默覆盖。
-- 可恢复:每次运行有 checkpoint(见 schema 的 runs/checkpoints)。
+- 可恢复:会话是 append-only `conversation_entries`;`compactions` 只记投影;
+  少量 `checkpoints` 仅作 step 指针。
 """
 
 from __future__ import annotations
@@ -191,9 +192,8 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   created_at TEXT NOT NULL
 );
 
--- 对话历史(面向用户;append-only)。与 checkpoints 职责不同:
---   checkpoints = 模型执行历史(assistant/tool 协议消息,可压缩)
---   conversation_entries = 用户可见的对话(用户输入/assistant 回复/工具结果摘要)
+-- 会话历史(append-only):用户/assistant/tool 原始条目是权威。
+-- checkpoints 只保留少量 step 指针,不再保存全量模型历史。
 CREATE TABLE IF NOT EXISTS conversation_entries (
   id           TEXT PRIMARY KEY,
   run_id       TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -208,6 +208,18 @@ CREATE TABLE IF NOT EXISTS conversation_entries (
   meta         TEXT,
   created_at   TEXT NOT NULL,
   UNIQUE (run_id, client_id)
+);
+
+-- Pi-like append-only compaction marker. The active session is the
+-- conversation_entries log; a compaction replaces context only for requests,
+-- never deletes the raw entries.
+CREATE TABLE IF NOT EXISTS compactions (
+  id             TEXT PRIMARY KEY,
+  run_id         TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  summary        TEXT NOT NULL,
+  first_kept_id  TEXT,
+  tokens_before  INTEGER,
+  created_at     TEXT NOT NULL
 );
 
 -- 事件流(审计/回放;只追加)
