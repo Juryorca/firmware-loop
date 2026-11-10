@@ -2,6 +2,9 @@
 
 > 一次性数据导入(`fwcore/migrate_all.py`),不是运行时回退。运行路径只读 SQLite;
 > 缺库/缺目标 ⇒ `derived_check`/`gates` 直接 FAIL,没有 Markdown 回退。
+>
+> **当前状态(2026-11-10)**:用户已决定退役 `notes.md`;14 个目标原文已逐字节保存在
+> SQLite `documents`,notes 文件已删除。本文是历史迁移记录,不再指导新建 notes。
 
 ## 1. 审计:内容分类与落点
 
@@ -74,4 +77,4 @@ python3 -m pytest tests/test_migrate_all.py tests/test_no_markdown_fallback.py
 
 - 历史笔记没有结构化 `attempts` 行 ⇒ 该表 0 条;验证叙述在 `research_logs(kind=round)` 里,未编造。
 - 686 条 `needs_review`(见 §3):多为无法机械判定的状态措辞/散文观察/汇总节;原文在 `documents`,可逐条复核。
-- `notes.md` 保留为只读原始记录(不是第二事实源);清理需用户确认后再做。
+- `notes.md` 原文已迁入 SQLite `documents` 并删除;不再有活动 notes 文件;本文仅保留历史审计。
