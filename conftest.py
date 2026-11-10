@@ -11,6 +11,8 @@ import signal
 import pytest
 
 TIMEOUT_S = 20
+# 跨进程/MCP 用例要启子进程、发现 MCP、等锁；并行 verify 下 20s 会偶发误杀。
+SLOW_MODULES = {"test_cross_process_resume.py": 60}
 
 
 class TestTimedOut(Exception):
@@ -22,9 +24,10 @@ def _on_alarm(signum, frame):
 
 
 @pytest.fixture(autouse=True)
-def _hard_timeout():
+def _hard_timeout(request):
+    limit = SLOW_MODULES.get(request.node.path.name, TIMEOUT_S)
     old = signal.signal(signal.SIGALRM, _on_alarm)
-    signal.alarm(TIMEOUT_S)
+    signal.alarm(limit)
     try:
         yield
     finally:
