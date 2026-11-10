@@ -814,6 +814,26 @@ def test_thinking_block_is_visible_and_toggles(tmp_path):
         rt.dispose()
 
 
+def test_context_status_prefers_estimate_over_summarize_prompt():
+    """A summarize call has a tiny prompt; it must not make the footer look empty."""
+    from types import SimpleNamespace
+
+    from fwapp.widgets.status import format_snapshot
+
+    s: Any = SimpleNamespace(
+        target="t1", model="scripted", state="paused", busy=False, handback=None,
+        target_status="active", limits={"max_model_calls": 200}, calls=2, tools=0,
+        tokens={"prompt": 100, "cached": 75, "last_prompt": 43_103,
+                "last_cached": 43_000, "completion": 0, "total": 100},
+        context={"window": 1_000_000, "estimated": 945_218,
+                 "last_prompt": 43_103, "percent": 94.5},
+        hypotheses={}, evidence=0, blockers=[],
+    )
+    text = format_snapshot(s).plain
+    assert "上下文 945.2k/1.0M" in text
+    assert "43.1k" not in text
+
+
 def test_status_bar_cache_uses_latest_request_like_pi():
     from types import SimpleNamespace
 

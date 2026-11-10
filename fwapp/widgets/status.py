@@ -162,7 +162,9 @@ def format_snapshot(s: Snapshot) -> Text:
         t.append(" · 缓存 —", style="#66717F")
     ctx = s.context or {}
     if ctx.get("window"):
-        used = ctx.get("last_prompt") or ctx.get("estimated") or 0
+        # The current context estimate includes the newest messages; the last
+        # provider prompt is stale and may be a summarize call. Prefer estimate.
+        used = ctx.get("estimated") or ctx.get("last_prompt") or 0
         t.append(f" · 上下文 {_fmt_tokens(used)}/{_fmt_tokens(ctx['window'])}",
                  style="#8995A5")
     h = s.hypotheses or {}

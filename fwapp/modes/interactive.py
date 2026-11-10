@@ -744,7 +744,7 @@ class FwApp(App):
             t.append(f"- 本 run 累计缓存 {min(100, cached / prompt * 100):.0f}% "
                      f"({cached}/{prompt})\n")
         if ctx.get("window"):
-            t.append(f"- 上下文 {ctx.get('last_prompt') or ctx.get('estimated')}/{ctx['window']}")
+            t.append(f"- 上下文 {ctx.get('estimated') or ctx.get('last_prompt')}/{ctx['window']}")
             if ctx.get("percent") is not None:
                 t.append(f" ({ctx['percent']}%)")
             t.append("\n")

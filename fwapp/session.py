@@ -665,15 +665,13 @@ class AgentSession:
             with contextlib.suppress(Exception):
                 est = estimate_tokens(msgs)
         window = int(getattr(self.cfg.limits, "context_tokens", 0) or 0)
-        last = self.services.con.execute(
-            "SELECT payload FROM events WHERE kind='model.call' AND ref=? ORDER BY id DESC LIMIT 1",
-            (self.run_id,)).fetchone() if self.run_id else None
-        prompt = 0
-        if last:
-            p = _json(last["payload"], {})
-            prompt = int(p.get("prompt_tokens") or 0)
+        # Use the last *main* request, not a summarize call.  A summarize
+        # event is tiny (e.g. 43k) and made the TUI footer claim the session
+        # was nearly empty right before compaction.
+        prompt = int(tokens.get("last_prompt") or 0)
+        used = est or prompt
         return {"estimated": est, "window": window, "last_prompt": prompt,
-                "percent": round((prompt or est) / window * 100, 1) if window else None}
+                "percent": round(used / window * 100, 1) if window else None}
 
     # ---------------- 转录 ----------------
     def transcript(self, limit: int = 400) -> list[TranscriptItem]:
