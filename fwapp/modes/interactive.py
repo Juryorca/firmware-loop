@@ -138,6 +138,10 @@ class FwApp(App):
         self._assistant_rendered = False
         self._stream_error_notified = False
         self._stop_requested = False
+        # Stream deltas arrive much faster than Textual can lay out Markdown.
+        # Coalesce them per UI tick; Pi's TUI likewise coalesces render requests.
+        self._stream_text_pending = ""
+        self._stream_reason_pending = ""
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -171,7 +175,7 @@ class FwApp(App):
             self._notice("演示模式：当前使用本地脚本，不会调用真实模型。", "info")
         # Pi 的 TUI 只在状态变化/输入后 requestRender；这里保留 250ms 事件泵，
         # 但不再用 1s 定时器无条件刷新状态栏（那是终端重绘积压的来源）。
-        self.set_interval(0.25, self._tick)
+        self.set_interval(0.1, self._tick)
         # 信号处理函数不能直接依赖 Textual 的消息泵；置标志，由事件循环安全退出。
         self.set_interval(0.1, self._check_signal_exit)
 
@@ -262,8 +266,23 @@ class FwApp(App):
 
     def _tick(self) -> None:
         events = self.sess.drain_events()
+        # Do not call Markdown.append for every token.  Textual's Markdown
+        # reparses/mounts asynchronously per append; at token rate that queues
+        # hundreds of layout tasks.  Batch consecutive text/reasoning deltas
+        # and flush once before a control event and once at the end of the tick.
         for ev in events:
+            if ev.kind == "assistant_delta":
+                self._stream_text_pending += ev.data.get("text") or ev.text or ""
+                continue
+            if ev.kind == "reasoning_delta":
+                self._stream_reason_pending += ev.data.get("text") or ev.text or ""
+                continue
+            # Flush before every control event (assistant_done/error/toolcall/
+            # turn_done) so finalize sees the streamed text instead of creating
+            # a second message after the batch.
+            self._flush_stream_pending()
             self._handle_event(ev)
+        self._flush_stream_pending()
         changed = bool(events)
         for call in self.sess.tool_updates():
             self._upsert_tool(call)
@@ -280,6 +299,21 @@ class FwApp(App):
         if changed:
             self._update_status()
 
+    def _flush_stream_pending(self) -> None:
+        text, reasoning = self._stream_text_pending, self._stream_reason_pending
+        self._stream_text_pending = ""
+        self._stream_reason_pending = ""
+        if not text and not reasoning:
+            return
+        if self._stream_msg is None:
+            self._stream_msg = MessageWidget("assistant", "")
+            self._append(self._stream_msg)
+        if reasoning:
+            self._stream_msg.append_reasoning(reasoning)
+        if text:
+            self._stream_msg.append_text(text)
+            self._assistant_rendered = True
+
     def _reset_stream(self) -> None:
         self._assistant_rendered = False
         self._stream_error_notified = False
@@ -288,6 +322,8 @@ class FwApp(App):
         self._stream_tool_by_index.clear()
         self._stream_tool_by_call.clear()
         self._stream_args.clear()
+        self._stream_text_pending = ""
+        self._stream_reason_pending = ""
 
     def _stream_tool_event(self, data: dict) -> None:
         try:

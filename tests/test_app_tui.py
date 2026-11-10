@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import Any, cast
 
 from fwapp.args import AppOptions
 from fwapp.config import resolve
@@ -908,6 +908,43 @@ def test_mouse_selection_auto_copies_to_clipboard(tmp_path):
             await pilot.pause(0.2)
             assert "alpha" in app.clipboard
             assert app.focused is app.query_one(PromptEditor)
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_tick_coalesces_stream_deltas(tmp_path, monkeypatch):
+    """Token-rate deltas must become one Markdown append per UI tick."""
+    from fwapp.session import UiEvent
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await pilot.pause(0.1)
+            class FakeSession:
+                def __init__(self):
+                    self.events = [UiEvent("assistant_delta", "a"),
+                                   UiEvent("assistant_delta", "b"),
+                                   UiEvent("assistant_delta", "c")]
+                def drain_events(self):
+                    out, self.events = self.events, []
+                    return out
+                def tool_updates(self):
+                    return []
+                pending = ()
+                busy = False
+            app.sess = cast(Any, FakeSession())  # type: ignore[assignment]
+            calls = []
+            monkeypatch.setattr(MessageWidget, "append_text",
+                                lambda self, text: calls.append(text))
+            monkeypatch.setattr(app, "_update_status", lambda: None)
+            app._tick()
+            assert calls == ["abc"]
             await pilot.press("ctrl+q")
 
     try:
