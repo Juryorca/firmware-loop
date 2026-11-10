@@ -367,7 +367,7 @@ class Runner:
         cur = None
         with _db.Tx(self.con) as c:
             # nosemgrep: python-sql-injection
-            cur = c.execute(  # set_sql 是内部固定片段，值全部走参数绑定
+            cur = c.execute(  # set_sql is a fixed internal fragment; values are bound
                 "UPDATE runs SET " + set_sql +
                 " WHERE id=? AND state='running'"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -387,7 +387,7 @@ class Runner:
         cur = None
         with _db.Tx(self.con) as c:
             # nosemgrep: python-sql-injection
-            cur = c.execute(  # set_sql 是内部固定片段，值全部走参数绑定
+            cur = c.execute(  # set_sql is a fixed internal fragment; values are bound
                 "UPDATE runs SET " + set_sql +
                 f" WHERE id=? AND state IN ({marks})"
                 " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
@@ -970,9 +970,11 @@ class Runner:
                     break
                 # 上下文生命周期:接近配置窗口才压缩,保留最近一段;
                 # 摘要是一次**模型调用**(计入预算),不是静默丢内容
+                _last_main = self._last_main_prompt_tokens(rid)
                 if (run_calls >= self._compact_cooldown_until
                         and should_compact(history, self.limits.context_tokens,
-                                           self.limits.output_reserve_tokens)
+                                           self.limits.output_reserve_tokens,
+                                           used_tokens=_last_main)
                         and _find_cut(history, self.limits.keep_recent_tokens) > 0):
                     before = estimate_tokens(history)
                     _event(self.con, "run.compacting", rid, {"tokens": before})
@@ -1412,6 +1414,29 @@ class Runner:
             _event(c, "run.finished", rid, {"state": state, "steps": step, "ready": ready,
                                             "handback": handback, "blockers": blockers[:5]})
         return RunResult(rid, state, step, rounds, final, ready, blockers, handback, history)
+
+    def _last_main_prompt_tokens(self, rid: str) -> int | None:
+        """Last provider-reported prompt usage from a non-summarize call.
+
+        A fresh resumed Runner has no in-memory usage; replay recent model.call
+        events to keep the Pi-like compaction decision stable across processes.
+        """
+        if self._last_usage.get("prompt_tokens"):
+            return int(self._last_usage["prompt_tokens"])
+        rows = self.con.execute(
+            "SELECT payload FROM events WHERE kind='model.call' AND ref=?"
+            " ORDER BY id DESC LIMIT 32", (rid,)).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if payload.get("kind") == "summarize":
+                continue
+            prompt = payload.get("prompt_tokens")
+            if isinstance(prompt, int) and prompt > 0:
+                return prompt
+        return None
 
     def _round_advanced(self, target: str, since: str) -> bool:
         """本轮是否真的推进了研究:决定性尝试结束 / 假设收口 / 假设被放弃。"""

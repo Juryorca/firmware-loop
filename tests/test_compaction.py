@@ -37,6 +37,14 @@ def test_estimate_and_threshold():
     assert should_compact([{"role": "user", "content": "hi"}], 5_000) is False
 
 
+def test_should_compact_prefers_last_main_provider_usage():
+    """A 915k local estimate must not force compaction when the provider saw 756k."""
+    hist = _history(50)
+    assert estimate_tokens(hist) > 20_000
+    assert should_compact(hist, 20_000, used_tokens=4_000) is False
+    assert should_compact(hist, 20_000, used_tokens=13_000) is True
+
+
 def test_find_cut_never_lands_on_tool_message():
     hist = _history(12)
     cut = find_cut(hist, keep_recent_tokens=1_000)

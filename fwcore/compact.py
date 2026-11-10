@@ -99,10 +99,20 @@ def threshold_tokens(context_tokens: int, reserve: int) -> int:
     return max(1_000, context_tokens - keep)
 
 
-def should_compact(messages: list[dict], context_tokens: int, reserve: int = 8_000) -> bool:
+def should_compact(messages: list[dict], context_tokens: int, reserve: int = 8_000,
+                   used_tokens: int | None = None) -> bool:
+    """Return whether the *effective* context is over the compaction threshold.
+
+    Pi uses provider-reported usage from the last reply for its context meter.
+    fw-core's estimate is still the fallback (and is used before the first call),
+    but a real main-request usage is more accurate and avoids compacting at
+    945k while the provider only saw 756k.  Summarize calls must not be passed
+    as ``used_tokens``.
+    """
     if context_tokens <= 0:
         return False
-    return estimate_tokens(messages) > threshold_tokens(context_tokens, reserve)
+    used = estimate_tokens(messages) if not used_tokens else int(used_tokens)
+    return used > threshold_tokens(context_tokens, reserve)
 
 
 class SummarizationIncomplete(RuntimeError):
