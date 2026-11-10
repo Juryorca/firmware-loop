@@ -13,7 +13,7 @@
   unarchive <target>     恢复为 active（可继续研究）
   derive <target>       派生量 + 收尾阻塞项
   migrate <target> [--notes PATH]
-  view <target>         从 SQLite 生成人读视图(不写 notes.md)
+  view <target>         从 SQLite 生成人读视图(不生成第二份状态文件)
   run <target> [--goal G] [--model scripted|openai] [--steps N]
   resume <run-id> [--steps N]
 """
@@ -140,7 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--remote-factor", type=float, default=6.0)
     p = sub.add_parser("progress", help="结构化进度快照(只读,给外部监控)")
     p.add_argument("run_id")
-    p = sub.add_parser("context", help="上下文状态:模型窗口/估算/阈值/最近压缩(只读)")
+    p = sub.add_parser("context", help="上下文状态:模型窗口/provider usage/阈值/最近压缩(只读)")
     p.add_argument("target")
     p.add_argument("--run", dest="run_id", default=None,
                    help="只看某个 run(默认:该目标全部 run;不同目标互不串)")
@@ -321,7 +321,7 @@ def main(argv: list[str] | None = None) -> int:
             lim = Limits(**cfg)
             if args.context_tokens:
                 lim = Limits(**{**cfg, "context_tokens": args.context_tokens})
-            # 目标/run 隔离:只读本目标的 run;否则别的目标的 checkpoint/事件会串进来
+            # 目标/run 隔离:只读本目标的 run;否则别的目标的 usage/事件会串进来。
             run_ids = [r["id"] for r in con.execute(
                 "SELECT id FROM runs WHERE target_id=? ORDER BY rowid", (t.id,))]
             if args.run_id:
@@ -331,28 +331,18 @@ def main(argv: list[str] | None = None) -> int:
                 run_ids = [args.run_id]
             # 固定 SQL + 绑定参数:run 过滤走 JOIN，不拼接 IN 占位符。
             if args.run_id:
-                ck = con.execute(
-                    "SELECT c.messages FROM checkpoints c JOIN runs r ON r.id=c.run_id"
-                    " WHERE r.target_id=? AND c.run_id=?"
-                    " ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1",
-                    (t.id, args.run_id)).fetchone()
                 last = con.execute(
                     "SELECT payload FROM events WHERE kind='model.call'"
                     " AND ref=? ORDER BY ts DESC, id DESC LIMIT 1",
                     (args.run_id,)).fetchone()
             elif run_ids:
-                ck = con.execute(
-                    "SELECT c.messages FROM checkpoints c JOIN runs r ON r.id=c.run_id"
-                    " WHERE r.target_id=? ORDER BY c.created_at DESC, c.rowid DESC LIMIT 1",
-                    (t.id,)).fetchone()
                 last = con.execute(
                     "SELECT payload FROM events WHERE kind='model.call'"
                     " AND ref IN (SELECT id FROM runs WHERE target_id=?)"
                     " ORDER BY ts DESC, id DESC LIMIT 1",
                     (t.id,)).fetchone()
             else:
-                ck = last = None
-            hist = json.loads(ck["messages"]) if ck else []
+                last = None
             lu = (json.loads(last["payload"]).get("usage") or {}) if last else {}
             _k, _b, _m = load_model_config(args.root)
 
@@ -379,7 +369,6 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 comp = None
             out = st.as_dict()
-            out["checkpoint_messages"] = len(hist)
             out["run_scope"] = args.run_id or f"{len(run_ids)} run(s)"
             out["threshold_tokens"] = threshold_tokens(lim.context_tokens, lim.output_reserve_tokens)
             out["last_compaction"] = json.loads(comp["payload"]) if comp else None
@@ -573,7 +562,7 @@ def _model(name: str, root: str, script_path: str | None = None):
 
 
 def render_view(con, root: str, target: str) -> str:
-    """从权威 SQLite 生成人读视图;不落 notes.md,不建立第二事实源。"""
+    """从权威 SQLite 生成人读视图;不生成第二份状态文件。"""
     dom = Domain(con, root)
     d = dom.derived(target)
     t = dom.target(target)

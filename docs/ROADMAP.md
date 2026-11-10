@@ -5,8 +5,8 @@
 
 ## 当前状态(产品事实)
 
-- **独立产品**:fwcore 不依赖 Pi(`.pi/` 不入库);模型调用/工具/状态/证据/Watchdog/checkpoint/resume 全在自己代码里。
-- **权威状态**:SQLite(schema v17)存假设/尝试/观察/证据/结论/面/run/checkpoint/tool_calls/events;
+- **独立产品**:fwcore 不依赖 Pi(`.pi/` 不入库);模型调用/工具/状态/证据/Watchdog/step 指针/resume 全在自己代码里。
+- **权威状态**:SQLite(schema v17)存假设/尝试/观察/证据/结论/面/run/step 指针/tool_calls/events;
   历史叙述只存 SQLite（原文在 `documents`），不承担研究状态；对外材料在 `report/`，原件在 `intel/`。
 - **模型协议**:`finish_reason`/`usage` 贯通;每次调用 `model.call` 记账;FINAL 任意行首;重复内容与无工具空转看护;
   thinking 模式默认回传 `reasoning_content`。
@@ -16,7 +16,7 @@
   408/429/5xx 重试，`tools/call` 不重试；
   `codemode` 用 QuickJS worker 调现有 Registry，`tool_search` 用 BM25 激活 deferred 工具；
   结果是 Pi 风格有界输出(2000 行/50 KiB 尾部);截断时带 `full_output_path`,并保留 `db_tool_call_id`/产物路径/哈希。
-- **上下文**:静态 system + append-only history + 尾部状态(含 `[Context status]`);阈值压缩(90%@1M 窗口),
+- **上下文**:静态 system + append-only history + 尾部状态(含 `[Context status]`);阈值压缩(`window - output_reserve`;1M/8k ⇒ 992k),
   分块摘要**覆盖全部被丢弃历史**,失败保留原历史 + 冷却;摘要调用计入预算。
 - **研究质量门**:`vulnerable` 需 supported + 因果复核;`no_finding` 需 ≥1 条已复核证据;面处置需证据/理由;
   `assess` 区分 completed/partial 与来源强度。
@@ -27,40 +27,20 @@
   研究事实、决策、下一步只认 SQLite；`report/` 是交付；覆盖度/队列判定 DB 优先。
 - **全量迁移**:14 个历史目标的 notes/attack-surface 已导入 DB(`documents` 保原文;
   面/假设/观察/证据/复核/结论/三镜进结构化表;叙述与模糊内容进 `research_logs`);
-  `fw-core migrate --all` 幂等,`--verify` 逐目标核对;运行路径**无 Markdown 回退**。
+  notes 文件已按用户决定删除,原文仍可按 `documents` 检索;运行路径**无 Markdown 回退**。
 - **Agent 内容架构**:`fwcore/prompts/system.md` + 根 `AGENTS.md` 组成 system;LOOP 迁入 `research-loop` Skill;
   `.agents/skills/` 渐进式加载;Slash Commands 保留并由 fwapp 分发;SQLite `knowledge_entries` 保存 curated 研究知识；旧案例 Markdown 已移出当前树，只保留 Git 历史。
 - **验证**:`bash tools/fwcore_verify.sh` = pytest(79 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + SQLite 状态库完整性 + git clean；历史迁移幂等由 pytest 覆盖，不再比较当前 notes/DB 同步。
 
 ## 待办
 
-### P1 认证控制流:`op` 值 → 分发 → 权限检查 → 失败分支 ⛔ 仅缺授权
+（无。原 P1/P4 研究目标已按用户决定归档，不再推进；历史细节保留在 Git 历史与目标 `report/`。）
 
-- **已有**:11 个 op 子处理器入口(0x196d8/0x197d8/0x19908/0x19a68/0x19b08 分发到 0x14d60…0x12d78)、
-  门禁类型(口令/session 三重校验/Qtoken/verify_code)、`_notes/s3`+`all_calls.txt`、库内门禁原语哈希;
-  **op 分发表**(qr_code 2/7/4;approve 1/7/4/3;verification_code 1/7/12/3/13;passwordless 8)、
-  `strtol(param,NULL,10)` 无 endptr(缺省/非法 ⇒ 空响应),verification_code op=1 失败分支
-  `error_code=1` 且 session/verify_code 缓冲区清零(无泄露),成功需 getpwnam+load_user_config+
-  `Verify_Qtoken_DB_by_Client_ID`+两个配置位。
-- **缺**:动态验证须由 agent 在受控 run 内完成(本机手工 `qemu-user` 报 SIGILL,不作为准绳);
-  各 handler 门禁表的动态复核。
-- **验收**:地址级链路 + ≥1 条带来源 observation;判不了写 inconclusive。
-- **预算**:`R-20261105-3518ef1d` 已用 **130 calls / 571.9 s**;`runs.budget_note` 持久化生效边界
-  (实测 resume 后 `via=resume`、limits=200 calls/1800 s);按此 ⇒ 余 ~70 calls / ~1228 s;
-  不得新建 run 绕开预算。
-- **恢复就绪**:租约/心跳/看护竞态已修,`resume` 在 drill 库副本实测:计数从 130 延续、状态 finished、
-  `handback=awaiting_user_close`(修复前会被误判 owner_dead 暂停)。
-- **阻塞**:续跑需用户批准付费模型(离线静态已完成并入库:观察 + 2 条 static-note 证据)。
-- **批准后的下一步(命令已备好,勿新建 run)**:
-  `python3 -m fwcore --root state/_scratch/realdrill-20261105-164147 resume R-20261105-3518ef1d --model openai`
-  goal 用 run 里已存的那条(继续 op 子处理器,勿重做静态);只做:
-  ①`op` 边界(缺失/非数字/负数/超大/重复参数)在四个分发器的实际响应;
-  ②`verification_code op=1` 失败分支(无 qtoken / client_id 不匹配)的 `error_code` 与会话字段;
-  ③把结果写成 observation/evidence(带来源),不要凭响应猜漏洞成立。
+## 已归档(不继续)
 
-### P4 依赖库/样本边界(需 P1 运行结果)
-
-- 目标:缺失库/动态入口导致无法判定时,给出明确边界而非猜测;边界写进 `scope_note` 并有证据。
+- 旧研究目标已归档：`DIR850L`、`QNAP-TS-932PX-QTS-5.2.10.3577`、`R6700v3`、
+  `RouterOS-7.24.4-arm64`、`Synology-DS223-7.2.2-72806`、`UniFi-Access-4.3.12`。
+- 保留各自 `report/`；notes 原文只在 SQLite `documents`，不再有活动工作副本。
 
 ## 已完成(一行 + 指针)
 

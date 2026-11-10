@@ -77,7 +77,7 @@ class Registry:
     registration: dict = field(default_factory=dict)
     # 已 close 过的特色适配器实例 id(close_feature_adapters 幂等用)
     closed_adapters: set = field(default_factory=set)
-    # deferred 工具被 tool_search 激活后的集合；由 Runner/checkpoint 恢复。
+    # deferred 工具被 tool_search 激活后的集合；由 Runner 从 tool_activations 恢复。
     active_deferred: set[str] = field(default_factory=set)
 
     NAME_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{1,64}$")

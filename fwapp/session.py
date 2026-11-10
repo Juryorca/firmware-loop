@@ -698,8 +698,8 @@ class AgentSession:
     def transcript(self, limit: int = 400) -> list[TranscriptItem]:
         """用户可见对话:conversation 为准,缺失的 assistant/tool 从权威记录补齐。
 
-        权威关系:tool_calls = 工具是否真的执行;checkpoint = 模型执行历史;
-        conversation = 用户可见消息。三者不互相替代,只做**幂等合并**。
+        权威关系:tool_calls = 工具是否真的执行;conversation = 模型/用户可见消息;
+        checkpoint = 仅 step 指针。模型历史由 conversation+compactions 重建。
         """
         if not self.run_id:
             return []

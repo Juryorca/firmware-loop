@@ -21,7 +21,7 @@ HANDBACK_LABELS = {
     "model_error": "模型调用失败",
     "watchdog_paused": "执行进程中断，已暂停",
     "recovered_stale": "恢复时发现旧任务，已暂停",
-    "history_missing": "历史检查点不可用，已暂停",
+    "history_missing": "历史会话不可用，已暂停",
     "owner_dead": "执行进程失联",
     "run_not_running": "任务未在运行",
     "budget": "已达到执行预算",

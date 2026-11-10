@@ -158,7 +158,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | 内容 | 存储 | 生命周期 | 进 System Prompt |
 |---|---|---|---|
 | 当前 Target/面/假设/尝试/观察/证据/结论 | SQLite research tables | 随目标 | 否；走 `state_prompt` 尾部 |
-| 运行/预算/checkpoint/工具调用/事件 | SQLite runtime tables | 随 run | 否；尾部状态/工具结果 |
+| 运行/预算/step 指针/工具调用/事件 | SQLite runtime tables | 随 run | 否；尾部状态/工具结果 |
 | 长期研究知识 | `knowledge_entries` | 跨目标、长期 | 否；按需检索 |
 | 静态规则/参考 | `AGENTS.md`、Skills | Git 版本化 | 仅 AGENTS 常驻；知识不再有 Markdown 来源 |
 

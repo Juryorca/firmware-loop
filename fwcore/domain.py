@@ -481,7 +481,7 @@ class Domain:
                          meta: dict | None = None) -> str | None:
         """追加一条对话记录;`client_id` 让同一提交重试保持幂等。
 
-        与 checkpoints 的分工:这里是**用户可见的对话**,不是模型执行历史。
+        与 checkpoints 的分工:这里是**用户可见**的对话;checkpoints 只保存 run step 指针。
         工具记录只在执行结束后写入(status 反映真实 outcome),不写"虚假完成"。
         """
         if role not in self.CONVERSATION_ROLES:

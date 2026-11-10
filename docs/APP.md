@@ -33,7 +33,7 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
   UI 永远可响应。
 - **UI 线程**用 `services.con` 只读快照,并在取消时直接调用 `Runner.cancel`
   (Core 的 CAS/租约仍决定谁能写)。
-- 取消 = `paused`(安全点),不是研究结论;预算触发同样是暂停 + checkpoint。
+- 取消 = `paused`(安全点),不是研究结论;预算触发同样是暂停 + step 指针。
 - 应用退出:Session → Services 依次关闭;信号 `SIGTERM/SIGHUP` 走 `app.exit()`
   让 Textual 恢复终端,再由 `main` 的 `finally` 关闭 Runtime。
 
@@ -97,12 +97,12 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 ## 6. 对话持久化
 
 `conversation_entries`(schema v16 引入，当前全局 schema v17)是**面向用户**的 append-only 对话,
-与 `checkpoints`(模型执行历史)分工明确:
+与 `checkpoints`(仅 run step 指针,不承载模型消息)分工明确:
 
 | 表 | 内容 | 谁用 |
 |---|---|---|
 | `conversation_entries` | user / assistant / tool 的可见消息,稳定 ID、`run_id`、`parent_id`、`status`、时间戳 | TUI transcript、`/resume` 恢复、模型上下文中的用户多轮输入 |
-| `checkpoints` | assistant/tool 协议消息,可压缩/裁剪 | 模型请求历史、崩溃恢复 |
+| `checkpoints` | 仅 run step / 进度指针 | 崩溃恢复的步进参考;模型历史从 conversation_entries+compactions 重建 |
 
 - 每次用户提交都持久化(带 `client_id`,同一提交重试幂等);
   `runs.goal` 只保留初始目标,后续输入不再覆盖它。
@@ -123,9 +123,9 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
   `chat()` fallback(整段作为一个 delta)。reasoning 默认折叠,未做展开快捷键。
 - **持久化失败不吞**:assistant/tool 对话写入在锁竞争上短重试,最终失败抛
   `ConversationPersistError` 并暂停轮次(不报告正常完成);工具已产生副作用时
-  先把 tool 结果写进 checkpoint,恢复后从 `tool_calls` 补记录,**不重跑工具**。
-- **Transcript 补齐**:conversation 为准;缺失的 assistant 从 checkpoint、缺失的
-  tool 从 `tool_calls` 幂等合并,按 tool_call_id/parent 顺序恢复,不重复注入上下文。
+  tool 结果以 conversation/tool_calls 为准,恢复时按 call_key 幂等补齐,**不重跑工具**。
+- **Transcript 补齐**:conversation 为准;缺失的 assistant 从 conversation 记录恢复、
+  缺失的 tool 从 `tool_calls` 幂等合并,按 tool_call_id/parent 顺序恢复,不重复注入上下文。
 - `conversation_entries` 是开发期 v16 引入的对话基线；当前全局 schema 为 v17，已有旧库需先运行
   `tools/db_rebaseline.py`(会做一致性备份)。
 - 不复制 Pi 的 Extension / Plan Mode / Subagent;保持单 Agent。

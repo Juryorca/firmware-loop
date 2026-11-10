@@ -166,7 +166,7 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   二进制落临时文件，音频明确标注无音频输入能力。资源工具本身跨 server，只要有任一
   server 未声明 `external=false`，三个资源工具也按外部工具走同一授权门。
 - **conversation/checkpoint**：conversation 的 live tool payload 与 Pi 边界一致；
-  checkpoint 的磁盘保护另有 `CHECKPOINT_TOOL_TAIL_CHARS=2000`，不混同 live 输出。
+  checkpoint 仅保存 step 指针，不承载模型消息；不再有 checkpoint 工具历史裁剪。
 - **错误/探针摘要**（如 160/600 字符）只用于状态说明，不承载完整工具输出。
 - 需要长期保存时由 Agent 自己用 bash 重定向；临时 `full_output_path` 不能当 evidence 路径。
 

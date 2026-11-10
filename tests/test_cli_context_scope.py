@@ -57,7 +57,7 @@ def test_context_reads_only_own_target(tmp_path):
     out = json.loads(r.stdout)
     assert out["last_prompt_tokens"] == 11                  # 不是 beta 的 99,999
     assert out["used_input"] == 11 and out["used_source"] == "provider"
-    assert out["checkpoint_messages"] == 1
+    assert "checkpoint_messages" not in out   # checkpoints 只是 step 指针,不是模型历史
     assert out["run_scope"] == "1 run(s)"
     assert "parts" not in out and "estimated_input" not in out
 
