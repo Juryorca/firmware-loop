@@ -30,7 +30,7 @@ def test_status_reports_provider_usage_and_prepare():
                       last_prompt_tokens=950_000, last_cached_tokens=900_000)
     assert st.used_input == 950_000 and st.used_source == "provider"
     assert st.available == 42_000
-    assert st.threshold == threshold_tokens(1_000_000, 8_000) == 900_000
+    assert st.threshold == threshold_tokens(1_000_000, 8_000) == 992_000
     assert st.prepare is True
     txt = st.render()
     assert "window=1,000,000" in txt and "context_used=950,000 (provider prompt)" in txt

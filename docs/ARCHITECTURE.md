@@ -189,11 +189,11 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 ## 5. 上下文生命周期(静态前缀 + 尾部状态 + 阈值压缩)
 
 - 请求 = `[system 静态规则] + history(append-only) + [user 本轮状态尾块]`；状态块含派生量/事实/进度
-  + `[Context status]`(model/window/估算/可用/预留/阈值/上次真实 usage)。**不进 system。**
+  + `[Context status]`(model/window/context_used/available/预留/阈值/上次真实 usage)。**不进 system;不使用本地估算。**
 - 用户消息和本轮状态块在请求成功后按发生顺序追加到 history/checkpoint：
   用户消息不再只藏在临时 state 里，状态块以 `_context_only` 隐藏 user 消息保存。
   下一轮是在旧前缀后追加，而不是重写尾部；这是 Pi 的 append-only/custom-context 语义。
-- 阈值 = `window − max(output_reserve, 10% window)`;生产(1M 窗口/8k 预留)= 90%。
+- 阈值 = `window − output_reserve`(Pi 语义);1M 窗口/8k 预留 = 992k。
 - 压缩:按**协议组**切(assistant.tool_calls + 全部 tool 结果),保留最近 `keep_recent_tokens`;
   被丢弃的历史走 `summarize_covered`:分块(默认 60k/块)→ 超大消息切片 → 归并;超 `summarize_max_calls`
   或任一块为空 ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。

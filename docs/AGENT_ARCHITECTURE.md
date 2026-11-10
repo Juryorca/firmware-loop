@@ -106,7 +106,7 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 - 执行：`fwapp/modes/interactive.py` 的 `_cmd_*`；通过 `fwapp/services.py` 调用现有 Session/Service。
 - 只有用户输入 `/xxx` 才触发；模型不能调用、不能伪造、不能把 Command 当 Skill。
 - 新增命令必须同时：登记元数据、实现 handler、补参数/错误/补全测试。
-- 当前命令：`/help /model /target /resume /status /budget /hypotheses /evidence /skills /knowledge /tools /mcp /tool-setup /new /continue /clear /expand /quit`。
+- 当前命令：`/help /model /target /resume /status /budget /hypotheses /evidence /skills /knowledge /tools /mcp /tool-setup /new /continue /compact /clear /expand /quit`。
 
 ## 6. Knowledge Base：Research Knowledge，不是 Case Archive
 

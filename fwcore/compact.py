@@ -92,11 +92,10 @@ def compact_history(history: list[dict], summarize, keep_recent_tokens: int = 20
 
 
 def threshold_tokens(context_tokens: int, reserve: int) -> int:
-    """压缩触发阈值 = 窗口 − 输出/协议预留(至少留 10% 窗口或 reserve,取较大者)。"""
+    """Pi threshold: contextTokens > contextWindow - reserveTokens."""
     if context_tokens <= 0:
         return 0
-    keep = max(reserve, int(context_tokens * 0.10))
-    return max(1_000, context_tokens - keep)
+    return max(1_000, context_tokens - max(0, int(reserve)))
 
 
 def should_compact(messages: list[dict], context_tokens: int, reserve: int = 8_000,
@@ -104,10 +103,8 @@ def should_compact(messages: list[dict], context_tokens: int, reserve: int = 8_0
     """Return whether the *effective* context is over the compaction threshold.
 
     Pi uses provider-reported usage from the last reply for its context meter.
-    fw-core's estimate is still the fallback (and is used before the first call),
-    but a real main-request usage is more accurate and avoids compacting at
-    945k while the provider only saw 756k.  Summarize calls must not be passed
-    as ``used_tokens``.
+    The local estimate is only used before the first provider-reported usage.
+    Summarize calls must not be passed as ``used_tokens``.
     """
     if context_tokens <= 0:
         return False

@@ -611,6 +611,60 @@ class Runner:
             return None
         return os.path.relpath(p, self.root) if os.path.isabs(p) else p
 
+    def compact_now(self, rid: str, instructions: str = "") -> dict:
+        """Pi-style manual compaction: append a summary marker, keep raw entries."""
+        row = self.con.execute("SELECT target_id,state FROM runs WHERE id=?", (rid,)).fetchone()
+        if not row:
+            raise KeyError(f"run 不存在: {rid}")
+        history = self._load_history(rid)
+        if not history:
+            raise RuntimeError("当前 session 没有可压缩的历史")
+        before = estimate_tokens(history)
+        _event(self.con, "run.compacting", rid, {"tokens": before, "manual": True})
+
+        def _summarize(chunk):
+            if self.summarizer:
+                return self.summarizer(chunk)
+            text = _render_for_summary(chunk)
+            if instructions.strip():
+                text += "\n\n额外要求：" + instructions.strip()[:4000]
+            reply = _coerce_reply(self.model.chat([{"role": "user", "content": text}], []))
+            _event(self.con, "model.call", rid, {
+                "kind": "summarize", "manual": True, "n_messages": len(chunk),
+                "usage_known": bool(reply.usage), "usage": reply.usage or {},
+                "prompt_tokens": (reply.usage or {}).get("prompt_tokens"),
+                "completion_tokens": (reply.usage or {}).get("completion_tokens"),
+                "cached_tokens": ((reply.usage or {}).get("prompt_tokens_details") or {}).get("cached_tokens"),
+            })
+            return reply.content or ""
+
+        try:
+            new_history, info = compact_history(
+                history, _summarize, self.limits.keep_recent_tokens,
+                chunk_tokens=self.limits.summarize_chunk_tokens,
+                max_calls=self.limits.summarize_max_calls)
+            if not info.get("compacted"):
+                raise RuntimeError("没有可压缩的完整协议组")
+            summary = new_history[0].get("content", "")
+            if SUMMARY_HEADER in summary:
+                summary = summary.split(SUMMARY_HEADER, 1)[1].lstrip("\n")
+            recent_count = max(0, len(new_history) - 1)
+            recent = self.con.execute(
+                "SELECT id FROM conversation_entries WHERE run_id=?"
+                " AND status IN ('ok','partial','error') ORDER BY rowid DESC LIMIT ?",
+                (rid, recent_count)).fetchall()
+            first_kept_id = recent[-1]["id"] if recent_count and recent else None
+            self.domain.add_compaction(rid, summary, first_kept_id, before)
+        except Exception as e:
+            _event(self.con, "run.compact_failed", rid,
+                   {"tokens": before, "manual": True, "error": str(e)[:300]})
+            raise
+        result = {"before_tokens": before, "after_tokens": estimate_tokens(new_history),
+                  "manual": True, **info}
+        self._last_compact = result
+        _event(self.con, "run.compacted", rid, result)
+        return result
+
     def _checkpoint(self, rid: str, step: int, history: list[dict]) -> bool:
         """Advance the run pointer; history lives in append-only conversation entries."""
         me = os.getpid()
@@ -1501,7 +1555,10 @@ class Runner:
         """Last provider-reported prompt usage from a non-summarize call."""
         usage = self._last_main_usage(rid)
         prompt = usage.get("prompt_tokens")
-        return int(prompt) if prompt else None
+        try:
+            return int(prompt) if prompt else None
+        except (TypeError, ValueError):
+            return None
 
     def _round_advanced(self, target: str, since: str) -> bool:
         """本轮是否真的推进了研究:决定性尝试结束 / 假设收口 / 假设被放弃。"""
@@ -1666,9 +1723,13 @@ class Runner:
 
     def _finding_count(self, target: str) -> int:
         t = self.domain.target(target)
-        return int(self.con.execute(
+        row = self.con.execute(
             "SELECT COUNT(*) n FROM conclusions WHERE target_id=? AND verdict='vulnerable'",
-            (t.id,)).fetchone()["n"] or 0)
+            (t.id,)).fetchone()
+        try:
+            return int(row["n"] or 0)
+        except (TypeError, ValueError):
+            return 0
 
     def _stop_on_finding(self, res: RunResult, before: int, target: str) -> RunResult:
         """A new vulnerable conclusion is a first-class stop reason.

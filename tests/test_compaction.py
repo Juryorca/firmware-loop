@@ -92,6 +92,30 @@ class _ToolModel:
             "args": {"path": f"big{self.n}.txt"}, "args_raw": "{}"}])
 
 
+def test_manual_compact_appends_summary_marker(tmp_path):
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    from fwcore.models import ScriptedAdapter
+    r = Runner(con, root, ScriptedAdapter(script=[]),
+               limits=Limits(max_model_calls=2, keep_recent_tokens=100,
+                             summarize_chunk_tokens=2_000),
+               policy=Policy(allow_high_risk=True),
+               summarizer=lambda old: "manual summary")
+    rid = r.start("t1", "goal")
+    for i in range(12):
+        dom.add_conversation(rid, "user", f"u{i}:" + "x" * 200,
+                             client_id=f"manual-{i}")
+    info = r.compact_now(rid)
+    assert info["manual"] is True
+    row = con.execute("SELECT summary,first_kept_id FROM compactions WHERE run_id=?",
+                      (rid,)).fetchone()
+    assert row and "manual summary" in row["summary"]
+    hist = r._load_history(rid)
+    assert hist and "manual summary" in hist[0]["content"]
+
+
 def test_runtime_compacts_when_context_tokens_reached(tmp_path):
     root = str(tmp_path)
     for i in range(1, 6):

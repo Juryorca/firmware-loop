@@ -30,6 +30,7 @@ COMMANDS: tuple[Command, ...] = (
     Command("tool-setup", "检查并补齐工具"),
     Command("new", "开始新的研究会话（同一目标）"),
     Command("continue", "自动继续当前会话，直到 finding / 阻塞 / 用户停止"),
+    Command("compact", "压缩当前会话上下文", "[instructions]"),
     Command("clear", "清空当前对话视图(不删数据库)"),
     Command("expand", "展开/折叠工具输出"),
     Command("quit", "退出"),

@@ -156,11 +156,10 @@ def test_three_compactions_across_resume_and_advance(tmp_path):
     assert con.execute("SELECT verified FROM evidence WHERE id=?", (ev,)).fetchone()["verified"] == 1
 
 
-def test_threshold_proportional_vs_fixed_reserve():
-    # 大窗口:10% 窗口预留生效
-    assert threshold_tokens(1_000_000, 8_000) == 900_000
-    assert threshold_tokens(100_000, 8_000) == 90_000
-    # 小窗口:固定预留生效(30000-8000=22000 → 73.3%,不是"85%")
+def test_threshold_matches_pi_fixed_reserve():
+    # Pi: compact when contextTokens > contextWindow - reserveTokens
+    assert threshold_tokens(1_000_000, 8_000) == 992_000
+    assert threshold_tokens(100_000, 8_000) == 92_000
     assert threshold_tokens(30_000, 8_000) == 22_000
     assert threshold_tokens(0, 8_000) == 0
 

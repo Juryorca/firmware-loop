@@ -464,6 +464,14 @@ class FwApp(App):
             self._notice("上下文压缩完成，继续当前轮", "info")
         elif ev.kind == "run.compact_failed":
             self._notice("上下文压缩失败，保留原历史并继续", "warning")
+        elif ev.kind == "compact_done":
+            before = ev.data.get("before_tokens")
+            after = ev.data.get("after_tokens")
+            detail = ""
+            if isinstance(before, int) and isinstance(after, int):
+                detail = f"（{before:,} → {after:,} tokens）"
+            self._notice(f"上下文压缩完成{detail}", "success")
+            self._update_status()
         elif ev.kind == "error":
             self._notice(ev.text, "error")
         elif ev.kind == "cancelled":
@@ -851,6 +859,16 @@ class FwApp(App):
         self._stop_requested = False
         if self.sess.continue_run():
             self._notice("继续推进…")
+
+    def _cmd_compact(self, arg: str) -> None:
+        if not self.sess.run_id:
+            self._notice("当前没有可压缩的研究会话（先发一条消息）。", "warning")
+            return
+        if self.sess.busy:
+            self._notice("当前一轮仍在执行，暂时不能压缩；请等它结束或先按 Esc 停止。", "warning")
+            return
+        if self.sess.compact(arg):
+            self._notice("上下文压缩中…", "info")
 
     # ---------------- Actions ----------------
     def action_help(self) -> None:

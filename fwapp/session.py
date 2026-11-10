@@ -297,6 +297,23 @@ class AgentSession:
         self._q.put(("continue", None, None, target, run_id))
         return True
 
+    def compact(self, instructions: str = "") -> bool:
+        with self._lock:
+            run_id = self.run_id
+            target = self.target
+            busy = self._busy
+        if not run_id:
+            self.emit("error", "当前没有可压缩的研究会话。")
+            return False
+        if target and self._target_status(target) != "active":
+            self.emit("error", "目标已收尾或归档，不能压缩会话。")
+            return False
+        if busy:
+            self.emit("error", "当前一轮仍在执行，暂时不能压缩。")
+            return False
+        self._q.put(("compact", instructions, None, target, run_id))
+        return True
+
     def set_target(self, name: str) -> None:
         if self.busy:
             self.emit("error", "当前一轮仍在执行，暂时不能切换目标。")
@@ -457,6 +474,8 @@ class AgentSession:
                         self._do_turn(runner, str(arg), client_id, target, run_id)
                     elif kind == "continue":
                         self._do_continue(runner, target, run_id)
+                    elif kind == "compact":
+                        self._do_compact(runner, str(arg or ""), target, run_id)
                     elif kind == "restart":
                         runner.close()
                         runner = self._make_runner(con)
@@ -571,6 +590,19 @@ class AgentSession:
         # new finding, a handback, budget/pause, or two idle rounds.
         res = runner.advance(target, run_id=rid)
         self._publish_result(res)
+
+    def _do_compact(self, runner: Runner, instructions: str = "",
+                    target: str | None = None, run_id: str | None = None) -> None:
+        rid = run_id or self.run_id
+        if not rid:
+            self.emit("error", "当前没有可压缩的研究会话。")
+            return
+        try:
+            info = runner.compact_now(rid, instructions=instructions or "")
+        except Exception as e:  # noqa: BLE001
+            self.emit("error", f"上下文压缩失败：{e}")
+            return
+        self.emit("compact_done", "", **info)
 
     def _publish_result(self, res) -> None:
         data = {"run": res.run_id, "state": res.state, "handback": res.handback,
