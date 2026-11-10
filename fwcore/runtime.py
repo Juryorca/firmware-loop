@@ -1675,27 +1675,29 @@ class Runner:
         """
         if self._last_usage.get("prompt_tokens"):
             return dict(self._last_usage)
-        rows = self.con.execute(
+        # Pi computes context from the last valid assistant usage, not from a
+        # fixed-size event page.  Select the latest main call in SQL so any
+        # number of summarize calls cannot hide it; no arbitrary 32-event cap.
+        row = self.con.execute(
             "SELECT payload FROM events WHERE kind='model.call' AND ref=?"
-            " ORDER BY id DESC LIMIT 32", (rid,)).fetchall()
-        for row in rows:
-            try:
-                payload = json.loads(row["payload"] or "{}")
-            except (TypeError, ValueError):
-                continue
-            if payload.get("kind") == "summarize":
-                continue
-            # The first non-summarize event is the latest main call.  If it
-            # has no provider usage, the measurement is unknown; never fall
-            # back to an older main call's number.
-            prompt = payload.get("prompt_tokens")
-            if isinstance(prompt, int) and prompt > 0:
-                usage = {"prompt_tokens": prompt,
-                         "cached_tokens": payload.get("cached_tokens")}
-                self._last_usage = usage
-                return dict(usage)
-            self._last_usage = {}
+            " AND json_valid(payload)"
+            " AND COALESCE(json_extract(payload, '$.kind'), '') != 'summarize'"
+            " ORDER BY id DESC LIMIT 1", (rid,)).fetchone()
+        if row is None:
             return {}
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except (TypeError, ValueError):
+            return {}
+        prompt = payload.get("prompt_tokens")
+        if isinstance(prompt, int) and prompt > 0:
+            usage = {"prompt_tokens": prompt,
+                     "cached_tokens": payload.get("cached_tokens")}
+            self._last_usage = usage
+            return dict(usage)
+        # Latest main call has no provider usage: unknown is more honest than
+        # falling back to an older main call's number.
+        self._last_usage = {}
         return {}
 
     def _last_main_prompt_tokens(self, rid: str) -> int | None:

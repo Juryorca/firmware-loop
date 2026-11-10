@@ -72,10 +72,11 @@ def test_context_rejects_foreign_run(tmp_path):
 def test_context_ignores_latest_summarize_usage(tmp_path):
     root, db = _mk_workspace(tmp_path)
     con = _db.connect(db)
-    con.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
-                (NOW, "model.call", "R-A",
-                 json.dumps({"kind": "summarize",
-                             "usage": {"prompt_tokens": 999_999}})))
+    for i in range(40):
+        con.execute("INSERT INTO events(ts,kind,ref,payload) VALUES(?,?,?,?)",
+                    (NOW, "model.call", "R-A",
+                     json.dumps({"kind": "summarize", "seq": i,
+                                 "usage": {"prompt_tokens": 999_999}})))
     con.commit()
     con.close()
 

@@ -174,5 +174,6 @@ def test_summarize_usage_is_ignored_for_last_main_usage(tmp_path):
     r = Runner(con, root, Rec(), mcp=False, watchdog=False)
     rid = r.start("t1", "usage ordering")
     _usage_event(con, rid, {"prompt_tokens": 11})
-    _usage_event(con, rid, {"prompt_tokens": 99_999}, kind="summarize")
+    for i in range(40):
+        _usage_event(con, rid, {"prompt_tokens": 99_999}, kind="summarize")
     assert r._last_main_usage(rid)["prompt_tokens"] == 11

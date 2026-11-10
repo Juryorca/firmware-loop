@@ -195,6 +195,8 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - 压缩只追加投影标记：`first_kept_id` 丢失/失效时回退到上一有效压缩，若没有则重放原始
   append-only 历史；不会把旧摘要拼到完整历史上。中断/截断的 tool call 不进入可见历史；
   已持久化的 assistant 若因取消/FINAL 未执行工具，则补 cancelled tool result。
+- 最近一次上下文 usage 取**最新 main call**(不是 summarize),由 SQLite 直接筛选,
+  不用固定事件条数窗口;没有 provider usage 时显示 unknown,不回退旧值。
 - 阈值 = `window − output_reserve`(Pi 语义);1M 窗口/8k 预留 = 992k。
 - 压缩:按**协议组**切(assistant.tool_calls + 全部 tool 结果),保留最近 `keep_recent_tokens`;
   被丢弃的历史走 `summarize_covered`:分块(默认 60k/块)→ 超大消息切片 → 归并;超 `summarize_max_calls`

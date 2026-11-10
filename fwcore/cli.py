@@ -332,25 +332,23 @@ def main(argv: list[str] | None = None) -> int:
             # Latest *main* call, not a summarize call.  Summary usage is a
             # different operation and must not become the context measurement.
             if args.run_id:
-                recent = con.execute(
+                last = con.execute(
                     "SELECT payload FROM events WHERE kind='model.call'"
-                    " AND ref=? ORDER BY ts DESC, id DESC LIMIT 32",
-                    (args.run_id,)).fetchall()
+                    " AND ref=? AND json_valid(payload)"
+                    " AND COALESCE(json_extract(payload, '$.kind'), '') != 'summarize'"
+                    " ORDER BY ts DESC, id DESC LIMIT 1",
+                    (args.run_id,)).fetchone()
             elif run_ids:
-                recent = con.execute(
+                last = con.execute(
                     "SELECT payload FROM events WHERE kind='model.call'"
                     " AND ref IN (SELECT id FROM runs WHERE target_id=?)"
-                    " ORDER BY ts DESC, id DESC LIMIT 32",
-                    (t.id,)).fetchall()
+                    " AND json_valid(payload)"
+                    " AND COALESCE(json_extract(payload, '$.kind'), '') != 'summarize'"
+                    " ORDER BY ts DESC, id DESC LIMIT 1",
+                    (t.id,)).fetchone()
             else:
-                recent = []
-            lu = {}
-            for row in recent:
-                payload = json.loads(row["payload"])
-                if payload.get("kind") == "summarize":
-                    continue
-                lu = payload.get("usage") or {}
-                break
+                last = None
+            lu = (json.loads(last["payload"]).get("usage") or {}) if last else {}
             _k, _b, _m = load_model_config(args.root)
 
             st = build_status(
