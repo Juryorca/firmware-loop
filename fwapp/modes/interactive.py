@@ -456,6 +456,14 @@ class FwApp(App):
             # 保持到下一次 busy/新提交再清；cancelled 事件可能晚于 turn_done，
             # 立刻清会重新放出重复的“已停止”提示。
             self._update_status()
+        elif ev.kind == "run.compacting":
+            tokens = ev.data.get("tokens")
+            detail = f"（约 {tokens:,} tokens）" if isinstance(tokens, int) else ""
+            self._notice(f"上下文压缩中{detail}，完成后继续请求模型…", "info")
+        elif ev.kind == "run.compacted":
+            self._notice("上下文压缩完成，继续当前轮", "info")
+        elif ev.kind == "run.compact_failed":
+            self._notice("上下文压缩失败，保留原历史并继续", "warning")
         elif ev.kind == "error":
             self._notice(ev.text, "error")
         elif ev.kind == "cancelled":

@@ -975,6 +975,7 @@ class Runner:
                                            self.limits.output_reserve_tokens)
                         and _find_cut(history, self.limits.keep_recent_tokens) > 0):
                     before = estimate_tokens(history)
+                    _event(self.con, "run.compacting", rid, {"tokens": before})
 
                     def _summarize(chunk):
                         nonlocal run_calls

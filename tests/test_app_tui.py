@@ -916,6 +916,36 @@ def test_mouse_selection_auto_copies_to_clipboard(tmp_path):
         rt.dispose()
 
 
+def test_streamed_assistant_reply_is_visible(tmp_path):
+    """A real streamed turn must leave a visible final assistant body."""
+    cfg = make_ws(tmp_path)
+    script = [{"content": "**hello from stream**", "tool_calls": []}]
+    rt = AppRuntime(cfg, target="t1",
+                    adapter_factory=lambda name: ScriptedAdapter(script=script),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await pilot.pause(0.2)
+            ed = app.query_one(PromptEditor)
+            ed.text = "say hello"
+            await pilot.press("enter")
+            for _ in range(80):
+                await pilot.pause(0.05)
+                if not app.sess.busy:
+                    break
+            await pilot.pause(0.5)
+            msgs = list(app.query(MessageWidget))
+            assert any("hello from stream" in m._text for m in msgs), [m._text for m in msgs]
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
 def test_streaming_message_is_plain_until_final(tmp_path):
     """Streaming must not parse Markdown per delta; final render is Markdown."""
     from textual.widgets import Markdown, Static
