@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 
 from rich.text import Text
@@ -132,15 +133,19 @@ class MessageWidget(Vertical):
         if transcript is not None:
             transcript.follow_end()
 
-    def __init__(self, role: str, text: str, meta: dict | None = None):
+    def __init__(self, role: str, text: str, meta: dict | None = None,
+                 *, streaming: bool = False):
         meta = meta or {}
         label = {"user": "你", "assistant": "fw-core", "notice": "系统"}.get(role, role)
         head = Static(Text(label, style="bold"), classes="msg-role")
         body: Static | Markdown
-        if role == "assistant":
-            # Textual Markdown is selectable (its blocks expose Content through
-            # Widget.get_selection). RichMarkdown inside Static is not, which
-            # made assistant answers impossible to mouse-select.
+        # Textual Markdown is selectable, but its append path parses/mounts
+        # blocks asynchronously.  Do not use it for token-rate streaming: a
+        # plain Static is cheap, then finalize swaps in one Markdown widget.
+        self._streaming = bool(streaming and role == "assistant")
+        if self._streaming:
+            body = Static(Text(text or ""), classes="msg-body")
+        elif role == "assistant":
             body = Markdown(text or "", classes="msg-body")
         elif role == "user":
             body = Static(Text(text, style="bold"), classes="msg-body")
@@ -188,6 +193,18 @@ class MessageWidget(Vertical):
     def finalize(self, text: str | None = None) -> None:
         if text is not None:
             self._text = text
+        if self._streaming:
+            old = self.body
+            final = Markdown(self._text, classes="msg-body")
+            self.body = final
+            self._streaming = False
+            self.mount(final)
+            old.display = False
+            # Keep the old Static mounted-hidden until Textual has mounted the
+            # Markdown; removing it synchronously can race the mount.
+            with contextlib.suppress(Exception):
+                old.remove()
+            return
         if isinstance(self.body, Markdown):
             self.body.update(self._text)
         else:

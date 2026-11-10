@@ -306,7 +306,7 @@ class FwApp(App):
         if not text and not reasoning:
             return
         if self._stream_msg is None:
-            self._stream_msg = MessageWidget("assistant", "")
+            self._stream_msg = MessageWidget("assistant", "", streaming=True)
             self._append(self._stream_msg)
         if reasoning:
             self._stream_msg.append_reasoning(reasoning)
@@ -380,13 +380,13 @@ class FwApp(App):
             if not text:
                 return
             if self._stream_msg is None:
-                self._stream_msg = MessageWidget("assistant", "")
+                self._stream_msg = MessageWidget("assistant", "", streaming=True)
                 self._append(self._stream_msg)
             self._stream_msg.append_text(text)
             self._assistant_rendered = True
         elif ev.kind == "reasoning_delta":
             if self._stream_msg is None:
-                self._stream_msg = MessageWidget("assistant", "")
+                self._stream_msg = MessageWidget("assistant", "", streaming=True)
                 self._append(self._stream_msg)
             self._stream_msg.append_reasoning(ev.data.get("text") or ev.text)
         elif ev.kind == "assistant_done":

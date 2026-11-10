@@ -916,6 +916,36 @@ def test_mouse_selection_auto_copies_to_clipboard(tmp_path):
         rt.dispose()
 
 
+def test_streaming_message_is_plain_until_final(tmp_path):
+    """Streaming must not parse Markdown per delta; final render is Markdown."""
+    from textual.widgets import Markdown, Static
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 20)) as pilot:
+            tv = app.query_one(TranscriptView)
+            tv.remove_children()
+            msg = MessageWidget("assistant", "", streaming=True)
+            tv.append(msg)
+            await pilot.pause(0.1)
+            assert isinstance(msg.body, Static)
+            msg.append_text("**still plain**")
+            await pilot.pause(0.1)
+            assert isinstance(msg.body, Static)
+            msg.finalize("**now markdown**")
+            await pilot.pause(0.2)
+            assert isinstance(msg.body, Markdown)
+            assert "now markdown" in msg.body.source
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
 def test_tick_coalesces_stream_deltas(tmp_path, monkeypatch):
     """Token-rate deltas must become one Markdown append per UI tick."""
     from fwapp.session import UiEvent
