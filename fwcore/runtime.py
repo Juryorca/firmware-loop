@@ -505,7 +505,7 @@ class Runner:
         """
         rows = self.con.execute(
             "SELECT * FROM conversation_entries WHERE run_id=?"
-            " AND status IN ('ok','partial') ORDER BY rowid", (rid,)).fetchall()
+            " AND status IN ('ok','partial','error') ORDER BY rowid", (rid,)).fetchall()
         if not rows:
             return []
 
@@ -1070,7 +1070,7 @@ class Runner:
                         recent_count = max(0, len(new_history) - 1)
                         recent = self.con.execute(
                             "SELECT id FROM conversation_entries WHERE run_id=?"
-                            " AND status IN ('ok','partial') ORDER BY rowid DESC LIMIT ?",
+                            " AND status IN ('ok','partial','error') ORDER BY rowid DESC LIMIT ?",
                             (rid, recent_count)).fetchall()
                         first_kept_id = recent[-1]["id"] if recent_count and recent else None
                         self.domain.add_compaction(rid, summary, first_kept_id, before)

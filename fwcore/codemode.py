@@ -219,6 +219,14 @@ class CodemodeExecutor:
         self._lock = threading.Lock()
         self._mcp_lock = threading.Lock()
         self._seq = 0
+        # Resolve the DB path once on the parent thread.  Calling PRAGMA on a
+        # shared connection from four workers was itself a source of SQLite
+        # transaction/connection races.
+        try:
+            row = ctx.domain.con.execute("PRAGMA database_list").fetchone()
+            self._db_path = (row["file"] if row is not None else "") or ""
+        except Exception:  # noqa: BLE001
+            self._db_path = ""
 
     def _call_key(self) -> str:
         self._seq += 1
@@ -231,11 +239,7 @@ class CodemodeExecutor:
         isolated so parallel `tools.*()` calls do not interleave transactions on
         one sqlite3 connection.  This is not a second state store.
         """
-        try:
-            row = self.ctx.domain.con.execute("PRAGMA database_list").fetchone()
-            path = row["file"] if row is not None else ""
-        except Exception:  # noqa: BLE001 - fall back to the existing context
-            path = ""
+        path = self._db_path
         if not path:
             return self.ctx, None
         con = _db.connect(path)
