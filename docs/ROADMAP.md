@@ -30,7 +30,7 @@
   `fw-core migrate --all` 幂等,`--verify` 逐目标核对;运行路径**无 Markdown 回退**。
 - **Agent 内容架构**:`fwcore/prompts/system.md` + 根 `AGENTS.md` 组成 system;LOOP 迁入 `research-loop` Skill;
   `.agents/skills/` 渐进式加载;Slash Commands 保留并由 fwapp 分发;SQLite `knowledge_entries` 保存 curated 研究知识；旧案例 Markdown 已移出当前树，只保留 Git 历史。
-- **验证**:`bash tools/fwcore_verify.sh` = pytest(76 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + SQLite 状态库完整性 + git clean；历史迁移幂等由 pytest 覆盖，不再比较当前 notes/DB 同步。
+- **验证**:`bash tools/fwcore_verify.sh` = pytest(77 文件)+ capabilities + gates + 评测隔离 + ROADMAP 一致性 + 运行产物边界 + SQLite 状态库完整性 + git clean；历史迁移幂等由 pytest 覆盖，不再比较当前 notes/DB 同步。
 
 ## 待办
 

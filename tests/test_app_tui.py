@@ -414,6 +414,40 @@ def test_tool_setup_command_runs_in_worker(monkeypatch, tmp_path):
         rt.dispose()
 
 
+def test_model_picker_fetches_catalog(tmp_path, monkeypatch):
+    """Ctrl+L / /model must fetch the provider catalog, not a hardcoded list."""
+    from fwcore.models import ModelInfo
+    cfg = make_ws(tmp_path)
+    seen = {}
+    def fake_available(cfg, *, refresh=False):
+        seen["refresh"] = refresh
+        return [ModelInfo(id="live-model", label="Live Model", api_id="live-model",
+                          context_window=1_048_576)]
+    monkeypatch.setattr("fwapp.modes.interactive.available_models", fake_available)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 24)) as pilot:
+            await pilot.pause(0.2)
+            app.query_one(PromptEditor).text = "/model"
+            await pilot.press("enter")
+            for _ in range(50):
+                await pilot.pause(0.05)
+                if isinstance(app.screen, SelectorScreen):
+                    break
+            assert isinstance(app.screen, SelectorScreen)
+            assert seen.get("refresh") is True
+            assert any(i.value == "live-model" for i in app.screen.items)
+            await pilot.press("escape")
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
 def test_invalid_model_does_not_change_current(tmp_path):
     cfg = make_ws(tmp_path)
     rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
@@ -898,6 +932,9 @@ def test_mcp_command_auto_scrolls_to_bottom(tmp_path):
             tv.scroll_end(animate=False)
             await pilot.pause(0.1)
             assert tv.at_bottom()
+            tv.scroll_home(animate=False)
+            await pilot.pause(0.1)
+            assert not tv.at_bottom()
             ed = app.query_one(PromptEditor)
             ed.text = "/mcp"
             await pilot.press("enter")

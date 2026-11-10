@@ -47,6 +47,26 @@ def test_continue_command_accepts_prefixed_text():
         assert not _is_continue_command(text), text
 
 
+def test_set_model_updates_model_and_context(tmp_path, monkeypatch):
+    _root, cfg = make_ws(tmp_path)
+    cfg.api_key = "key"
+    cfg.base_url = "https://example.test/v1"
+    cfg.model = "old"
+    cfg.limits.context_tokens = 1_000
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: ScriptedAdapter(script=[]),
+                    mcp=False, watchdog=False)
+    try:
+        from fwcore.models import ModelInfo
+        monkeypatch.setattr("fwapp.config.adapter_for", lambda cfg, name: object())
+        info = ModelInfo(id="new", label="New", api_id="new", context_window=1_048_576)
+        assert rt.session.set_model("new", info=info)
+        assert rt.session.model_name == "new"
+        assert cfg.model == "new"
+        assert cfg.limits.context_tokens == 1_048_576
+    finally:
+        rt.dispose()
+
+
 def test_submit_turn_uses_runner_and_records_tool(tmp_path):
     _root, cfg = make_ws(tmp_path)
     script = [

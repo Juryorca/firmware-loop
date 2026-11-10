@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--db", default=None, help="SQLite 路径(默认 <root>/state/fwcore.sqlite3)")
     ap.add_argument("--target", default=None, help="启动时选中的固件目标")
     ap.add_argument("--run", dest="run_id", default=None, help="启动时选中的 run")
-    ap.add_argument("--model", default=None, help="模型:scripted / openai(用 state/model.json 配置)")
+    ap.add_argument("--model", default=None, help="模型:scripted 或 provider model id（/model 自动读取 /models 目录）")
     ap.add_argument("--script", default=None, help="scripted 模型的脚本 JSON(离线演示/测试)")
     ap.add_argument("-p", "--print", dest="print_mode", action="store_true",
                     help="非交互模式:执行一条消息后输出并退出")

@@ -315,15 +315,43 @@ class AgentSession:
         self._model_cursor = None
         self.emit("session.target", name, target=name, run=self.run_id)
 
-    def set_model(self, name: str) -> bool:
+    def set_model(self, name: str, info=None) -> bool:
+        from fwcore.models import split_context_annotation
+
         from .config import ModelConfigError, adapter_for
+
+        raw = (name or "").strip()
+        if not raw:
+            return False
+        if info is None:
+            candidates = [info for info in self.cfg.model_catalog
+                          if info.api_id == raw or info.id == raw or info.label == raw]
+            info = candidates[0] if candidates else None
+        api_id, suffix_context = split_context_annotation(raw)
+        if info is not None:
+            api_id = info.api_id or api_id
+        if raw in ("scripted", "fake"):
+            api_id = "scripted"
         try:
-            adapter_for(self.cfg, name)
+            adapter_for(self.cfg, api_id)
         except ModelConfigError as e:
             self.emit("error", str(e))
             return False
-        self.model_name = name
-        self.emit("session.model", name, model=name)
+        self.model_name = api_id
+        if api_id not in ("scripted", "fake"):
+            self.cfg.model = api_id
+        if api_id in ("scripted", "fake"):
+            self.cfg.limits.context_tokens = 0
+        elif info is not None:
+            if info.context_window:
+                self.cfg.limits.context_tokens = info.context_window
+            self.cfg.model_catalog_error = ""
+        elif suffix_context:
+            self.cfg.limits.context_tokens = suffix_context
+        if self._runner_ref is not None and api_id not in ("scripted", "fake"):
+            self._runner_ref.limits.context_tokens = self.cfg.limits.context_tokens
+        self.emit("session.model", api_id, model=api_id,
+                  label=getattr(info, "label", api_id) if info else api_id)
         return True
 
     def cancel(self, reason: str = "用户取消") -> bool:

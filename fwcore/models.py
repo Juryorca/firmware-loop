@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Protocol
@@ -24,18 +25,22 @@ from .model_client import (
     OpenAICompatModel,
     OpenAIResponsesModel,
     assistant_message,
+    list_models,
     to_api_messages,
 )
 
 __all__ = [
     "Adapter",
     "ModelHTTPError",
+    "ModelInfo",
     "OpenAICompatAdapter",
     "OpenAIResponsesAdapter",
     "Reply",
     "ScriptedAdapter",
     "assistant_message",
     "build_adapter",
+    "fetch_model_catalog",
+    "split_context_annotation",
     "to_api_messages",
 ]
 
@@ -233,6 +238,76 @@ class OpenAIResponsesAdapter:
         return Reply(content=r.get("content") or "", tool_calls=calls,
                      finish_reason=r.get("finish_reason") or "",
                      usage=r.get("usage") or {})
+
+
+_CONTEXT_SUFFIX_RE = re.compile(r"\[(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>[kKmM])\]$")
+
+
+def split_context_annotation(raw: str) -> tuple[str, int]:
+    """Split a display-only context suffix such as ``foo[1m]``.
+
+    Some gateways advertise a 1M-context variant in the display name/id.  The
+    suffix is not normally part of the model request id; keep it in the display
+    label but send the base id to the API.  Explicit provider metadata wins.
+    """
+    value = str(raw or "").strip()
+    m = _CONTEXT_SUFFIX_RE.search(value)
+    if not m:
+        return value, 0
+    factor = 1000 if m.group("unit").lower() == "k" else 1_000_000
+    try:
+        context = int(float(m.group("num")) * factor)
+    except ValueError:
+        context = 0
+    return value[:m.start()].rstrip(), context
+
+
+@dataclass(frozen=True)
+class ModelInfo:
+    """One model returned by an OpenAI-compatible ``/models`` endpoint."""
+
+    id: str
+    label: str
+    api_id: str
+    context_window: int = 0
+    max_output_tokens: int = 0
+    owned_by: str = ""
+
+
+def _first_int(item: dict, keys: tuple[str, ...]) -> int:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+    return 0
+
+
+def parse_model_info(item: dict) -> ModelInfo | None:
+    raw_id = str(item.get("id") or item.get("model") or "").strip()
+    if not raw_id:
+        return None
+    raw_label = str(item.get("name") or raw_id).strip() or raw_id
+    api_id, suffix_context = split_context_annotation(raw_id)
+    _label_base, label_context = split_context_annotation(raw_label)
+    context = _first_int(
+        item, ("context_window", "context_length", "max_context_length",
+               "max_input_tokens", "max_context_tokens")) or suffix_context or label_context
+    max_output = _first_int(
+        item, ("max_output_tokens", "max_completion_tokens", "max_output"))
+    return ModelInfo(id=api_id, label=raw_label, api_id=api_id,
+                     context_window=context, max_output_tokens=max_output,
+                     owned_by=str(item.get("owned_by") or ""))
+
+
+def fetch_model_catalog(base_url: str, api_key: str = "", *,
+                        timeout: float = 10.0) -> list[ModelInfo]:
+    rows = list_models(base_url, api_key, timeout=timeout)
+    out = [parse_model_info(row) for row in rows]
+    return [info for info in out if info is not None]
 
 
 def limits_config(root: str | None = None) -> dict:

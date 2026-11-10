@@ -48,11 +48,14 @@ class TranscriptView(VerticalScroll):
         except Exception:  # noqa: BLE001
             return True
 
-    def append(self, widget) -> None:
+    def append(self, widget, *, force_follow: bool = False) -> None:
         # `mount()` lays out asynchronously. Scrolling immediately uses the old
         # max_scroll_y, so the newly added notice/message can land below the
         # visible area. Re-check after the next refresh.
-        stick = self.at_bottom()
+        #
+        # Ordinary messages follow only when the reader is already at the
+        # bottom; explicit command output such as /mcp may force the follow.
+        stick = force_follow or self.at_bottom()
         self.mount(widget)
         if stick:
             self.follow_end()

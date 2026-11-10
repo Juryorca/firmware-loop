@@ -155,6 +155,9 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   只接受与请求 id 匹配的响应。模型能力来自 `state/model.json` / 环境变量：
   `api=responses`（合法的 `function_call_output` 图片）、`supports_vision`、
   `image_mode=tool_parts`（仅在端点确实接受 tool content image parts 时启用）；
+  `/model` 从 `GET {base_url}/models` 读取模型目录，选中项按 provider 的
+  `context_window` 同步 `Limits.context_tokens`；`[1m]`/`[256k]` 只作显示标注，
+  发请求前从 model id 去除（provider 显式 metadata 优先）；
   纯文本模型只得到路径和限制。`notifications/tools/list_changed` 会标记客户端，
   Runtime 在每个 turn 开头主动 `tools/list` 刷新，移除旧工具，避免长期使用过期列表。
 - **MCP Resources**：连接服务器声明 `capabilities.resources` 时才注册
@@ -240,4 +243,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 76 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 77 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

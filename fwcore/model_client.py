@@ -92,6 +92,46 @@ def http_transport(url: str, headers: dict, payload: dict) -> dict:
 urllib_transport = http_transport
 
 
+def list_models(base_url: str, api_key: str = "", *, timeout: float = 10.0) -> list[dict]:
+    """GET an OpenAI-compatible ``/models`` catalog.
+
+    This is a read-only discovery call.  It deliberately does not reuse
+    ``http_transport``: that POSTs a model request payload and would be the
+    wrong contract for model discovery.
+    """
+    url = base_url.rstrip("/") + "/models"
+    _check_url(url)
+    u = urlsplit(url)
+    path = (u.path or "/") + (f"?{u.query}" if u.query else "")
+    cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    if not u.hostname:
+        raise ModelHTTPError(0, f"端点缺少 host: {url[:80]}")
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    conn = cls(u.hostname, u.port, timeout=timeout)
+    try:
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status >= 400:
+            raise ModelHTTPError(resp.status, body.decode("utf-8", errors="replace"))
+        data = json.loads(body or b"{}")
+    except OSError as e:
+        raise ModelHTTPError(0, f"连接失败: {str(e)[:200]}") from e
+    finally:
+        conn.close()
+    if isinstance(data, dict):
+        rows = data.get("data")
+        if rows is None:
+            rows = data.get("models")
+    else:
+        rows = data
+    if not isinstance(rows, list):
+        raise ModelHTTPError(0, "模型列表响应不是数组")
+    return [x for x in rows if isinstance(x, dict)]
+
+
 def _tool_text_and_images(m: dict) -> tuple[str, list[dict]]:
     raw_parts = m.get("parts")
     parts: list[dict] = raw_parts if isinstance(raw_parts, list) else []

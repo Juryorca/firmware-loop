@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from fwcore import db as _db
 from fwcore.limits import Limits
 from fwcore.models import (
+    ModelInfo,
     build_adapter,
+    fetch_model_catalog,
     limits_config,
     load_model_config,
     load_model_options,
@@ -47,6 +49,8 @@ class AppConfig:
     api: str = ""
     supports_vision: bool = False
     image_mode: str = "none"
+    model_catalog: list[ModelInfo] = field(default_factory=list)
+    model_catalog_error: str = ""
 
     @property
     def db_exists(self) -> bool:
@@ -111,12 +115,12 @@ def adapter_for(cfg: AppConfig, name: str | None = None, script: str | None = No
     name = (name or cfg.model_name or "scripted").strip()
     if name in ("scripted", "fake"):
         return build_adapter("scripted", script=load_script(script or cfg.script))
-    if name in REAL_KINDS or name in (cfg.model, "openai", "deepseek"):
-        if not (cfg.api_key and cfg.base_url and cfg.model):
-            raise ModelConfigError(
-                "模型配置不完整:需要 api_key/base_url/model(环境变量或 state/model.json)")
+    if cfg.api_key and cfg.base_url and (cfg.model or name):
+        # A provider catalog can return any id; don't maintain a hardcoded
+        # allowlist.  ``openai``/``deepseek`` are config aliases, not model ids.
+        model_id = cfg.model if name in REAL_KINDS else name
         return build_adapter("openai", api_key=cfg.api_key, base_url=cfg.base_url,
-                             model=cfg.model, api=cfg.api,
+                             model=model_id, api=cfg.api,
                              supports_vision=cfg.supports_vision,
                              image_mode=cfg.image_mode)
     # 任意已知 provider 名但没配置 ⇒ 明确失败,不悄悄退回 scripted
@@ -138,9 +142,50 @@ def load_script(path: str | None) -> list[dict]:
     return data
 
 
-def available_models(cfg: AppConfig) -> list[tuple[str, str]]:
-    """给 /model 选择器:(名字, 说明)。"""
-    out = [("scripted", "演示模式（本地脚本，不调用真实模型）")]
-    if cfg.api_key and cfg.base_url and cfg.model:
-        out.append((cfg.model, f"OpenAI 兼容端点 · {cfg.base_url}"))
-    return out
+def _format_context(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.0f}K"
+    return str(n)
+
+
+def model_detail(info: ModelInfo, base_url: str = "") -> str:
+    parts = []
+    if info.owned_by:
+        parts.append(info.owned_by)
+    if info.context_window:
+        parts.append(f"context {_format_context(info.context_window)}")
+    if info.max_output_tokens:
+        parts.append(f"max out {_format_context(info.max_output_tokens)}")
+    if not parts and base_url:
+        parts.append(base_url)
+    return " · ".join(parts)
+
+
+def available_models(cfg: AppConfig, *, refresh: bool = False) -> list[ModelInfo]:
+    """Fetch the provider catalog; never hardcode model ids.
+
+    Only ``scripted`` is local.  If discovery fails, keep the configured model
+    visible and expose the error through ``cfg.model_catalog_error`` so the
+    selector can say why the live list is missing.
+    """
+    scripted = ModelInfo(id="scripted", label="scripted（演示）", api_id="scripted")
+    if not (cfg.api_key and cfg.base_url):
+        return [scripted]
+    if refresh or not cfg.model_catalog:
+        try:
+            infos = fetch_model_catalog(cfg.base_url, cfg.api_key)
+        except Exception as e:  # noqa: BLE001 - UI must show discovery failure, not crash
+            cfg.model_catalog_error = f"{type(e).__name__}: {e}"
+            infos = list(cfg.model_catalog)
+        else:
+            cfg.model_catalog = infos
+            cfg.model_catalog_error = ""
+    else:
+        infos = list(cfg.model_catalog)
+    selected = cfg.model or cfg.model_name
+    if selected and selected not in {i.api_id for i in infos}:
+        infos.append(ModelInfo(id=selected, label=selected, api_id=selected,
+                               context_window=cfg.limits.context_tokens))
+    return [scripted] + infos

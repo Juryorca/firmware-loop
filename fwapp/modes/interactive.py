@@ -22,7 +22,7 @@ from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from ..commands import BY_NAME
-from ..config import ModelConfigError, adapter_for, available_models
+from ..config import ModelConfigError, adapter_for, available_models, model_detail
 from ..runtime import AppRuntime
 from ..session import AgentSession
 from ..widgets.editor import PromptEditor
@@ -176,11 +176,12 @@ class FwApp(App):
         self.set_interval(0.1, self._check_signal_exit)
 
     # ---------------- 渲染 ----------------
-    def _append(self, widget) -> None:
-        self.query_one(TranscriptView).append(widget)
+    def _append(self, widget, *, force_follow: bool = False) -> None:
+        self.query_one(TranscriptView).append(widget, force_follow=force_follow)
 
-    def _notice(self, text: str, level: str = "info") -> None:
-        self._append(NoticeWidget(text, level))
+    def _notice(self, text: str, level: str = "info", *,
+                force_follow: bool = False) -> None:
+        self._append(NoticeWidget(text, level), force_follow=force_follow)
 
     def request_exit(self) -> None:
         """供 SIGTERM/SIGHUP 等信号处理函数调用（只置标志，不跨线程操作 UI）。"""
@@ -631,7 +632,7 @@ class FwApp(App):
         if health:
             if health.get("closed"):
                 lines.append("连接: 已关闭")
-                self._notice("\n".join(lines))
+                self._notice("\n".join(lines), force_follow=True)
                 return
             servers = health.get("servers") or {}
             registered = health.get("registered") or {}
@@ -644,7 +645,7 @@ class FwApp(App):
             lines.append("未启动: " + str(st["skipped"]))
         elif st["configured"]:
             lines.append("未启动: 会话 worker 尚未就绪")
-        self._notice("\n".join(lines))
+        self._notice("\n".join(lines), force_follow=True)
 
     def _cmd_skills(self, arg: str) -> None:
         from fwcore.skills import catalog
@@ -720,12 +721,30 @@ class FwApp(App):
             if not self.sess.set_model(arg):
                 self._notice("模型切换失败；当前模型未改变。", "error")
             return
-        items = [SelectItem(v, v, d) for v, d in available_models(self.runtime.cfg)]
+        self._notice("正在获取模型列表…")
+        self.run_worker(self._model_selector_worker(), exclusive=True)
+
+    async def _model_selector_worker(self) -> None:
+        """Discover the provider catalog off the UI thread, then open the picker."""
+        try:
+            infos = await asyncio.to_thread(available_models, self.runtime.cfg, refresh=True)
+        except Exception as e:  # noqa: BLE001 - keep the TUI alive on discovery failure
+            self._notice(f"模型列表获取失败: {e}", "error")
+            return
+        if not self.is_attached:
+            return
+        err = self.runtime.cfg.model_catalog_error
+        if err:
+            self._notice(f"模型列表获取失败，使用已有/配置模型：{err}", "warning")
+        items = [SelectItem(i.api_id, i.label,
+                            model_detail(i, self.runtime.cfg.base_url))
+                 for i in infos]
         if not items:
             self._notice("没有可用模型", "warning")
             return
+        by_id = {i.api_id: i for i in infos}
         def choose(value: str | None) -> None:
-            if value and not self.sess.set_model(value):
+            if value and not self.sess.set_model(value, info=by_id.get(value)):
                 self._notice("模型切换失败；当前模型未改变。", "error")
         self.push_screen(SelectorScreen("选择模型", items), choose)
 
