@@ -185,8 +185,8 @@ def test_shell_mode_contract(tmp_path):
     assert out3["status"] == "ok" and out3["shell"] is True
 
 
-def test_tool_calls_per_turn_are_capped(tmp_path):
-    """一次模型回复刷出很多调用时,执行数有上限且被显式告知(演练里出现过 121 次)。"""
+def test_tool_calls_per_turn_are_not_capped(tmp_path):
+    """No per-turn tool-call cap: the model can issue a large batch."""
     from fwcore.limits import Limits
     from fwcore.models import ScriptedAdapter
     from fwcore.runtime import Runner
@@ -197,13 +197,12 @@ def test_tool_calls_per_turn_are_capped(tmp_path):
     script = [{"content": "批量", "tool_calls": calls},
               {"content": "FINAL: 结束", "tool_calls": []}]
     r = Runner(con, root, ScriptedAdapter(script=script),
-               limits=Limits(max_model_calls=4, max_tool_calls_per_turn=5),
+               limits=Limits(max_model_calls=4),
                policy=Policy(authorization=Authz(roots=[root]), allow_high_risk=True))
     res = r.run(r.start("t1"), "t1")
     n = con.execute("SELECT COUNT(*) n FROM tool_calls WHERE tool='shell_exec'").fetchone()["n"]
-    assert n == 5, f"单轮应只执行 5 个,实际 {n}"
+    assert n == 12, f"all tool calls should execute, got {n}"
     kinds = [row["kind"] for row in con.execute("SELECT kind FROM events")]
-    assert "run.tool_cap" in kinds
-    skipped = [m for m in res.history if m.get("role") == "tool"
-               and "单轮工具调用上限" in (m.get("content") or "")]
-    assert len(skipped) == 7
+    assert "run.tool_cap" not in kinds
+    assert not [m for m in res.history if m.get("role") == "tool"
+                and "单轮工具调用上限" in (m.get("content") or "")]

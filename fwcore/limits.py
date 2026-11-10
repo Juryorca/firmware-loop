@@ -31,8 +31,6 @@ class Limits:
     # 分块摘要:每块 token 上限 / 单次压缩最多几次摘要调用(超限=失败,不丢历史)
     summarize_chunk_tokens: int = 60_000
     summarize_max_calls: int = 20
-    # 单轮最多执行多少个工具调用(模型可能一次发很多;这是执行边界,不是研究规则)
-    max_tool_calls_per_turn: int = 8
 
     @classmethod
     def unbounded(cls) -> Limits:
@@ -50,5 +48,4 @@ class Limits:
             "max_model_calls": self.max_model_calls or "unbounded",
             "max_seconds": self.max_seconds or "unbounded",
             "max_tool_seconds": self.max_tool_seconds,
-            "max_tool_calls_per_turn": self.max_tool_calls_per_turn,
         }

@@ -177,6 +177,8 @@ def register_tool_search(registry) -> None:
         matches = search_metadata(candidates, query, limit)
         loaded = [str(m["name"]) for m in matches]
         activated = registry.activate_deferred(loaded)
+        if getattr(ctx, "run_id", None) and activated:
+            ctx.domain.activate_tools(ctx.run_id, activated)
         lines = [
             f"Loaded {len(activated)} tool(s). They are available from your next call:"
             if activated else "No matching tools found."

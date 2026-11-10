@@ -533,6 +533,19 @@ class Domain:
                     "tokens_before": tokens_before})
         return cid
 
+    def activate_tools(self, run_id: str, names: list[str]) -> None:
+        if not self.con.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone():
+            raise NotFound(f"run 不存在: {run_id}")
+        with Tx(self.con) as c:
+            for name in sorted({str(n) for n in names if n}):
+                c.execute("INSERT OR IGNORE INTO tool_activations(run_id,tool,created_at)"
+                          " VALUES(?,?,?)", (run_id, name, _now()))
+            _event(c, "tools.activated", run_id, {"tools": sorted(set(names))})
+
+    def active_tools(self, run_id: str) -> list[str]:
+        return [r["tool"] for r in self.con.execute(
+            "SELECT tool FROM tool_activations WHERE run_id=? ORDER BY tool", (run_id,))]
+
     def conversation(self, run_id: str, *, roles: tuple[str, ...] | None = None,
                      limit: int | None = None) -> list[dict]:
         """按追加顺序返回对话;`limit` 保留最近 N 条(仍按时间正序)。
@@ -544,6 +557,12 @@ class Domain:
             (run_id,)).fetchall()]
         if roles:
             rows = [r for r in rows if r["role"] in roles]
+        def _context_only(row) -> bool:
+            try:
+                return bool((json.loads(row.get("meta") or "{}") or {}).get("context_only"))
+            except (TypeError, ValueError):
+                return False
+        rows = [r for r in rows if not (r["role"] == "user" and _context_only(r))]
         if limit is not None and limit > 0:
             rows = rows[-limit:]
         return rows

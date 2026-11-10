@@ -366,7 +366,7 @@ class Runner:
         st = _proc_starttime(me)
         cur = None
         with _db.Tx(self.con) as c:
-            # nosemgrep: python-sql-injection
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cur = c.execute(  # set_sql is a fixed internal fragment; values are bound
                 "UPDATE runs SET " + set_sql +
                 " WHERE id=? AND state='running'"
@@ -386,7 +386,7 @@ class Runner:
         marks = ",".join("?" for _ in states)
         cur = None
         with _db.Tx(self.con) as c:
-            # nosemgrep: python-sql-injection
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cur = c.execute(  # set_sql is a fixed internal fragment; values are bound
                 "UPDATE runs SET " + set_sql +
                 f" WHERE id=? AND state IN ({marks})"
@@ -473,14 +473,11 @@ class Runner:
         events.reverse()
         return {"derived": d, "recent_events": events}
 
-    def _restore_tool_activation(self, history: list[dict]) -> None:
-        """Rebuild deferred-tool activation from tool_search results in history.
-
-        Tool activation is a model-visible tool-set decision, so it lives in the
-        normal transcript/checkpoint path.  Removing a tool or changing its
-        exposure invalidates the old activation through activate_deferred().
-        """
+    def _restore_tool_activation(self, history: list[dict], rid: str | None = None) -> None:
+        """Rebuild deferred-tool activation from session state, not one result."""
         names: list[str] = []
+        if rid:
+            names.extend(self.domain.active_tools(rid))
         for msg in history:
             if msg.get("role") != "tool" or msg.get("name") != "tool_search":
                 continue
@@ -495,6 +492,28 @@ class Runner:
         if names:
             self.registry.activate_deferred(names)
 
+    def _session_rows(self, rid: str):
+        """Rows that belong to the model-visible session.
+
+        Unlike tool output, a cancelled tool result is still required for the
+        tool_call/tool_result protocol; cancelled/queued user input is not.
+        """
+        rows = self.con.execute(
+            "SELECT * FROM conversation_entries WHERE run_id=? ORDER BY rowid",
+            (rid,)).fetchall()
+        out = []
+        for row in rows:
+            role = row["role"]
+            status = row["status"]
+            if role == "user" and status in ("queued", "cancelled"):
+                continue
+            if role == "assistant" and status == "queued":
+                continue
+            if role == "tool" and not row["tool_call_id"]:
+                continue
+            out.append(row)
+        return out
+
     def _load_history(self, rid: str) -> list[dict]:
         """Rebuild the active branch from append-only conversation entries.
 
@@ -503,9 +522,7 @@ class Runner:
         the same: raw entries stay, and a compaction only changes the projection
         used for the next request.
         """
-        rows = self.con.execute(
-            "SELECT * FROM conversation_entries WHERE run_id=?"
-            " AND status IN ('ok','partial','error') ORDER BY rowid", (rid,)).fetchall()
+        rows = self._session_rows(rid)
         if not rows:
             return []
 
@@ -589,6 +606,28 @@ class Runner:
                 if meta.get("parts"):
                     msg["parts"] = meta["parts"]
                 messages.append(msg)
+        # A compaction boundary can start at a tool result whose assistant
+        # tool_call was just before the boundary.  Do not return a dangling
+        # tool result: reattach a minimal assistant call using the DB args.
+        repaired: list[dict] = []
+        pending: set[str] = set()
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                pending.update(c.get("id") for c in (msg.get("tool_calls") or []))
+            elif msg.get("role") == "tool":
+                cid = msg.get("tool_call_id")
+                if cid and cid not in pending:
+                    tc = _tool(cid)
+                    if tc:
+                        repaired.append({
+                            "role": "assistant", "content": "",
+                            "tool_calls": [{"id": cid, "type": "function",
+                                            "function": {"name": tc.get("tool") or "",
+                                                         "arguments": tc.get("args") or "{}"}}],
+                        })
+                        pending.add(cid)
+            repaired.append(msg)
+        messages = repaired
         try:
             return _sanitize_history(messages, _tool)
         except (TypeError, ValueError) as e:
@@ -649,11 +688,9 @@ class Runner:
             if SUMMARY_HEADER in summary:
                 summary = summary.split(SUMMARY_HEADER, 1)[1].lstrip("\n")
             recent_count = max(0, len(new_history) - 1)
-            recent = self.con.execute(
-                "SELECT id FROM conversation_entries WHERE run_id=?"
-                " AND status IN ('ok','partial','error') ORDER BY rowid DESC LIMIT ?",
-                (rid, recent_count)).fetchall()
-            first_kept_id = recent[-1]["id"] if recent_count and recent else None
+            recent = self._session_rows(rid)
+            recent = recent[-recent_count:] if recent_count else []
+            first_kept_id = recent[0]["id"] if recent else None
             self.domain.add_compaction(rid, summary, first_kept_id, before)
         except Exception as e:
             _event(self.con, "run.compact_failed", rid,
@@ -927,27 +964,11 @@ class Runner:
         status = str(out.get("status") or "ok")
         cstatus = {"ok": "ok", "error": "error", "timeout": "error",
                    "cancelled": "cancelled"}.get(status, "error")
-        payload = {k: out.get(k) for k in (
-                       "status", "error", "note", "exit_code",
-                       "stdout_tail", "stderr_tail", "text", "output_tail",
-                       "stdout_truncated", "stderr_truncated",
-                       "stdout_truncated_by", "stderr_truncated_by",
-                       "stdout_total_lines", "stderr_total_lines",
-                       "stdout_total_bytes", "stderr_total_bytes",
-                       "stdout_full_output_path", "stderr_full_output_path",
-                       "full_output_path", "structured_full_output_path",
-                       "observation_full_output_path", "images")
-                   if out.get(k) not in (None, "")}
-        for key in ("stdout_tail", "stderr_tail", "text", "output_tail"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                # Pi 的 live tool output 是 2000 行/50 KiB；持久化也沿用这个
-                # 边界（按字节 + 行，而不是按 Python 字符数切）。
-                payload[key] = truncate_tail(value, max_lines=DEFAULT_MAX_LINES,
-                                             max_bytes=DEFAULT_MAX_BYTES)["content"]
-        if out.get("tool_call_id"):
-            payload["tool_call_id"] = out["tool_call_id"]
-        content = json.dumps(payload, ensure_ascii=False)
+        # Persist the exact model-visible projection.  A field whitelist here
+        # made resume see a different result than the live turn (structured,
+        # observation, result_path, tool_search loaded/tools, ...).
+        content = _bounded_tool_result(out)
+
         call_id = str(call.get("id") or call.get("name") or "?")
         try:
             self._conversation_write(
@@ -1004,7 +1025,7 @@ class Runner:
             # tools/list_changed 可能只在请求时被读到；每个 turn 开头主动刷新一次，
             # 避免模型长期拿旧工具清单。刷新失败保留旧工具。
             self.mcp_bridge.refresh_tools(force=True)
-        self._restore_tool_activation(history)
+        self._restore_tool_activation(history, rid)
         # run 级预算:从数据库读累计值(暂停/恢复/多轮都不重置)。
         # 定义在 try 之外 ⇒ 异常路径也能安全落库(避免 _persist 未绑定)
         row0 = self.con.execute("SELECT model_calls, tool_calls, elapsed_s FROM runs WHERE id=?",
@@ -1122,11 +1143,9 @@ class Runner:
                         if SUMMARY_HEADER in summary:
                             summary = summary.split(SUMMARY_HEADER, 1)[1].lstrip("\n")
                         recent_count = max(0, len(new_history) - 1)
-                        recent = self.con.execute(
-                            "SELECT id FROM conversation_entries WHERE run_id=?"
-                            " AND status IN ('ok','partial','error') ORDER BY rowid DESC LIMIT ?",
-                            (rid, recent_count)).fetchall()
-                        first_kept_id = recent[-1]["id"] if recent_count and recent else None
+                        recent = self._session_rows(rid)
+                        recent = recent[-recent_count:] if recent_count else []
+                        first_kept_id = recent[0]["id"] if recent else None
                         self.domain.add_compaction(rid, summary, first_kept_id, before)
                         history = new_history
                         self._last_compact = {"before_tokens": before,
@@ -1187,6 +1206,14 @@ class Runner:
                     # checkpoint 持久化,resume 后仍作为模型上下文。
                     history.append({"role": "user", "content": _state,
                                     "_context_only": True})
+                    try:
+                        self._conversation_write(
+                            rid, "user", _state,
+                            client_id=f"context:{rid}:{step}:{run_calls}",
+                            meta={"context_only": True, "source": "context"})
+                    except ConversationPersistError as e:
+                        _event(self.con, "context.persist_failed", rid,
+                               {"error": str(e)[:300]})
                 except StreamCancelled:
                     _event(self.con, "model.cancelled", rid, {"calls": run_calls})
                     state = "paused"
@@ -1334,43 +1361,8 @@ class Runner:
                                       artifacts_dir=os.path.join(self.root, "state", "artifacts", rid),
                                       policy=self.policy, research=self.research)
                     stalled = False
-                    cap = max(1, int(self.limits.max_tool_calls_per_turn))
                     calls_this_turn = list(reply.tool_calls)
                     conv_failed = False
-                    if len(calls_this_turn) > cap:
-                        # 防止一次模型回复刷出上百次调用(演练里出现过 121 次):
-                        # 超出的**显式**告知未执行,而不是静默丢弃
-                        skipped = calls_this_turn[cap:]
-                        calls_this_turn = calls_this_turn[:cap]
-                        for c in skipped:
-                            err = (f"未执行:单轮工具调用上限 {cap}"
-                                   "(把命令合并成更少的调用)")
-                            history.append({"role": "tool", "tool_call_id": c.get("id"),
-                                            "name": c.get("name"),
-                                            "content": json.dumps(
-                                                {"status": "cancelled", "error": err},
-                                                ensure_ascii=False)})
-                            try:
-                                self._conversation_write(
-                                    rid, "tool", json.dumps(
-                                        {"status": "cancelled", "error": err},
-                                        ensure_ascii=False),
-                                    status="cancelled", tool_call_id=c.get("id"),
-                                    client_id=f"tool:{rid}:{c.get('id')}",
-                                    meta={"tool": c.get("name"), "status": "cancelled"})
-                            except ConversationPersistError as e:
-                                self._emit_stream({"type": "conversation_error", "run": rid,
-                                                   "phase": "tool-cap", "error": str(e)[:300]})
-                                self._set_paused(rid, f"conversation_error: {str(e)[:300]}")
-                                state = "paused"
-                                conv_failed = True
-                                break
-                        if conv_failed:
-                            _persist()
-                            self._checkpoint(rid, step, history)
-                            break
-                        _event(self.con, "run.tool_cap", rid,
-                               {"requested": len(reply.tool_calls), "executed": cap})
                     lost_owner = False
                     for ci, call in enumerate(calls_this_turn):
                         if not self.is_running_owner(rid):

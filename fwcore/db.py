@@ -222,6 +222,14 @@ CREATE TABLE IF NOT EXISTS compactions (
   created_at     TEXT NOT NULL
 );
 
+-- Tool loadout is session state, not something to infer from one tool result.
+CREATE TABLE IF NOT EXISTS tool_activations (
+  run_id     TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  tool       TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, tool)
+);
+
 -- 事件流(审计/回放;只追加)
 CREATE TABLE IF NOT EXISTS events (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
