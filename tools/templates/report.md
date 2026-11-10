@@ -51,13 +51,13 @@
 > 无证据则降级措辞;禁止"只在写作轮内找证据"。
 
 受众纪律: 对外文件的写法红线**只认「### 报告格式与 CVE 编号线(细则)」的「通用原则」**(避免两处维护)。
-过程性事实留在 SQLite；`notes.md` 只是可选历史，不再作为研究过程存储；对外只用 `report/` 交付物;
+过程性事实留在 SQLite；对外只用 `report/` 交付物;
 内部归档反向要求必须带证据引用(命令/输出/文件路径/判定记号),保证可追溯可续跑。
 证据形态: 机制证据用文本原文(命令+原样输出,自包含);结果时刻用真实终端截图
 依赖一句带过)+ 自有证据截图),单份提交时材料自含 —— 一个 finding 的对照/证据**不得依赖
 另一个 finding 的脚本或数据**。对外材料的命名与内容一律不出现内部 VR-n 编号 ——
 advisory 标题/文件名、文件夹、PoC 脚本、截图全部用漏洞描述性命名;
-VR 编号仅存在于内部 INDEX；`notes.md` 可选;跨 finding 引用写 "documented in a separate advisory"。
+VR 编号仅存在于内部 INDEX；跨 finding 引用写 "documented in a separate advisory"。
 截图须完整呈现终端内容(满幅,无黑边无裁切)。
 红线: **默认不提交**;用户明确要求提交时「**可填不可提交**」(只填表单/草稿、不点提交、贴待确认清单)—— 细则见「### 提交红线(硬性)」。
 报告格式与 CVE 编号线规则见下方「### 报告格式与 CVE 编号线(细则)」—— **该小节为唯一权威版本**,
@@ -148,7 +148,7 @@ VR 编号仅存在于内部 INDEX；`notes.md` 可选;跨 finding 引用写 "doc
 ### 通用原则
 - 受众纪律: 对外文件(VR-*、CVE 申请材料)的读者是厂商/第三方,不是操作者。禁止出现
   工作区路径(state/…、artifacts/…)、内部工具名(tools/、parse_signal.py、IDA、tmux)、
-  信号记号(HIT:/MISS:)与内部文件名(AGENTS.md、notes.md、state/、artifacts/);
+  信号记号(HIT:/MISS:)与内部文件名(AGENTS.md、state/、artifacts/);
   文本证据不写操作者环境信息,截图用提交人本人真实终端(原生提示符,不匿名化)
 - 内部归档(INDEX/attack-surface/CLOSURE)反向要求: **必须带证据引用** ——
   每条结论附 命令/输出/文件路径/判定记号,保证可追溯、可续跑、可复核
@@ -180,7 +180,7 @@ VR 编号仅存在于内部 INDEX；`notes.md` 可选;跨 finding 引用写 "doc
   跨 finding 引用写 "documented in a separate advisory";
   截图满幅呈现终端内容,无黑边无裁切;
 - 报告语言: 英文(国际厂商) / 厂商官方语言(区域厂商)
-- 内容来自 SQLite 权威状态与 artifacts/,不凭空编造；`notes.md` 只作可选历史
+- 内容来自 SQLite 权威状态与 artifacts/,不凭空编造
 
 > **CLOSURE 必填:覆盖层声明** —— 写明本次覆盖判定到了哪几层:①监听端口 ②反向代理 location / 运行时生成路由表 ③应用内路由(含认证后)。
 > 任何一层未做,必须写成"**已知遗漏**"并给出具体项(例:`/proxy/network/*` → 后端 REST 未枚举),**不得用 `coverage complete` 掩盖**。

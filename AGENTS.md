@@ -13,7 +13,7 @@
 **分层**: 本文件 = 唯一常驻 System Prompt 项目指令(行为与边界);`.agents/skills/` = 按需操作知识;`tools/templates/` = 交付物形态;SQLite `knowledge_entries` = 跨目标研究知识;`state/<目标>/` = 本轮事实。
 
 **循环(状态机)—— 每步: 产出什么 / 落在哪 / 此处必查**
-1. **立项**: 目标(路径或型号名)→ 固件获取 + 指纹(`来源 URL + MD5` 记 `intel/firmware/<目标>/`)→ 来源指纹写 SQLite target/observation（`state_*`）；`notes.md` 可选。
+1. **立项**: 目标(路径或型号名)→ 固件获取 + 指纹(`来源 URL + MD5` 记 `intel/firmware/<目标>/`)→ 来源指纹写 SQLite target/observation（`state_*`）。
    同时记**厂商政策(含对认证后漏洞的态度)**(见守则 10「厂商口径门」)
    **目标取舍因子(立项时看一次)**: **厂商自研/改写代码的量** —— 自研守护进程 / 插件 / 胶水层 / 被改过的上游 vs **纯上游拼装**。
    自研改写多 ⇒ 厂商特有缺陷概率高,**优先**;纯上游拼装 ⇒ 期望值低,注意力放到**厂商接线处**(配置/权限映射/插件);
@@ -69,7 +69,7 @@
 ⇒ **不必问的(自己拍板做,别包装成 A/B)**:起容器(含 `--privileged` 做挂载/权限)、构建镜像、容器化 rootfs、装依赖、跑扫描/导入、重跑实验 —— 这些是**工程步骤** ✓(照容器与清理纪律做即可;成本/耗时不是理由,见上表)。
 ⇒ 合法停**只有四种**:本轮新成立 finding / 需工作区外**具体外部事物**(账号·样本·凭据·宿主环境 —— **不含真机**) / 队列清空 / 目标级裁决。
 
-**停止声明**: 每次真正停下时用 `state_add_log(kind=stop)` 写 SQLite；`notes.md` 可选、仅人工摘要;**「有 finding」这条必须写明是本轮新成立的哪一条**(带本轮判定/证据);只引历史 finding ⇒ 视为**继续**,不得停。**理由必须附证据**(判据满足 ⇒ 引 `bash tools/derived_check.sh <目标> --closure` 输出;需用户输入 ⇒ 写四要素;工具/环境故障 ⇒ 附错误原文;「上下文余量」⇒ 引 harness 原句)。**格式与本条细则见 `research-loop` Skill(`references/LOOP.md`)「停止声明」**。
+**停止声明**: 每次真正停下时用 `state_add_log(kind=stop)` 写 SQLite;**「有 finding」这条必须写明是本轮新成立的哪一条**(带本轮判定/证据);只引历史 finding ⇒ 视为**继续**,不得停。**理由必须附证据**(判据满足 ⇒ 引 `bash tools/derived_check.sh <目标> --closure` 输出;需用户输入 ⇒ 写四要素;工具/环境故障 ⇒ 附错误原文;「上下文余量」⇒ 引 harness 原句)。**格式与本条细则见 `research-loop` Skill(`references/LOOP.md`)「停止声明」**。
 - ⚠️ 本工作区没有真机 ⇒ 真机需求**不是**停的理由(见下条);只有"产品自身在容器/仿真里无法造出的外部事物"才算情况②。
 ⚠️ **本工作区没有真机/硬件**(用户明确声明): 硬件验证**不在可得资源内** ⇒ **容器/仿真/提取镜像的验证即为准绳**,
    不得因"需真机确认"而停工、降级 finding 或把它写成 Blocked;真机最多是"再加强"的可选项(报告里如实注明"physical-device
@@ -93,7 +93,6 @@
 | 工具经验/怪癖 / SDK 特征 / 已验证利用链 / 情报与实证 | 全部用 `knowledge_search` / `knowledge_get`；按 `kind=guideline/pattern/misreport` 过滤 |
 | 知识库入口 | `knowledge_search` / `knowledge_get` / `knowledge_propose` / `knowledge_stats` / `knowledge_revise` / `knowledge_deprecate`;准入见本文件「Knowledge Base」 |
 | 权威研究事实(假设/尝试/观察/证据/结论/面) | `state/<目标>/state/fwcore.sqlite3`(用 `state_*` 工具写) |
-| 可选人工叙述/历史摘要（非自动维护） | `state/<目标>/notes.md`；下一步从 DB 读 |
 | 环境 / 工具入口 | 本文件「资源解析…」「环境清单」「工具速查」 |
 
 ## 资源解析与 Python 环境登记表(违反即返工)
@@ -129,7 +128,7 @@
 ## 循环守则
 
 1. 信号判定: `tools/parse_signal.py` 覆盖的类别以其输出为准;不覆盖的类别(DoS/信息泄露/逻辑缺陷/权限等)用**自定义差分·对比实验**验证,同样构成发现 —— 禁止无证据宣称成功。
-2. 每完成一个阶段 → 用 `state_*` 工具写**权威状态**(假设/证据/结论/下一步);`notes.md` 可选，仅历史叙述，不再是研究过程的必需记录。
+2. 每完成一个阶段 → 用 `state_*` 工具写**权威状态**(假设/证据/结论/下一步);历史原文只在 SQLite `documents`；下一步从 DB 读。
 3. 失败先分诊(**假设 / 环境 / 信号**三层),修正后重跑,禁止盲目重试(判据见 `research-loop` Skill(`references/LOOP.md`)「失败分诊」)。
 4. Windows IDA: 使用 `tools/ida_*.sh` wrapper；具体命令、`database` 参数与生命周期见 `.agents/skills/firmware-reversing/SKILL.md`「IDA headless wrapper」。
 5. 范围门控: 仅 PoC 级验证、仅授权目标;不做武器化、不做沙箱逃逸(探测/交付边界见下方「交付原则」)。
@@ -175,7 +174,7 @@
 - `intel/firmware/<目标>/` — **原始固件归档 = 可重下的缓存**(长期保留的是 `SOURCE_URL.txt`:URL+size+MD5);
   差分/旁证用的历史版本原始件也放这里。任何分析结论必须可从此处重新推导
 - `intel/gpl_src/` · `intel/advisories/` · `intel/writeups/` — 参考资料库,长期保留
-- `state/<目标>/` — 工作现场: rootfs 工作副本、artifacts/(**内部证据 = agent 自查用,不进对外材料**;**大体积派生物统一放 `artifacts/work/`** ⇒ 释放时整目录删 ✓)、notes.md（可选历史，不自动维护）、report/(advisory + INDEX + 复现包 + 截图);
+- `state/<目标>/` — 工作现场: rootfs 工作副本、artifacts/(**内部证据 = agent 自查用,不进对外材料**;**大体积派生物统一放 `artifacts/work/`** ⇒ 释放时整目录删 ✓)、report/(advisory + INDEX + 复现包 + 截图);
   目标收尾按守则 7 清理
 - `.agents/skills/` — 按需加载的专项操作知识(标准 `SKILL.md`)
 - `knowledge/` — **已不存在**;研究知识与工具经验统一在 SQLite `knowledge_entries`;历史 Markdown 只在 Git 历史中。
@@ -375,7 +374,7 @@ agent **可填不可提交** —— 仅当**用户明确要求**某份报告去�
 
 ### 提交(仅当用户要求时;2026-10-30)
 - 两条浏览器 MCP:①`chrome-devtools`(headless,自起 Chromium — 抓取)②`chrome-live`(`--autoConnect`,连**用户日常 Chrome**,带其登录态)。
-- **先判收不收(读原文,不凭印象)**:读该项目 scope / policy 原文,把**原文摘句 ↔ 我们的事实**并列写进 SQLite log/evidence（`notes.md` 可选）;
+- **先判收不收(读原文,不凭印象)**:读该项目 scope / policy 原文,把**原文摘句 ↔ 我们的事实**并列写进 SQLite log/evidence;
   原文明确排除 ⇒ **不提交赏金**,记录原文、走 CVE;原文没写 ⇒ 记「未知」**照常提交**(禁凭类别臆断 ✗)。
   编号由**接收方身份**决定(是 CNA / 平台开了该功能 ⇒ 自动有;都不是 ⇒ 自己申请),**不是**"提交时顺手请求" ✗ —— 细则见 KB「提交前先判「收不收」」✓。
 - **流程**:用户说"提交某份报告" ⇒ ①`python3 tools/chrome-live-probe.py` 探活 ②`ON` 才继续填 ③`OFF` **就地提醒用户**开

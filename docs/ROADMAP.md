@@ -7,7 +7,7 @@
 
 - **独立产品**:fwcore 不依赖 Pi(`.pi/` 不入库);模型调用/工具/状态/证据/Watchdog/checkpoint/resume 全在自己代码里。
 - **权威状态**:SQLite(schema v17)存假设/尝试/观察/证据/结论/面/run/checkpoint/tool_calls/events;
-  `notes.md` 是可选历史/人工摘要，不承担研究状态；对外材料在 `report/`，原件在 `intel/`。
+  历史叙述只存 SQLite（原文在 `documents`），不承担研究状态；对外材料在 `report/`，原件在 `intel/`。
 - **模型协议**:`finish_reason`/`usage` 贯通;每次调用 `model.call` 记账;FINAL 任意行首;重复内容与无工具空转看护;
   thinking 模式默认回传 `reasoning_content`。
 - **工具**:统一 manifest(`tools/registry/*.json`,9 个)+ 内置 `state_*`/`shell_exec`/`fs_*` + IDA feature 适配器 + MCP;
@@ -24,7 +24,7 @@
   心跳 CAS(不抢回所有权);接管死亡 owner 时清孤儿进程组与遗留 `running` 工具行;
   看护的 hard/stale 两分支都先赢下 `state='running'` 竞争再 kill/写事件。
 - **存储边界**:研究事实只认 SQLite;运行产物只写 `state/_scratch/`(不进 Git);`docs/evidence/` 只收长期工程资料;
-  研究事实、决策、下一步只认 SQLite；`notes.md` 可选；`report/` 是交付；覆盖度/队列判定 DB 优先。
+  研究事实、决策、下一步只认 SQLite；`report/` 是交付；覆盖度/队列判定 DB 优先。
 - **全量迁移**:14 个历史目标的 notes/attack-surface 已导入 DB(`documents` 保原文;
   面/假设/观察/证据/复核/结论/三镜进结构化表;叙述与模糊内容进 `research_logs`);
   `fw-core migrate --all` 幂等,`--verify` 逐目标核对;运行路径**无 Markdown 回退**。

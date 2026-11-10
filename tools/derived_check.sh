@@ -2,8 +2,8 @@
 # derived_check.sh — DB 权威派生量/材料检查
 #
 # 用法: bash tools/derived_check.sh <目标目录名> [--closure]
-# 目标必须显式给出；不通过 notes.md 或最近修改时间猜目标。
-# 研究事实、假设池、三镜、证据/收口只读 SQLite；notes.md 是可选的旧历史，不参与判定。
+# 目标必须显式给出；不通过历史文件或最近修改时间猜目标。
+# 研究事实、假设池、三镜、证据/收口只读 SQLite；历史原文在 DB documents，不参与判定。
 set -u
 CODE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ROOT="${FW_ROOT:-$CODE_ROOT}"
@@ -12,7 +12,7 @@ CLOSURE=0
 case "${2:-}" in --closure) CLOSURE=1;; esac
 if [ -z "$TARGET" ]; then
   echo "用法: derived_check.sh <目标目录名> [--closure]" >&2
-  echo "目标必须显式指定；不会根据 notes.md 的修改时间猜目标。" >&2
+  echo "目标必须显式指定；不会根据历史文件修改时间猜目标。" >&2
   exit 2
 fi
 STATE="$ROOT/state/$TARGET"
@@ -73,7 +73,7 @@ except Exception as e:
     bad(f"Gate 计算失败: {type(e).__name__}: {e}")
     rep = None
 
-# ---------- 引用完整性：只检查正式 report 交付物；notes 是可选历史，不参与 ----------
+# ---------- 引用完整性：只检查正式 report 交付物；历史 DB 文档不参与 ----------
 tgts = [d for d in os.listdir(os.path.join(root, "state"))
         if os.path.isdir(os.path.join(root, "state", d)) and d != "artifacts"]
 refpat = re.compile(r"(?:\.\./)?(" + "|".join(map(re.escape, tgts)) + r")/([A-Za-z0-9._/*-]+)")
@@ -277,7 +277,7 @@ if closure:
                         ok(f"A1 location 完整性: {len(ipaths)} 条路径均在 A2 表内")
                 else:
                     bad("A1 location 完整性: 清单里没有 HTTP 路径(location)记录")
-        # 论点—证据缺口：由 Gate 的 blockers/finding 证据链承担，不再解析 notes
+        # 论点—证据缺口：由 Gate 的 blockers/finding 证据链承担
         if rep is not None and not rep.blockers:
             ok("论点—证据: Gate 未报缺口/未复核证据")
     else:
@@ -307,7 +307,7 @@ if round_logs:
     else:
         ok(f"轮结构(DB): {checked} 条 round 记录逐条检查无异常")
 else:
-    print("轮结构: 无 research_logs(kind=round)；新目标不因缺 notes 判 FAIL")
+    print("轮结构: 无 research_logs(kind=round)；新目标不因缺历史文件判 FAIL")
 
 print("=== derived_check: " + ("PASS" if fail == 0 else f"FAIL x{fail}") + " ===")
 sys.exit(1 if fail else 0)
