@@ -532,26 +532,45 @@ class Runner:
                 " ORDER BY rowid DESC LIMIT 1", (cid, cid)).fetchone()
             return dict(row) if row else None
 
-        comp = self.con.execute(
-            "SELECT summary,first_kept_id FROM compactions WHERE run_id=?"
-            " ORDER BY rowid DESC LIMIT 1", (rid,)).fetchone()
+        comps = self.con.execute(
+            "SELECT summary,first_kept_id,created_at FROM compactions WHERE run_id=?"
+            " ORDER BY rowid DESC", (rid,)).fetchall()
         start = 0
         messages: list[dict] = []
-        if comp:
-            if comp["first_kept_id"] is None:
+        chosen = None
+        # The latest compaction is a projection hint, not the session itself.
+        # If its cut was lost (old DB/partial write), fall back to the previous
+        # valid compaction; if none is valid, replay the raw append-only rows.
+        # Never append a summary to the full raw history: that duplicates and
+        # can contradict the summarised content.
+        for comp in comps:
+            fk = comp["first_kept_id"]
+            if fk is None:                    # explicit retain-none marker
+                # The compaction entry itself is the boundary: keep entries
+                # appended after it.  A bare summary would drop every future
+                # message if a later turn appended after a retain-none cut.
                 start = len(rows)
-            else:
                 for i, row in enumerate(rows):
-                    if row["id"] == comp["first_kept_id"]:
+                    if str(row["created_at"]) > str(comp["created_at"]):
                         start = i
                         break
+                chosen = comp
+                break
+            for i, row in enumerate(rows):
+                if row["id"] == fk:
+                    start = i
+                    chosen = comp
+                    break
+            if chosen is not None:
+                break
+        if chosen is not None:
             # A tool result cannot be the first message after a summary: its
             # assistant tool_call would be missing.  Walk back to the owning
             # assistant turn (Pi keeps whole tool groups at the cut boundary).
-            while start > 0 and rows[start]["role"] == "tool":
+            while start > 0 and start < len(rows) and rows[start]["role"] == "tool":
                 start -= 1
             messages.append({"role": "assistant",
-                             "content": SUMMARY_HEADER + "\n" + (comp["summary"] or "")})
+                             "content": SUMMARY_HEADER + "\n" + (chosen["summary"] or "")})
 
         for row in rows[start:]:
             role = row["role"]
@@ -606,6 +625,35 @@ class Runner:
                 if meta.get("parts"):
                     msg["parts"] = meta["parts"]
                 messages.append(msg)
+        # Legacy/cancelled rows can contain an assistant tool_call whose result
+        # never existed.  Keep the assistant text but do not expose an unpaired
+        # call; a call with at least one result keeps the paired calls.
+        pruned: list[dict] = []
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                j = i + 1
+                tool_msgs = []
+                while j < len(messages) and messages[j].get("role") == "tool":
+                    tool_msgs.append(messages[j])
+                    j += 1
+                result_ids = {m.get("tool_call_id") for m in tool_msgs}
+                calls = msg.get("tool_calls") or []
+                kept = [c for c in calls if c.get("id") in result_ids]
+                if len(kept) != len(calls):
+                    msg = dict(msg)
+                    if kept:
+                        msg["tool_calls"] = kept
+                    else:
+                        msg.pop("tool_calls", None)
+                pruned.append(msg)
+                pruned.extend(tool_msgs)
+                i = j
+            else:
+                pruned.append(msg)
+                i += 1
+        messages = pruned
         # A compaction boundary can start at a tool result whose assistant
         # tool_call was just before the boundary.  Do not return a dangling
         # tool result: reattach a minimal assistant call using the DB args.
@@ -844,6 +892,22 @@ class Runner:
         return ("partial" if (reply.finish_reason or "").lower() in ("length", "content_filter")
                 else "ok")
 
+    @staticmethod
+    def _protocol_safe_reply(reply: Reply, status: str) -> Reply:
+        """Never expose a tool call that did not complete and cannot be executed.
+
+        A cancelled/errored stream (or a length/content-filter stop) can contain
+        a partial tool call.  Persisting it without a matching tool result makes
+        the restored context invalid.  Keep the text/reasoning, drop the
+        incomplete call group; a later turn may issue a fresh, complete call.
+        """
+        if status not in ("cancelled", "error", "partial") or not reply.tool_calls:
+            return reply
+        safe = Reply(content=reply.content, reasoning=reply.reasoning,
+                     finish_reason=reply.finish_reason, usage=reply.usage or {},
+                     tool_calls=[], dropped_tool_calls=len(reply.tool_calls))
+        return safe
+
     def _model_call(self, rid: str, msgs: list[dict], tools: list[dict],
                     call_seq: int) -> Reply:
         """一次模型调用:流式事件 → 完整 Reply;工具参数只有收全后才组装。"""
@@ -866,13 +930,18 @@ class Runner:
                 self._emit_stream({"type": "reasoning_delta", "run": rid,
                                    "call": call_seq, "text": reply.reasoning})
             status = self._reply_status(reply)
+            safe = self._protocol_safe_reply(reply, status)
+            if safe is not reply:
+                _event(self.con, "model.tool_calls_not_persisted", rid,
+                       {"status": status, "finish_reason": reply.finish_reason or "",
+                        "tool_calls": len(reply.tool_calls)})
             self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
-                               "text": reply.content, "reasoning": reply.reasoning,
-                               "finish_reason": reply.finish_reason,
-                               "usage": reply.usage or {}, "status": status,
-                               "tool_calls": len(reply.tool_calls)})
-            self._persist_assistant(rid, reply, status=status, call_seq=call_seq)
-            return reply
+                               "text": safe.content, "reasoning": safe.reasoning,
+                               "finish_reason": safe.finish_reason,
+                               "usage": safe.usage or {}, "status": status,
+                               "tool_calls": len(safe.tool_calls)})
+            self._persist_assistant(rid, safe, status=status, call_seq=call_seq)
+            return safe
         content: list[str] = []
         reasoning: list[str] = []
         calls: dict = {}
@@ -930,44 +999,66 @@ class Runner:
             start()
             reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
             status = self._reply_status(reply)
+            safe = self._protocol_safe_reply(reply, status)
+            if safe is not reply:
+                _event(self.con, "model.tool_calls_not_persisted", rid,
+                       {"status": status, "finish_reason": reply.finish_reason or "",
+                        "tool_calls": len(reply.tool_calls)})
             self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
-                               "text": reply.content, "reasoning": reply.reasoning,
-                               "finish_reason": reply.finish_reason,
-                               "usage": reply.usage or {}, "status": status,
-                               "tool_calls": len(reply.tool_calls)})
-            self._persist_assistant(rid, reply, status=status, call_seq=call_seq)
-            return reply
-        except StreamCancelled:
+                               "text": safe.content, "reasoning": safe.reasoning,
+                               "finish_reason": safe.finish_reason,
+                               "usage": safe.usage or {}, "status": status,
+                               "tool_calls": len(safe.tool_calls)})
+            self._persist_assistant(rid, safe, status=status, call_seq=call_seq)
+            return safe
+        except StreamCancelled as exc:
             reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
+            safe = self._protocol_safe_reply(reply, "cancelled")
+            exc.reply = safe
+            if safe is not reply:
+                _event(self.con, "model.tool_calls_not_persisted", rid,
+                       {"status": "cancelled", "finish_reason": reply.finish_reason or "",
+                        "tool_calls": len(reply.tool_calls)})
             self._emit_stream({"type": "assistant_done", "run": rid, "call": call_seq,
-                               "text": reply.content, "reasoning": reply.reasoning,
-                               "finish_reason": reply.finish_reason, "usage": reply.usage,
-                               "status": "cancelled", "tool_calls": len(reply.tool_calls)})
-            self._persist_assistant(rid, reply, status="cancelled", call_seq=call_seq)
+                               "text": safe.content, "reasoning": safe.reasoning,
+                               "finish_reason": safe.finish_reason, "usage": safe.usage,
+                               "status": "cancelled", "tool_calls": len(safe.tool_calls)})
+            self._persist_assistant(rid, safe, status="cancelled", call_seq=call_seq)
             raise
         except Exception as e:
             reply = self._reply_from_stream(content, reasoning, calls, finish, usage)
+            safe = self._protocol_safe_reply(reply, "error")
+            if safe is not reply:
+                _event(self.con, "model.tool_calls_not_persisted", rid,
+                       {"status": "error", "finish_reason": reply.finish_reason or "",
+                        "tool_calls": len(reply.tool_calls)})
             self._emit_stream({"type": "assistant_error", "run": rid, "call": call_seq,
-                               "text": reply.content, "reasoning": reply.reasoning,
-                               "error": str(e)[:500]})
-            self._persist_assistant(rid, reply, status="error", call_seq=call_seq,
+                               "text": safe.content, "reasoning": safe.reasoning,
+                               "error": str(e)[:500], "tool_calls": len(safe.tool_calls)})
+            self._persist_assistant(rid, safe, status="error", call_seq=call_seq,
                                     error=str(e))
             if isinstance(e, StreamError):
+                e.reply = safe
                 raise
             if isinstance(e, ModelHTTPError):
-                raise StreamError(str(e)) from e
+                wrapped = StreamError(str(e))
+                wrapped.reply = safe
+                raise wrapped from e
             raise
         finally:
             self.stream_control = None
 
-    def _record_tool_conversation(self, rid: str, call: dict, out: dict) -> None:
+    def _record_tool_conversation(self, rid: str, call: dict, out: dict,
+                                  content: str | None = None) -> None:
         status = str(out.get("status") or "ok")
         cstatus = {"ok": "ok", "error": "error", "timeout": "error",
                    "cancelled": "cancelled"}.get(status, "error")
         # Persist the exact model-visible projection.  A field whitelist here
         # made resume see a different result than the live turn (structured,
         # observation, result_path, tool_search loaded/tools, ...).
-        content = _bounded_tool_result(out)
+        # Callers pass the already-built string so one tool result cannot get
+        # two different temp paths in memory and SQLite.
+        content = content if content is not None else _bounded_tool_result(out)
 
         call_id = str(call.get("id") or call.get("name") or "?")
         try:
@@ -982,6 +1073,33 @@ class Runner:
                                "phase": "tool", "tool": call.get("name"),
                                "error": str(e)[:300]})
             raise
+
+    def _record_cancelled_tool_results(self, rid: str, calls: list[dict], reason: str,
+                                       history: list[dict]) -> bool:
+        """Persist a tool result for every call that will not execute.
+
+        This is used when cancellation/finalization happens *after* an assistant
+        reply with tool calls was already persisted.  Without this, the session
+        would contain an assistant tool_call with no matching tool result.
+        """
+        ok = True
+        for c in calls:
+            cid = c.get("id")
+            content = json.dumps({"status": "cancelled", "error": reason},
+                                 ensure_ascii=False)
+            history.append({"role": "tool", "tool_call_id": cid,
+                            "name": c.get("name"), "content": content})
+            try:
+                self._conversation_write(
+                    rid, "tool", content, status="cancelled", tool_call_id=cid,
+                    client_id=f"tool:{rid}:{cid}",
+                    meta={"tool": c.get("name"), "status": "cancelled"})
+            except ConversationPersistError as e:
+                ok = False
+                self._emit_stream({"type": "conversation_error", "run": rid,
+                                   "phase": "cancelled-tool-batch",
+                                   "error": str(e)[:300]})
+        return ok
 
     # ---------------- 一轮 = 一个模型-工具交互序列 ----------------
     def turn(self, rid: str, target: str, goal: str | None, history: list[dict],
@@ -1169,8 +1287,6 @@ class Runner:
                 _note = self._prepare_state.get("context_note")
                 if _note:
                     _state += "\n\n## 轮前准备(程序注入)\n" + _note
-                msgs = [{"role": "system", "content": _sys}] + history \
-                    + [{"role": "user", "content": _state}]
                 # 预算判定必须在**计数之前**:被挡住的调用不该记账(时间/次数都一样)
                 if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
                     state = "paused"
@@ -1185,41 +1301,63 @@ class Runner:
                     self._limit_hit(rid, "max_model_calls",
                                     {"calls": run_calls, "limit": self.limits.max_model_calls})
                     break
+                # A failed session write must not consume a model call.  Do not
+                # check ownership before the context write: the summary reserve
+                # may already have lost ownership, and the existing contract is
+                # to attempt the main reserve once before observing owner loss.
+                next_call = run_calls + 1
+                tail = history[-1] if history else None
+                already = bool(tail and tail.get("role") == "user"
+                               and tail.get("_context_only")
+                               and tail.get("content") == _state)
+                if not already:
+                    try:
+                        self._conversation_write(
+                            rid, "user", _state,
+                            client_id=f"context:{rid}:{step}:{next_call}",
+                            meta={"context_only": True, "source": "context"})
+                    except ConversationPersistError as e:
+                        _event(self.con, "context.persist_failed", rid,
+                               {"error": str(e)[:300]})
+                        # A context that the model would have seen but the
+                        # session did not record makes resume diverge. Fail closed.
+                        self._set_paused(rid, f"context_persist_failed: {str(e)[:300]}")
+                        state = "paused"
+                        _persist()
+                        self._checkpoint(rid, step, history)
+                        break
+                    history.append({"role": "user", "content": _state,
+                                    "_context_only": True})
                 run_calls += 1
                 if not self._reserve_call(rid, run_calls):
                     run_calls -= 1
                     state = "paused"
                     _persist()
                     break
-                # 预留成功后、真正发请求前再确认一次所有权:接管后旧进程不得再发起调用
+                # Reserve happened, but the run may have been taken over or
+                # cancelled; never issue the model request in that case.
                 if not self.is_running_owner(rid) or (self.stop_event is not None
                                                       and self.stop_event.is_set()):
                     state = "paused"
                     _persist()
                     break
-                _ctx = _context_stats(_sys + _state, history)
+                msgs = [{"role": "system", "content": _sys}] + history
+                _ctx = _context_stats(_sys, history)
                 try:
                     reply = self._model_call(rid, msgs, self.registry.describe_model(), run_calls)
-                    # Pi 式 append-only context:这次请求实际发送的动态状态
-                    # 保留在历史里,下一次请求的前缀才能继续命中。
-                    # 它不进入 conversation/transcript(不冒充用户消息),但会随
-                    # checkpoint 持久化,resume 后仍作为模型上下文。
-                    history.append({"role": "user", "content": _state,
-                                    "_context_only": True})
-                    try:
-                        self._conversation_write(
-                            rid, "user", _state,
-                            client_id=f"context:{rid}:{step}:{run_calls}",
-                            meta={"context_only": True, "source": "context"})
-                    except ConversationPersistError as e:
-                        _event(self.con, "context.persist_failed", rid,
-                               {"error": str(e)[:300]})
-                except StreamCancelled:
+                except StreamCancelled as exc:
+                    r = getattr(exc, "reply", None)
+                    if r is not None and (r.content or r.reasoning or r.tool_calls):
+                        history.append(r.assistant_message())
                     _event(self.con, "model.cancelled", rid, {"calls": run_calls})
                     state = "paused"
                     _persist()
+                    self._checkpoint(rid, step, history)
                     break
                 except StreamError as e:
+                    r = getattr(e, "reply", None)
+                    if r is not None and (r.content or r.reasoning or r.tool_calls):
+                        history.append(r.assistant_message())
                     _event(self.con, "model.error", rid,
                            {"error": str(e)[:300], "phase": "stream", "calls": run_calls})
                     self._set_paused(rid, f"model_error: {str(e)[:300]}")
@@ -1231,33 +1369,30 @@ class Runner:
                     with contextlib.suppress(Exception):
                         _event(self.con, "conversation.error", rid,
                                {"error": str(e)[:300], "phase": "assistant"})
-                    r = getattr(e, "reply", None)
-                    if r is not None:
-                        if r.content or r.tool_calls or r.reasoning:
-                            history.append(r.assistant_message())
-                        else:
-                            history.append({"role": "assistant", "content": ""})
-                        for c in r.tool_calls:
-                            history.append({"role": "tool", "tool_call_id": c.get("id"),
-                                            "name": c.get("name"),
-                                            "content": json.dumps(
-                                                {"status": "cancelled",
-                                                 "error": "conversation_persist_failed: tool 未执行"},
-                                                ensure_ascii=False)})
+                    # The assistant was not written to the authoritative session.
+                    # Do not invent it in memory: resume would then differ.
                     self._set_paused(rid, f"conversation_error: {str(e)[:300]}")
                     state = "paused"
                     _persist()
                     self._checkpoint(rid, step, history)
                     break
                 if self.stop_event is not None and self.stop_event.is_set():
-                    # 非流式 chat 期间到达的取消:返回后立刻停,不执行工具
+                    # 非流式 chat 期间到达的取消:返回后立刻停,不执行工具。
+                    # Assistant 已持久化 tool_calls，必须补 cancelled 结果。
+                    if reply.content or reply.tool_calls or reply.reasoning:
+                        history.append(reply.assistant_message())
+                    if reply.tool_calls:
+                        self._record_cancelled_tool_results(
+                            rid, reply.tool_calls, "user_stop: 用户取消", history)
                     self._set_paused(rid, "user_stop: 用户取消")
                     state = "paused"
                     _persist()
+                    self._checkpoint(rid, step, history)
                     break
                 _finish_l = (reply.finish_reason or "").lower()
                 _incomplete = _finish_l in ("length", "content_filter")
                 if _incomplete and (_finish_l == "content_filter" or reply.tool_calls
+                                     or reply.dropped_tool_calls
                                      or _FINAL_RE.search(reply.content or "")):
                     # 截断响应里的 FINAL/工具调用都不完整:保留部分文本,暂停,不执行工具
                     _event(self.con, "model.incomplete", rid,
@@ -1297,8 +1432,6 @@ class Runner:
                 # 否则历史里只剩一条空白回复,既丢诊断信息也会让 thinking 模式协议不完整
                 if reply.content or reply.tool_calls or reply.reasoning:
                     history.append(reply.assistant_message())
-                else:
-                    history.append({"role": "assistant", "content": ""})
                 _final_hit = _FINAL_RE.search(reply.content or "")
                 if not reply.tool_calls and not _final_hit:
                     # 既没有工具调用也不是 FINAL:对研究没有推进。先记结构化诊断,再决定停不停
@@ -1338,6 +1471,10 @@ class Runner:
                     empty_streak = 0
                     final = reply.content.strip()
                     stopped_by_final = True
+                    if reply.tool_calls:
+                        self._record_cancelled_tool_results(
+                            rid, reply.tool_calls,
+                            "FINAL reached; tool calls were not executed", history)
                     step += 1
                     # 研究轮次不能只靠模型说 FINAL 认定:
                     # 必须本轮真的推进了一条假设(决定性尝试结束 / 假设收口 / 假设被放弃)
@@ -1402,15 +1539,20 @@ class Runner:
                             stalled = True
                         run_tools += 1
                         out = self._exec_tool_call(ctx, call, rid)
+                        # Build the model-visible projection exactly once.  Calling
+                        # _bounded_tool_result twice can create two temp paths for
+                        # large structured/observation values.
+                        tool_content = _bounded_tool_result(out)
                         history.append({"role": "tool", "tool_call_id": call.get("id"),
                                         "name": call["name"],
                                         # 有界且**始终合法**的 JSON:硬截断会把大字段切在中间,
                                         # 模型收到坏 JSON、并丢掉后面的 tool_call_id/产物路径。
                                         # parts 是图片/文本顺序的内部载体，不把 base64 放进 JSON。
-                                        "content": _bounded_tool_result(out),
+                                        "content": tool_content,
                                         "parts": out.get("parts") or []})
                         try:
-                            self._record_tool_conversation(rid, call, out)
+                            self._record_tool_conversation(rid, call, out,
+                                                           content=tool_content)
                         except ConversationPersistError as e:
                             with contextlib.suppress(Exception):
                                 _event(self.con, "conversation.error", rid,

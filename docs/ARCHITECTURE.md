@@ -190,9 +190,12 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 
 - 请求 = `[system 静态规则] + history(append-only) + [user 本轮状态尾块]`；状态块含派生量/事实/进度
   + `[Context status]`(model/window/context_used/available/预留/阈值/上次真实 usage)。**不进 system;不使用本地估算。**
-- 用户消息和本轮状态块在请求成功后按发生顺序追加到 history/checkpoint：
-  用户消息不再只藏在临时 state 里，状态块以 `_context_only` 隐藏 user 消息保存。
-  下一轮是在旧前缀后追加，而不是重写尾部；这是 Pi 的 append-only/custom-context 语义。
+- 用户消息和本轮状态块按发生顺序追加；状态块在**发起模型请求前**以隐藏 `_context_only` user 消息
+  持久化，assistant 响应随后追加。下一轮是在旧前缀后追加，而不是重写尾部；这是 Pi 的
+  append-only/custom-context 语义。恢复时用同一顺序重建模型可见消息。
+- 压缩只追加投影标记：`first_kept_id` 丢失/失效时回退到上一有效压缩，若没有则重放原始
+  append-only 历史；不会把旧摘要拼到完整历史上。中断/截断的 tool call 不进入可见历史；
+  已持久化的 assistant 若因取消/FINAL 未执行工具，则补 cancelled tool result。
 - 阈值 = `window − output_reserve`(Pi 语义);1M 窗口/8k 预留 = 992k。
 - 压缩:按**协议组**切(assistant.tool_calls + 全部 tool 结果),保留最近 `keep_recent_tokens`;
   被丢弃的历史走 `summarize_covered`:分块(默认 60k/块)→ 超大消息切片 → 归并;超 `summarize_max_calls`
@@ -244,4 +247,4 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
-5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 78 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。
+5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 79 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

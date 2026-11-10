@@ -111,7 +111,8 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 - assistant 回复与工具结果按执行顺序追加;取消/断流写 `cancelled`/`error`,
   部分内容保留,不产生虚假完成记录。
 - 用户消息和动态状态都按 append-only 语义进入模型历史:用户消息来自 conversation,
-  当前 state 在请求成功后作为隐藏 `_context_only` 消息保存;下一轮不重写旧尾部。
+  当前 state 在**发起模型请求前**作为隐藏 `_context_only` user 消息保存;assistant 响应随后追加。
+  下一轮不重写旧尾部;恢复时按同一 append-only 顺序重建模型可见消息。
   注入的是数据,不是新的用户指令。
 - 关闭 TUI / 进程崩溃后重新 `/resume` 同一 run:用户消息、assistant 回复、
   工具记录按原顺序恢复,不丢失、不重复;新 run 从空对话开始。

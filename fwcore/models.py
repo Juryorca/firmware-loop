@@ -52,6 +52,8 @@ class Reply:
     usage: dict = field(default_factory=dict)     # token 统计(服务端给就给)
     tool_calls: list[dict] = field(default_factory=list)   # [{id, name, args(dict), args_raw(str)}]
     reasoning: str = ""
+    # 流式取消/截断时被丢弃的未完成 call 数;只用于本轮控制,不进入 assistant 历史
+    dropped_tool_calls: int = 0
 
     def assistant_message(self) -> dict:
         calls = [{"id": c["id"], "type": "function",

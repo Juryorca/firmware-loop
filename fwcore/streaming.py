@@ -33,9 +33,14 @@ class StreamEvent:
 class StreamCancelled(RuntimeError):
     """用户/看护取消:不是模型错误,按暂停处理。"""
 
+    # 已持久化的协议安全 assistant(由 Runner 附加,便于暂停时同步内存历史)
+    reply: object | None = None
+
 
 class StreamError(RuntimeError):
     """流式协议/连接/服务端错误(可能带部分内容)。"""
+
+    reply: object | None = None
 
 
 class StreamControl:
