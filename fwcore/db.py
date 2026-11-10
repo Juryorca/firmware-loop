@@ -1,7 +1,7 @@
 """数据库与迁移(schema 版本化)。
 
 设计要点
-- 单一事实源:研究状态存在这里;`notes.md` 只是可读视图/历史材料(见 migrate.py)。
+- 单一事实源:研究状态存在这里;`notes.md` 只是历史材料/迁移输入,不是视图或事实源。
 - 程序独占写权:所有写入走 domain.py 的操作接口,外部不直接 SQL。
 - 一致性:WAL + `BEGIN IMMEDIATE` + busy_timeout ⇒ 多进程并发写会明确失败(LockedError),不会静默覆盖。
 - 可恢复:会话是 append-only `conversation_entries`;`compactions` 只记投影;

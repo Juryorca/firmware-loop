@@ -13,7 +13,7 @@
   unarchive <target>     恢复为 active（可继续研究）
   derive <target>       派生量 + 收尾阻塞项
   migrate <target> [--notes PATH]
-  view <target>         从状态生成人读 Markdown(替代手写 notes)
+  view <target>         从 SQLite 生成人读视图(不写 notes.md)
   run <target> [--goal G] [--model scripted|openai] [--steps N]
   resume <run-id> [--steps N]
 """
@@ -573,7 +573,7 @@ def _model(name: str, root: str, script_path: str | None = None):
 
 
 def render_view(con, root: str, target: str) -> str:
-    """从权威状态生成人读 Markdown(notes 变成视图,而不是数据库)。"""
+    """从权威 SQLite 生成人读视图;不落 notes.md,不建立第二事实源。"""
     dom = Domain(con, root)
     d = dom.derived(target)
     t = dom.target(target)

@@ -1,6 +1,6 @@
 {
   "name": "research_queue",
-  "description": "队列/轮/池状态探针(只读):OPEN/BAD/ROUND/STOP/POOL/NEXT",
+  "description": "队列/轮/池状态探针(只读 SQLite):OPEN/BAD/ROUND/STOP/POOL/NEXT",
   "input_schema": {
     "type": "object",
     "properties": {

@@ -1,109 +1,113 @@
 #!/usr/bin/env bash
 # queue_state.sh — "继续护栏"用的只读状态探针(不写任何东西)
-# 输出一行: OPEN=<未处理条数> BAD=<降级理由不合规条数> NEXT=<最后一条'下一步第一条'(截断)>
-# 判据与 derived_check.sh 保持一致:
-#   · H 条目"状态"含 未处理/进行中/未开始 ⇒ 队列项(OPEN)
-#   · 含"降级"但理由是成本类(成本/太重/复杂/预算/时间/工作量大)且无判据类词,或只靠"N轮" ⇒ 不合规(BAD)
+# 唯一事实源 = state/fwcore.sqlite3；不读 notes.md、不解析 Markdown。
+# 输出一行: OPEN=<未处理假设> BAD=<不合规降级/轮结构> ROUND=<done|half|?> STOP=<最近停止声明> POOL=<假设/面> NEXT=<最近下一步>
 set -u
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="${FW_LOOP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 T="${1:-}"
-if [ -z "$T" ]; then
-  T="$(ls -1dt "$ROOT"/state/*/notes.md 2>/dev/null | head -1 | xargs -r dirname | xargs -r basename)"
-fi
-N="$ROOT/state/$T/notes.md"
-if [ ! -f "$N" ]; then echo "OPEN=0 BAD=0 NEXT="; exit 0; fi
-python3 - "$N" <<'PY'
-import re, sys, os
-t = open(sys.argv[1], encoding="utf-8", errors="ignore").read()
+exec python3 - "$ROOT" "$T" <<'PY'
+import os
+import re
+import sqlite3
+import sys
 
-# ---- 池块:优先"唯一队列"标签节,否则第一处"假设池" ----
-hs = list(re.finditer(r"(?m)^(#{2,4})[^\n]*假设池[^\n]*$", t))
-blk = ""
-if hs:
-    h = ([x for x in hs if "唯一队列" in x.group(0)] or hs)[0]
-    lvl = len(h.group(1))
-    nxt = re.search(r"(?m)^#{1,%d} " % lvl, t[h.end():])
-    blk = t[h.end(): h.end() + (nxt.start() if nxt else len(t) - h.end())]
+root, target = sys.argv[1], sys.argv[2]
+db_path = os.environ.get("FW_QUEUE_DB") or os.path.join(root, "state", "fwcore.sqlite3")
+if not os.path.isfile(db_path):
+    print("OPEN=0 BAD=0 ROUND=? STOP= POOL=0/0 NEXT=")
+    raise SystemExit(0)
 
-# ---- 条目切分: 以 "- **H" 或 "- " 开头者为一条 ----
-ents, cur = [], None
-for ln in blk.split("\n"):
-    if re.match(r"^\s*[-*]\s", ln):
-        if cur is not None: ents.append(cur)
-        cur = ln
-    elif cur is not None:
-        cur += "\n" + ln
-if cur: ents.append(cur)
+con = sqlite3.connect("file:" + db_path + "?mode=ro", uri=True)
+con.row_factory = sqlite3.Row
 
-DONE = ("定论", "No finding", "已排除", "降级", "成立", "Blocked", "结论", "已收口", "MISS", "已并入")
-open_n = bad_n = 0
-for e in ents:
-    m = re.search(r"状态\s*\**\s*[:：]?\s*\**\s*([^\n*]*)", e)
-    st = m.group(1) if m else ""
-    if re.search(r"未处理|进行中|未开始|TODO", st):        open_n += 1
-    elif re.search(r"定论|已收口|No finding|已排除|降级|Blocked|已并入|完成", st): pass
-    elif not any(k in e for k in DONE):                    open_n += 1
-    if "降级" in st:
-        cost = re.search(r"成本|太重|太贵|复杂|预算|时间不够|工作量大|超时|太慢|耗时|导入慢|工程量大", e)
-        judg = re.search(r"判据|不可达|上游|设计内|已排除|证伪|需工作区外|需用户|真机", e)
-        onlyr = re.search(r"(?:\d|两|几)\s*轮", e) and not re.search(r"判据", e)
-        if (cost and not judg) or onlyr: bad_n += 1
+def one(sql, args=()):
+    return con.execute(sql, args).fetchone()
 
-# NEXT 取**真正的"下一步第一条"行**(行首即该词/带 * 或 - 前缀),避免抓到术语解释里的举例 ✗
-last = ""
-for ln in t.split("\n"):
-    if "下一步第一条" not in ln: continue
-    _pre = ln.split("下一步第一条")[0]          # 排除"举例/括注"里的提及(前面紧跟 ( 或 " 的)
-    if _pre.rstrip().endswith(("(", "（", "\"", "\u201c")): continue
-    last = ln.strip()
-# STOP 只在**最后一轮**(最后一个 ##/### 标题之后)里认 —— 否则会把上一轮的老声明当本轮理由 ✗
-# (2026-09-29 实测踩过:VR-01 那轮的"判据满足"被当成 H-02 轮的理由 ⇒ 误放行)
-_lines = t.split("\n")
-_last = 0
-for _i, _ln in enumerate(_lines):
-    if re.match(r"^#{2,3}\s", _ln): _last = _i
-stop = ""
-for ln in _lines[_last:]:
-    if ln.strip().startswith("本轮停止") or ln.strip().startswith("> 本轮停止"): stop = ln.strip()
-# ROUND: 最后一个轮次节是否把某条 H 推到"结论"(**半轮检测**)—— 定义见 LOOP「轮 = 把一条假设推进到 oracle 结果或判定性结论」
-_rr = 0
-for _i, _ln in enumerate(_lines):
-    if re.match(r"^#{2,3}\s*§?\d+", _ln) and not re.search(r"假设池|排除清单", _ln): _rr = _i
-_rt = "\n".join(_lines[_rr:])
-# 成本类降级:同一行里"成本词 + 决策词"同现(且无判定类词)⇒ BAD(成本不是降级理由)
-for _l5 in _rt.split("\n"):
-    if re.search(r"成本|超时|太慢|耗时|导入慢|工程量大", _l5) and re.search(r"降级|止于|不做|不继续|放弃|Out of scope|收口|工程成本", _l5) \
-       and not re.search(r"判据|不可达|已排除|证伪|需工作区外|需用户", _l5):
-        bad_n += 1; print(f"  ⚠ 成本类降级(最后一轮): {_l5.strip()[:90]}", file=sys.stderr); break
-_m2 = re.search(r"本轮目标\s*[:：]\s*\**\s*(H-\d+)", _rt)      # 显式声明(有新规则才有)
-if _m2:
-    _h = _m2.group(1)
-    _done = bool(re.search(r"本轮\s*[:：][^\n]*" + _h + r"[^\n]*(定论|判负|No finding|降级|结论|未证伪|否证)", _rt)) \
-            or bool(re.search(_h + r"[^\n]*(定论|判负|No finding|降级)", _rt))
-    roundstate = "done" if _done else "half"
-else:
-    roundstate = "?"      # 没声明 ⇒ 不判半轮(避免误报)
-# 轮结构(尾部): 收口无对应目标 / 同一 H 重复收口 ⇒ BAD(口径同 derived_check ④c 与 LOOP「轮的声明格式」)
-_cg = re.findall(r"本轮目标\s*[:：]\s*\**\s*(H-\d+)", _rt)
-_cc = re.findall(r"(?m)^>?\s*本轮\s*[:：]\s*\**\s*(H-\d+)", _rt)
-_cdup = sorted({h for h in _cc if _cc.count(h) > 1})
-_corph = sorted({h for h in _cc if h not in _cg})
-if _corph or _cdup:
-    bad_n += 1
-    print(f"  ⚠ 轮结构(尾部): 无目标的收口={_corph} 同一 H 重复收口={_cdup}", file=sys.stderr)
-# POOL = 池条目数 / 面数(A2 入口点行): 比值 <1 = 枚举停在面层(端点层没展开) —— 见 LOOP「池的下限(三来源)」
-_pool = len(set(re.findall(r"H-(\d+)", blk))) if blk else 0
-_faces = 0
-try:
-    _asf = os.path.join(os.path.dirname(sys.argv[1]), "report", "attack-surface.md")   # notes.md 的上一级 = 目标目录
-    if os.path.isfile(_asf):
-        _faces = sum(1 for _l in open(_asf, encoding="utf-8", errors="ignore") if re.match(r"^\|\s*\d+[a-z]?\s*\|", _l))
-except Exception as _e:
-    _faces = 0
-    print(f"  ⚠ 面数解析失败({type(_e).__name__}): POOL 比值不可用", file=sys.stderr)
-# 只在"本轮宣称队列清空/收尾"时才算不合规(否则池小只是过程态,不报)
-if _faces and _pool < _faces and re.search(r"队列清空|全部收口|收尾", _rt):
-    bad_n += 1
-    print(f"  ⚠ 池比面少(池={_pool} / 面={_faces})且本轮宣称收尾/队列清空 ⇒ 端点层没展开(先导该面的端点清单再入池)", file=sys.stderr)
-print(f"OPEN={open_n} BAD={bad_n} ROUND={roundstate} STOP={stop[:120]} POOL={_pool}/{_faces} NEXT={last[:160]}")
+def scalar(sql, args=(), default=0):
+    row = one(sql, args)
+    return row[0] if row and row[0] is not None else default
+
+# 目标:显式参数优先；否则取最近 run，再退到最近日志/目标。全程不碰 notes.md。
+if not target:
+    row = one(
+        "SELECT t.name FROM runs r JOIN targets t ON t.id=r.target_id"
+        " WHERE r.state='running' ORDER BY r.started_at DESC LIMIT 1")
+    if row is None:
+        row = one(
+            "SELECT t.name FROM runs r JOIN targets t ON t.id=r.target_id"
+            " ORDER BY r.started_at DESC LIMIT 1")
+    if row is None:
+        row = one(
+            "SELECT t.name FROM research_logs l JOIN targets t ON t.id=l.target_id"
+            " ORDER BY l.created_at DESC LIMIT 1")
+    if row is None:
+        row = one("SELECT name FROM targets ORDER BY created_at DESC LIMIT 1")
+    target = row["name"] if row else ""
+
+t = one("SELECT id,name FROM targets WHERE name=?", (target,)) if target else None
+if t is None:
+    print("OPEN=0 BAD=0 ROUND=? STOP= POOL=0/0 NEXT=")
+    raise SystemExit(0)
+tid = t["id"]
+
+open_n = scalar(
+    "SELECT COUNT(*) FROM hypotheses WHERE target_id=?"
+    " AND state IN ('open','investigating')", (tid,))
+pool = scalar("SELECT COUNT(*) FROM hypotheses WHERE target_id=?", (tid,))
+faces = scalar("SELECT COUNT(*) FROM surfaces WHERE target_id=?", (tid,))
+
+# 降级理由只认“最近的轮/停止声明”；不把历史 dropped 全部翻出来误报。
+# 成本类/只靠 N 轮且无判定词 -> BAD；判定类理由（不可达/已排除/证伪/需用户...）放行。
+cost = re.compile(r"成本|太重|太贵|复杂|预算|时间不够|工作量大|超时|太慢|耗时|导入慢|工程量大")
+judg = re.compile(r"判据|不可达|上游|设计内|已排除|证伪|需工作区外|需用户|真机")
+only_rounds = re.compile(r"(?:\d|两|几)\s*轮")
+bad = 0
+recent = con.execute(
+    "SELECT body,title FROM research_logs WHERE target_id=?"
+    " AND kind IN ('round','stop') ORDER BY created_at DESC LIMIT 1", (tid,)).fetchone()
+if recent:
+    text = (recent["body"] or "") + "\n" + (recent["title"] or "")
+    for line in text.splitlines():
+        if not re.search(r"降级|放弃|drop|Out of scope|收口", line, re.I):
+            continue
+        if (cost.search(line) and not judg.search(line)) or (
+                only_rounds.search(line) and not judg.search(line)):
+            bad += 1
+            break
+
+# 最近一轮：从 DB research_logs(kind=round) 的结构化叙述判断是否推到结论。
+rows = con.execute(
+    "SELECT title,body FROM research_logs WHERE target_id=? AND kind='round'"
+    " ORDER BY created_at DESC LIMIT 2", (tid,)).fetchall()
+round_state = "?"
+if rows:
+    text = (rows[0]["body"] or "") + "\n" + (rows[0]["title"] or "")
+    m = re.search(r"本轮目标\s*[:：]\s*([A-Za-z0-9_-]+)", text)
+    if m:
+        hid = re.escape(m.group(1))
+        done = re.search(
+            r"本轮\s*[:：][^\n]*" + hid +
+            r"[^\n]*(定论|判负|No finding|降级|结论|未证伪|否证)", text)
+        round_state = "done" if done else "half"
+        # 同一轮日志里“收口 H”没有对应“目标 H”/同一 H 重复收口 -> 结构 BAD。
+        goals = re.findall(r"本轮目标\s*[:：]\s*([A-Za-z0-9_-]+)", text)
+        closes = re.findall(r"(?m)^>?\s*本轮\s*[:：]\s*([A-Za-z0-9_-]+)", text)
+        if any(h not in goals for h in closes) or any(closes.count(h) > 1 for h in closes):
+            bad += 1
+
+stop_row = one(
+    "SELECT title,body FROM research_logs WHERE target_id=? AND kind='stop'"
+    " ORDER BY created_at DESC LIMIT 1", (tid,))
+stop_text = ""
+if stop_row:
+    stop_text = (stop_row["body"] or stop_row["title"] or "").replace("\n", " ")
+next_row = one(
+    "SELECT title,body FROM research_logs WHERE target_id=? AND kind='next'"
+    " ORDER BY created_at DESC LIMIT 1", (tid,))
+next_text = ""
+if next_row:
+    next_text = (next_row["body"] or next_row["title"] or "").replace("\n", " ")
+
+print(f"OPEN={open_n} BAD={bad} ROUND={round_state} STOP={stop_text[:120]} "
+      f"POOL={pool}/{faces} NEXT={next_text[:160]}")
 PY

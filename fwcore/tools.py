@@ -609,7 +609,7 @@ def _auto_link_tool_call(ctx: ToolContext, path: str | None) -> tuple[str | None
     **只把"直接产出"当作关联**:
       - 证据路径 == 某次调用的 stdout/result 路径 ⇒ 直接来源,写 tool_call_id;
       - 路径只出现在命令参数里(如 `cat a > b`)⇒ 只是**弱线索**:不写 tool_call_id,
-        返回提示串写进 notes(保留未关联状态,后续可补)。
+        返回提示串写进证据的 notes 字段(保留未关联状态,后续可补)。
     """
     if not path:
         return None, None, None
