@@ -1102,11 +1102,7 @@ def test_mouse_selection_works_on_assistant_markdown(tmp_path):
 
 def test_fw_template_bootstraps_target_and_agent_names_it(tmp_path):
     cfg = make_ws_without_target(tmp_path)
-    prompts = tmp_path / "ws" / ".pi" / "prompts"
-    prompts.mkdir(parents=True)
-    (prompts / "fw.md").write_text(
-        "---\ndescription: Firmware research\nargument-hint: <firmware>\n---\n"
-        "研究 $@\n", encoding="utf-8")
+    # Use the package default fw template; no .pi prompts directory needed.
     rt = AppRuntime(cfg, target=None,
                     adapter_factory=lambda name: ScriptedAdapter(script=[
                         {"content": "先确认固件名。", "tool_calls": [{
@@ -1135,7 +1131,7 @@ def test_fw_template_bootstraps_target_and_agent_names_it(tmp_path):
                 "SELECT 1 FROM targets WHERE name LIKE 'session-%'").fetchone()
             users = [w for w in app.screen.walk_children(MessageWidget)
                      if w.role == "user"]
-            assert any("研究 GS1900" in w._text for w in users)
+            assert any("GS1900" in w._text for w in users)
     try:
         asyncio.run(scenario())
     finally:
