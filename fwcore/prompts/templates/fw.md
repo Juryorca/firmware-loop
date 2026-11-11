@@ -49,9 +49,17 @@ argument-hint: <固件路径或型号名>
 
 ## 取件(下载/版本核实)
 
-- 厂商下载页是 **JS 壳**、`curl` 只拿到骨架/拿不到固件直链 ⇒ **用无头浏览器 MCP 取件**:
-  `mcp__chrome_devtools__navigate_page` → `take_snapshot` / `list_network_requests`(找真实下载 API)→ 拿到直链后**回到 `curl` + md5**,
-  写 `intel/firmware/<目标>/SOURCE_URL.txt` ✓。边界:只碰公开页、不代填密码(细则见 `AGENTS.md`「环境清单 → 取件 / JS 页面」)。
+- 厂商下载页是 **JS 壳**、`curl` 只拿到骨架/拿不到固件直链 ⇒ **用无头浏览器 MCP 取件**。
+  MCP 默认是 `codemode` exposure:模型工具表里**不会**直接出现 `mcp__chrome_devtools__*`;
+  用 `codemode` 脚本,通过 `tools.<name>` 调用,例如:
+  ```js
+  await tools.mcp__chrome_devtools__navigate_page({url: "..."});
+  const snap = await tools.mcp__chrome_devtools__take_snapshot({});
+  text(JSON.stringify(snap));
+  ```
+  先用 `searchTools("chrome")` / `ALL_TOOLS` / `describeNamespace("mcp__chrome_devtools")` 找工具;
+  从 `list_network_requests` 找真实下载 API → 拿到直链后**回到 `curl` + md5**,写
+  `intel/firmware/<目标>/SOURCE_URL.txt` ✓。边界:只碰公开页、不代填密码。
 
 ## 受众与范围(硬性)
 
