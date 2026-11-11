@@ -3,10 +3,11 @@
 原则(2026-11-04 62GB 事故后的定案)
 - **研究停止规则**是领域语义:什么时候这条假设可以收口、什么时候可以交回控制权。
   ⇒ 由 domain/research 决定,永不因为"跑得久/占得多"而改变。
-- **执行资源边界**是工程保护:模型调用次数、墙钟、工具时长。
+- **执行资源边界**是工程保护:模型调用次数、工具时长。
   ⇒ 触发时**只允许暂停(run.state='paused')**,可恢复;绝不写结论、绝不放弃假设。
 
-默认必须有边界;要"不限"必须显式 `Limits.unbounded()`。
+默认模型调用次数和单工具时长有边界;墙钟 `max_seconds` 默认不设限
+(用户明确要求长研究不被 30 分钟墙钟切断)。需要时限时显式配置。
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from dataclasses import dataclass
 
 @dataclass
 class Limits:
-    # 软边界:0 表示"该维度不限"(需要显式选择 unbounded 才会出现 0)
+    # 软边界:0 表示"该维度不限"
     max_model_calls: int = 200
-    max_seconds: float = 1800.0
+    # 墙钟默认不设限;需要时通过 state/model.json / FW_MAX_SECONDS 显式配置。
+    max_seconds: float = 0.0
     max_tool_seconds: float = 120.0
     # 模型上下文窗口(token,显式配置):0 = 不做阈值压缩(仍受 provider 上限约束)。
     # 到达 context_tokens-reserve 时压缩较早历史,保留最近 keep_recent_tokens。

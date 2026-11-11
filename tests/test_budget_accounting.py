@@ -46,6 +46,12 @@ def _counters(con, rid):
             "elapsed_s": row["elapsed_s"], "state": row["state"]}
 
 
+def test_default_wall_clock_is_unbounded():
+    """30-minute wall clock was cutting real research sessions; default is now unbounded."""
+    assert Limits().max_seconds == 0.0
+    assert Limits().time_exhausted(10**9) is False
+
+
 def test_model_calls_accumulate_across_resume_without_reset(tmp_path):
     con, _dom, root = _setup(tmp_path)
     script = [{"content": "第二句", "tool_calls": []},

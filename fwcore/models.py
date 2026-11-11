@@ -94,7 +94,7 @@ class ScriptedAdapter:
         reply = self.chat(messages, tools)
         yield StreamEvent("start")
         for emitted, part in enumerate(
-                _chunks(reply.content or "", max(1, int(self.chunk_size))), start=1):
+                _chunks(reply.content or "", _positive_int(self.chunk_size)), start=1):
             if control is not None:
                 control.raise_if_cancelled()
             if self.stream_delay:
@@ -102,7 +102,7 @@ class ScriptedAdapter:
             if self.fail_after_chunks is not None and emitted > self.fail_after_chunks:
                 raise StreamError("模拟流中断")
             yield StreamEvent("text_delta", text=part)
-        for part in _chunks(reply.reasoning or "", max(1, int(self.chunk_size))):
+        for part in _chunks(reply.reasoning or "", _positive_int(self.chunk_size)):
             if control is not None:
                 control.raise_if_cancelled()
             if self.stream_delay:
@@ -116,7 +116,7 @@ class ScriptedAdapter:
                               call_id=call.get("id") or f"call_{idx}",
                               name=call.get("name") or "",
                               invalid=bool(call.get("args_invalid")))
-            for part in _chunks(raw, max(1, int(self.chunk_size))):
+            for part in _chunks(raw, _positive_int(self.chunk_size)):
                 if control is not None:
                     control.raise_if_cancelled()
                 if self.stream_delay:
@@ -276,6 +276,15 @@ class ModelInfo:
     owned_by: str = ""
 
 
+def _positive_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return 1
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _first_int(item: dict, keys: tuple[str, ...]) -> int:
     for key in keys:
         value = item.get(key)
@@ -284,7 +293,10 @@ def _first_int(item: dict, keys: tuple[str, ...]) -> int:
         if isinstance(value, int):
             return value
         if isinstance(value, str) and value.isdigit():
-            return int(value)
+            try:
+                return int(value)
+            except ValueError:
+                continue
     return 0
 
 
@@ -316,13 +328,15 @@ def limits_config(root: str | None = None) -> dict:
     """上下文相关的**执行配置**(生产来源: env > state/model.json)。
 
     只认显式配置:没有 `context_tokens` 就是"窗口未知",不做按模型名的猜测。
-    返回的键可直接传给 `Limits(**)`:max_model_calls / context_tokens /
-    output_reserve_tokens / keep_recent_tokens / compact_retry_cooldown_calls。
+    返回的键可直接传给 `Limits(**)`:max_model_calls / max_seconds /
+    max_tool_seconds / context_tokens / output_reserve_tokens /
+    keep_recent_tokens / compact_retry_cooldown_calls。
     """
     import json as _json
     import os as _os
 
-    keys = ("max_model_calls", "context_tokens", "output_reserve_tokens",
+    keys = ("max_model_calls", "max_seconds", "max_tool_seconds",
+            "context_tokens", "output_reserve_tokens",
             "keep_recent_tokens", "compact_retry_cooldown_calls")
     out: dict = {}
     path = _os.environ.get("FW_MODEL_CONFIG") or (
@@ -338,12 +352,18 @@ def limits_config(root: str | None = None) -> dict:
         if not isinstance(d, dict):
             raise ValueError(f"模型配置顶层必须是 object: {path}")
         for k in keys:
-            if isinstance(d.get(k), int):
-                out[k] = d[k]
+            v = d.get(k)
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                out[k] = v
     for k in keys:                       # env 覆盖(FW_CONTEXT_TOKENS 等)
         v = _os.environ.get("FW_" + k.upper())
-        if v and v.isdigit():
-            out[k] = int(v)
+        if v:
+            try:
+                out[k] = float(v) if k in ("max_seconds", "max_tool_seconds") else int(v)
+            except ValueError:
+                pass
     return out
 
 
