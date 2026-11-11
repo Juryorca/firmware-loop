@@ -6,12 +6,18 @@ import json
 import os
 
 from fwcore import db as _db
-from fwcore.compact import compact_history, estimate_tokens, find_cut, should_compact
+from fwcore.compact import (
+    SummarizationIncomplete,
+    compact_history,
+    estimate_tokens,
+    find_cut,
+    should_compact,
+)
 from fwcore.domain import Domain
 from fwcore.limits import Limits
 from fwcore.models import Reply
 from fwcore.policy import Authz, Policy
-from fwcore.runtime import Runner
+from fwcore.runtime import Runner, _valid_summary
 
 
 def _pair(i: int, size: int = 800) -> list[dict]:
@@ -35,6 +41,17 @@ def test_estimate_and_threshold():
     assert should_compact(_history(50), 0) is False          # 0 = 不做阈值压缩
     assert should_compact(_history(50), 5_000) is True
     assert should_compact([{"role": "user", "content": "hi"}], 5_000) is False
+
+
+def test_summary_validator_rejects_tool_call_markup():
+    assert _valid_summary("## 目标\n已确认 0x19908") == "## 目标\n已确认 0x19908"
+    for bad in ("<|DSML|> calls", "<｜｜DSML｜｜ invoke", "<|tool_calls|>"):
+        try:
+            _valid_summary(bad)
+        except SummarizationIncomplete:
+            pass
+        else:
+            raise AssertionError(f"tool markup accepted: {bad!r}")
 
 
 def test_should_compact_prefers_last_main_provider_usage():

@@ -199,7 +199,9 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   不用固定事件条数窗口;没有 provider usage 时显示 unknown,不回退旧值。
 - 阈值 = `window − output_reserve`(Pi 语义);1M 窗口/8k 预留 = 992k。
 - 压缩:按**协议组**切(assistant.tool_calls + 全部 tool 结果),保留最近 `keep_recent_tokens`;
-  被丢弃的历史按 Pi 语义**一次摘要请求**发送(`single_call=True`),不再按 60k 分块;摘要为空
+  被丢弃的历史按 Pi 语义**一次摘要请求**发送(`single_call=True`),不再按 60k 分块;摘要请求使用
+  独立 system 身份(禁止调用工具/继续任务),若模型仍返回工具调用标记(如 DSML),摘要视为失败、
+  原始历史保持不动;摘要为空同样失败。
   ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
 - 摘要调用与普通调用同一条**调用前**预算检查,计入 `run_calls` 与 `model.call(kind=summarize)`。
 
