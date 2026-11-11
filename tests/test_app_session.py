@@ -473,3 +473,49 @@ def test_tui_direct_policy_and_mcp_status(tmp_path):
         assert status["config_error"] is None
     finally:
         rt.dispose()
+
+
+def test_bootstrap_target_is_reused_until_new_target(tmp_path):
+    """A targetless TUI gets one placeholder target, not one per prompt."""
+    root = tmp_path / "empty"
+    root.mkdir()
+    cfg = resolve(AppOptions(root=str(root), model="scripted", mcp=False, watchdog=False))
+    from fwapp.services import build_services
+    from fwapp.session import AgentSession
+    services = build_services(cfg)
+    sess = AgentSession(services, target=None, mcp=False, watchdog=False)
+    try:
+        first = sess.ensure_bootstrap_target()
+        assert first and first.startswith("session-")
+        assert sess.ensure_bootstrap_target() == first
+        sess.new_session()
+        assert sess.ensure_bootstrap_target() == first
+        n = services.con.execute("SELECT COUNT(*) n FROM targets").fetchone()["n"]
+        assert n == 1
+    finally:
+        sess.close()
+
+
+def test_bootstrap_target_is_reused_by_a_new_session_instance(tmp_path):
+    """A restarted TUI reuses the active placeholder instead of inserting another."""
+    root = tmp_path / "empty2"
+    root.mkdir()
+    cfg = resolve(AppOptions(root=str(root), model="scripted", mcp=False, watchdog=False))
+    from fwapp.services import build_services
+    from fwapp.session import AgentSession
+    first_services = build_services(cfg)
+    first = AgentSession(first_services, target=None, mcp=False, watchdog=False)
+    try:
+        name = first.ensure_bootstrap_target()
+        assert name
+    finally:
+        first.close()
+    second_services = build_services(cfg)
+    second = AgentSession(second_services, target=None, mcp=False, watchdog=False)
+    try:
+        assert second.target == name
+        assert second.ensure_bootstrap_target() == name
+        assert second_services.con.execute(
+            "SELECT COUNT(*) n FROM targets").fetchone()["n"] == 1
+    finally:
+        second.close()

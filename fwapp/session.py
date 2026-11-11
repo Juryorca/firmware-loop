@@ -119,6 +119,7 @@ class AgentSession:
         self._pending: list[tuple[str, str, str | None, str | None]] = []
         self._returned: list[str] = []
         self._lock = threading.Lock()
+        self._bootstrap_lock = threading.Lock()
         self._events_lock = threading.Lock()
         self._busy = False
         self._closed = False
@@ -142,37 +143,38 @@ class AgentSession:
         return row["name"] if row else None
 
     def ensure_bootstrap_target(self) -> str | None:
-        """Create a temporary target for a prompt-only session.
+        """Create or reuse the temporary target for a prompt-only session.
 
         The user does not have to choose a canonical target name before the
         first model request.  The agent can later call session_set_target to
         rename this row; target_id remains stable, so runs and research facts
         are not moved.
         """
-        with self._lock:
-            if self.target:
-                return self.target
-            if self._busy:
-                self.emit("error", "当前一轮仍在执行，暂时不能创建 bootstrap target。")
-                return None
-        last: Exception | None = None
-        for _ in range(4):
-            name = f"{BOOTSTRAP_TARGET_PREFIX}{uuid.uuid4().hex[:8]}"
-            try:
-                self.services.domain.create_target(name)
-            except Exception as e:  # noqa: BLE001 - name collision or storage error
-                last = e
-                continue
+        with self._bootstrap_lock:
             with self._lock:
                 if self.target:
                     return self.target
-                self.target = name
-                self.run_id = None
-            self.emit("session.target", name, target=name, run=None,
-                      bootstrap=True)
-            return name
-        self.emit("error", f"bootstrap target 创建失败: {last or 'unknown error'}")
-        return None
+                if self._busy:
+                    self.emit("error", "当前一轮仍在执行，暂时不能创建 bootstrap target。")
+                    return None
+            last: Exception | None = None
+            for _ in range(4):
+                name = f"{BOOTSTRAP_TARGET_PREFIX}{uuid.uuid4().hex[:8]}"
+                try:
+                    self.services.domain.create_target(name)
+                except Exception as e:  # noqa: BLE001 - name collision or storage error
+                    last = e
+                    continue
+                with self._lock:
+                    if self.target:
+                        return self.target
+                    self.target = name
+                    self.run_id = None
+                self.emit("session.target", name, target=name, run=None,
+                          bootstrap=True)
+                return name
+            self.emit("error", f"bootstrap target 创建失败: {last or 'unknown error'}")
+            return None
 
     def _on_target_set(self, name: str) -> None:
         """Callback from the session_set_target tool (worker thread)."""

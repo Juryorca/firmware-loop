@@ -118,6 +118,9 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
   `session_set_target(name=..., vendor=..., ...)` 把占位 target 改名；改名只改
   `targets.name`，`target_id` 不变，因此 run/假设/证据/对话都不迁移，也不需要用户先想规范名。
   该工具只对 `session-*` 占位目标生效；用户已有命名 target 时不会误改。
+  占位 target 每个 `AgentSession` 只惰性创建一次：启动时优先复用最新 active target，
+  `ensure_bootstrap_target()` 只在 target 为空时插入；`/new` 只清 run，不创建新 target。
+  绑定始终是 `targets.id` / `runs.target_id`，没有新增 session 表。
 - 只有用户输入 `/xxx` 才触发；模型不能调用、不能伪造、不能把 Command 当 Skill。
 - 新增静态命令必须同时：登记元数据、实现 handler、补参数/错误/补全测试；
   新增模板只需放 `.pi/prompts/<name>.md`（重启 TUI 后出现，不做模型工具）。
