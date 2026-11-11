@@ -24,9 +24,10 @@ def _option(cmd: Command) -> Option:
 class CommandPalette(OptionList):
     can_focus = False
 
-    def __init__(self, **kw):
+    def __init__(self, commands: list[Command] | None = None, **kw):
         super().__init__(id="palette", **kw)
         self.display = False
+        self._commands = list(commands or COMMANDS)
         self._items: list[Command] = []
 
     def show_for(self, text: str) -> bool:
@@ -35,7 +36,7 @@ class CommandPalette(OptionList):
             self.hide()
             return False
         prefix = text[1:].lower()
-        items = [c for c in COMMANDS if c.name.startswith(prefix)]
+        items = [c for c in self._commands if c.name.startswith(prefix)]
         self._items = items
         self.clear_options()
         for c in items:

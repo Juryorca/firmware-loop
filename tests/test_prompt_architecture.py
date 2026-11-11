@@ -78,3 +78,41 @@ def test_all_discovered_skills_are_injected_into_agent_prompt():
     catalog = prompt.split("## Available Skills", 1)[1].split("## User Slash Commands", 1)[0]
     assert "fwcore-development" in catalog
     assert "research-loop" in catalog
+
+
+def test_pi_prompt_templates_discover_and_expand(tmp_path):
+    """Project prompts follow Pi's filename/frontmatter/argument contract."""
+    from fwcore.prompt_templates import discover, expand
+    prompts = tmp_path / ".pi" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "review.md").write_text(
+        "---\n"
+        "description: Review changes\n"
+        "argument-hint: \"[focus]\"\n"
+        "---\n"
+        "Review $1 with focus ${2:-correctness, security}; "
+        "all=$@; tail=${@:2}; tail1=${@:2:1}; "
+        "fallback=${@:-nothing}; nested=${2:+(focus: ${2})}\n",
+        encoding="utf-8")
+    (prompts / "bad.md").write_text("---\n", encoding="utf-8")  # no body
+
+    found = discover(str(tmp_path))
+    assert set(found) == {"review"}
+    tpl = found["review"]
+    assert tpl.description == "Review changes"
+    assert tpl.arg_hint == "[focus]"
+
+    text = expand(tpl, 'src "error handling"')
+    assert "Review src" in text
+    assert "focus error handling" in text
+    assert "all=src error handling" in text
+    assert "tail=error handling" in text
+    assert "tail1=error handling" in text
+    assert "fallback=src error handling" in text
+    assert "nested=(focus: error handling)" in text
+
+    empty = expand(tpl, "")
+    assert "focus correctness, security" in empty
+    assert "all=" in empty
+    assert "fallback=nothing" in empty
+    assert "nested=" in empty

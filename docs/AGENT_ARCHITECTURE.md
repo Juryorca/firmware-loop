@@ -102,11 +102,21 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
 
 ## 5. Slash Commands
 
-- 定义：`fwcore/commands.py`（name/description/arg_hint）。
-- 执行：`fwapp/modes/interactive.py` 的 `_cmd_*`；通过 `fwapp/services.py` 调用现有 Session/Service。
+- 静态命令定义：`fwcore/commands.py`（name/description/arg_hint），执行在
+  `fwapp/modes/interactive.py` 的 `_cmd_*`；通过 `fwapp/services.py` 调用现有 Session/Service。
+- **Pi prompt templates**：TUI 启动时由 `fwcore/prompt_templates.py` 读取项目根目录
+  `.pi/prompts/*.md` 的直接子文件（不递归）。文件名即命令名，frontmatter 的
+  `description` / `argument-hint` 进入补全；参数按 Pi 的 `$1` / `$@` / `$ARGUMENTS` /
+  `${1:-default}` / `${@:N}` / `${@:N:L}` 规则展开。模板只是 Markdown 文本，不执行代码，
+  也不注册成模型工具；`.pi/` 是本地/忽略目录。
+- 静态命令名优先于同名模板。`/fw` 是**目标引导**（target bootstrap）内置命令：
+  它负责创建/选择 target、开新 session，再把 `.pi/prompts/fw.md` 的正文作为任务文本提交；
+  没有模板时使用内置的最小 fallback。其他模板（如 `/提交`）走通用模板执行路径。
 - 只有用户输入 `/xxx` 才触发；模型不能调用、不能伪造、不能把 Command 当 Skill。
-- 新增命令必须同时：登记元数据、实现 handler、补参数/错误/补全测试。
-- 当前命令：`/help /model /fw <目标> /target /resume /status /budget /hypotheses /evidence /skills /knowledge /tools /mcp /tool-setup /new /continue /compact /clear /expand /quit`。
+- 新增静态命令必须同时：登记元数据、实现 handler、补参数/错误/补全测试；
+  新增模板只需放 `.pi/prompts/<name>.md`（重启 TUI 后出现，不做模型工具）。
+- 当前静态命令：`/help /model /fw <目标> /target /resume /status /budget /hypotheses /evidence /skills /knowledge /tools /mcp /tool-setup /new /continue /compact /clear /expand /quit`；
+  当前模板命令：`/提交`（`.pi/prompts/提交.md`）。
 
 ## 6. Knowledge Base：Research Knowledge，不是 Case Archive
 
@@ -220,8 +230,8 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 |---|---|---|---|
 | 根 `AGENTS.md` | 项目硬规则 | System Prompt 项目指令 | 每次 system，全文 |
 | `LOOP.md` | 流程细则 | `research-loop/references/LOOP.md` | Skill 按需 |
-| `.pi/prompts/fw.md` | 启动/继续/收尾操作模板 | `research-loop` Skill + AGENTS | Skill 按需 |
-| `.pi/prompts/提交.md` | 提交操作清单 | `report-submission` Skill | Skill 按需 |
+| `.pi/prompts/fw.md` | `/fw` 的任务文本 | fw-core TUI prompt-template loader | 启动时读取；`/fw` 仍负责 target bootstrap |
+| `.pi/prompts/提交.md` | `/提交` 操作模板 | fw-core TUI prompt-template loader | 启动时读取；通用模板路径 |
 | `prompts/*.txt` | 旧 OpenCode 子代理提示词 | 已删除（只保留职责映射） | 不再加载 |
 | `opencode.json` | 旧 OpenCode 配置 | 已删除 | 不再加载 |
 | `knowledge/vuln-patterns.md` | 旧正向案例来源 | 已移出当前树；Git 历史保留 | 不再加载 |
@@ -294,8 +304,9 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | 旧资产 | 当前处理 |
 |---|---|
 | 根 `AGENTS.md` | 保留；system prompt 的唯一项目规则输入 |
-| `.pi/prompts/fw.md` | 操作内容并入 `research-loop` / AGENTS；Pi 文件不再加载 |
-| `.pi/prompts/提交.md` | 并入 `report-submission` |
+| `.pi/prompts/*.md` | 保留为本地/忽略的 Pi 风格 prompt templates；TUI 启动时加载，只作文本，不执行代码 |
+| `.pi/prompts/fw.md` | `/fw` 的任务文本；target/session 仍由内置 bootstrap 创建 |
+| `.pi/prompts/提交.md` | `/提交` 模板命令；参数按 Pi 规则展开 |
 | `.pi/guards/*` | 未迁入 fwcore runtime；工具台账遗留项 |
 | `prompts/*.txt` | 删除（旧 OpenCode 子代理空壳） |
 | `opencode.json` | 删除 |

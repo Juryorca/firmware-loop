@@ -21,9 +21,10 @@ from textual.app import App, ComposeResult
 from textual.css.query import NoMatches
 from textual.widgets import Static
 
+from fwcore.commands import BY_NAME, COMMANDS, Command
 from fwcore.domain import InvariantViolation
+from fwcore.prompt_templates import discover, expand
 
-from ..commands import BY_NAME
 from ..config import ModelConfigError, adapter_for, available_models, model_detail
 from ..runtime import AppRuntime
 from ..session import AgentSession
@@ -144,6 +145,12 @@ class FwApp(App):
         # Coalesce them per UI tick; Pi's TUI likewise coalesces render requests.
         self._stream_text_pending = ""
         self._stream_reason_pending = ""
+        self._templates = discover(self.sess.services.cfg.root)
+        static_names = {c.name for c in COMMANDS}
+        self._commands = list(COMMANDS) + [
+            Command(t.name, t.description, t.arg_hint)
+            for t in self._templates.values() if t.name not in static_names
+        ]
 
     # ---------------- 组装 ----------------
     def compose(self) -> ComposeResult:
@@ -151,7 +158,7 @@ class FwApp(App):
         yield TranscriptView(id="transcript")
         yield PendingBar(id="pending")
         yield StatusBar(id="status")
-        yield CommandPalette()
+        yield CommandPalette(self._commands)
         yield PromptEditor()
         yield Static(HINTS, id="hints")
 
@@ -610,17 +617,31 @@ class FwApp(App):
         name, _, arg = body.partition(" ")
         name = name.lower()
         arg = arg.strip()
-        if name not in BY_NAME:
+        if name in BY_NAME:
+            handler = getattr(self, f"_cmd_{name.replace('-', '_')}", None)
+            if handler is None:
+                self._notice(f"/{name} 尚未实现", "error")
+                return
+            handler(arg)
+            return
+        template = self._templates.get(name)
+        if template is None:
             self._notice(f"未知命令: /{name}(/help 查看)", "error")
             return
-        handler = getattr(self, f"_cmd_{name.replace('-', '_')}", None)
-        if handler is None:
-            self._notice(f"/{name} 尚未实现", "error")
+        if not self.sess.target:
+            self._notice("没有目标：请先运行 `/fw <目标>` 或 `fw-core init <目标>`。", "warning")
             return
-        handler(arg)
+        text = expand(template, arg)
+        ed = self.query_one(PromptEditor)
+        ed.text = ""
+        self.query_one(CommandPalette).hide()
+        self._append(MessageWidget("user", text))
+        self._stop_requested = False
+        self.sess.submit(text)
+        self._update_status()
 
     def _cmd_help(self, arg: str) -> None:
-        self.push_screen(HelpScreen())
+        self.push_screen(HelpScreen(self._commands))
 
     def _cmd_quit(self, arg: str) -> None:
         self.action_quit_app()
@@ -873,9 +894,11 @@ class FwApp(App):
         self.sess.new_session()
         self._load_transcript()
         self._stop_requested = False
-        task = (f"研究目标：{name}。\n\n"
-                "从立项开始：确认/下载固件，提取 rootfs，枚举攻击面并按 AGENTS.md "
-                "的研究循环开始。能自己做的直接做，不要先问我。")
+        template = self._templates.get("fw")
+        task = expand(template, name) if template else (
+            f"研究目标：{name}。\n\n"
+            "从立项开始：确认/下载固件，提取 rootfs，枚举攻击面并按 AGENTS.md "
+            "的研究循环开始。能自己做的直接做，不要先问我。")
         self._append(MessageWidget("user", task))
         self.sess.submit(task)
         self._update_status()
@@ -907,7 +930,7 @@ class FwApp(App):
 
     # ---------------- Actions ----------------
     def action_help(self) -> None:
-        self.push_screen(HelpScreen())
+        self.push_screen(HelpScreen(self._commands))
 
     def action_research(self) -> None:
         self.push_screen(ResearchScreen(self.sess, tab="progress"))

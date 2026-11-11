@@ -27,7 +27,7 @@ from textual.widgets.option_list import Option
 
 from fwcore.toolset import check_toolset
 
-from ..commands import COMMANDS
+from ..commands import COMMANDS, Command
 from ..services import state_store_rows
 from ..session import AgentSession
 from .status import (
@@ -113,9 +113,13 @@ class SelectorScreen(ModalScreen[str | None]):
 class HelpScreen(ModalScreen[None]):
     BINDINGS: ClassVar[list[Any]] = [("escape", "close", "关闭")]
 
+    def __init__(self, commands: list[Command] | None = None):
+        super().__init__()
+        self._commands = list(commands or COMMANDS)
+
     def compose(self) -> ComposeResult:
         lines = ["# fw-core 命令与快捷键", "", "## 命令", ""]
-        for c in COMMANDS:
+        for c in self._commands:
             hint = f" `{c.arg_hint}`" if c.arg_hint else ""
             lines.append(f"- **/{c.name}**{hint} — {c.description}")
         lines += [

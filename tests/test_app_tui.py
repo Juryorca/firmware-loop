@@ -956,7 +956,7 @@ def test_streamed_assistant_reply_is_visible(tmp_path):
                 if not app.sess.busy:
                     break
             await pilot.pause(0.5)
-            msgs = list(app.query(MessageWidget))
+            msgs = app.screen.walk_children(MessageWidget)
             assert any("hello from stream" in m._text for m in msgs), [m._text for m in msgs]
             await pilot.press("ctrl+q")
 
@@ -1115,6 +1115,44 @@ def test_fw_command_creates_target_and_starts_a_session(tmp_path):
                 "SELECT status FROM targets WHERE name=?", ("zyxel-demo",)).fetchone()
             assert row is not None and row["status"] == "active"
             assert app.sess.run_id is not None
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_submit_prompt_template_command_expands_and_submits(tmp_path):
+    """`/提交` is a Pi-style .pi/prompts template, not a hardcoded handler."""
+    cfg = make_ws(tmp_path)
+    prompts = tmp_path / "ws" / ".pi" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "提交.md").write_text(
+        "---\n"
+        "description: Submit a report\n"
+        "argument-hint: \"<report>\"\n"
+        "---\n"
+        "请提交 ${1}${2:+(厂商: ${2})}，先定位报告。\n",
+        encoding="utf-8")
+    rt = AppRuntime(cfg, target="t1",
+                    adapter_factory=lambda name: ScriptedAdapter(
+                        script=[{"content": "FINAL: template submitted", "tool_calls": []}]),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.3)
+            assert any(c.name == "提交" for c in app._commands)
+            ed = app.query_one(PromptEditor)
+            ed.text = "/提交 VR-01"
+            await pilot.press("enter")
+            for _ in range(80):
+                await pilot.pause(0.1)
+                if not app.sess.busy:
+                    break
+            users = [w for w in app.screen.walk_children(MessageWidget)
+                     if w.role == "user"]
+            assert any("请提交 VR-01" in w._text for w in users)
     try:
         asyncio.run(scenario())
     finally:
