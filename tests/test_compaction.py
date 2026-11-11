@@ -17,7 +17,7 @@ from fwcore.domain import Domain
 from fwcore.limits import Limits
 from fwcore.models import Reply
 from fwcore.policy import Authz, Policy
-from fwcore.runtime import Runner, _valid_summary
+from fwcore.runtime import Runner, _render_for_summary, _summary_reply, _valid_summary
 
 
 def _pair(i: int, size: int = 800) -> list[dict]:
@@ -41,6 +41,40 @@ def test_estimate_and_threshold():
     assert should_compact(_history(50), 0) is False          # 0 = 不做阈值压缩
     assert should_compact(_history(50), 5_000) is True
     assert should_compact([{"role": "user", "content": "hi"}], 5_000) is False
+
+
+def test_summary_serialization_matches_pi_shape():
+    calls = [{"id": "c1", "type": "function",
+              "function": {"name": "shell_exec", "arguments": '{"command":"id"}'}}]
+    msgs = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "working", "tool_calls": calls},
+        {"role": "tool", "tool_call_id": "c1", "content": "x" * 2500},
+        {"role": "assistant", "content": "visible", "reasoning_content": "secret"},
+    ]
+    text = _render_for_summary(msgs)
+    assert "<conversation>" in text and "</conversation>" in text
+    assert "[User]: hello" in text
+    assert "[Assistant]: working" in text
+    assert "[Assistant tool calls]:" in text and "shell_exec(" in text
+    assert "[Tool result]:" in text and "more characters truncated" in text
+    assert "secret" not in text
+    assert "## Goal" in text and "## Next Steps" in text
+
+    prev = _render_for_summary(msgs, previous_summary="old summary")
+    assert "<previous-summary>" in prev and "old summary" in prev
+    assert "NEW conversation messages" in prev
+
+
+def test_summary_reply_rejects_tool_calls_and_length():
+    for reply in (Reply(tool_calls=[{"id": "c", "name": "shell", "args": {}}]),
+                  Reply(content="partial", finish_reason="length")):
+        try:
+            _summary_reply(reply)
+        except SummarizationIncomplete:
+            pass
+        else:
+            raise AssertionError(f"invalid summary accepted: {reply!r}")
 
 
 def test_summary_validator_rejects_tool_call_markup():
