@@ -5,12 +5,6 @@
 set -u
 ROOT="${FW_LOOP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 T="${1:-}"
-# Local kill switch for the current Pi process: the guard calls this probe on
-# every settle, so this disables live reminders without restarting Pi.
-if [ -f "$ROOT/.pi/continue-guard.disabled" ]; then
-    echo "OPEN=0 BAD=0 ROUND=? STOP= POOL=0/0 NEXT="
-    exit 0
-fi
 exec python3 - "$ROOT" "$T" <<'PY'
 import os
 import re
