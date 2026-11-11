@@ -97,7 +97,7 @@ def test_pi_prompt_templates_discover_and_expand(tmp_path):
     (prompts / "bad.md").write_text("---\n", encoding="utf-8")  # no body
 
     found = discover(str(tmp_path))
-    assert set(found) == {"review"}
+    assert {"review", "fw", "提交"} <= set(found)
     tpl = found["review"]
     assert tpl.description == "Review changes"
     assert tpl.arg_hint == "[focus]"

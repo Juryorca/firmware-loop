@@ -18,7 +18,6 @@ COMMANDS: tuple[Command, ...] = (
     Command("help", "显示命令与快捷键"),
     Command("model", "选择/切换模型", "[name]"),
     Command("target", "选择/切换固件目标", "[name]"),
-    Command("fw", "启动固件研究(可自动新建目标)", "<target>"),
     Command("resume", "恢复历史研究会话（选择器或 ID）", "[会话 ID]"),
     Command("status", "研究状态、进度与收尾检查"),
     Command("budget", "预算、用量与上下文"),

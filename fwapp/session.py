@@ -27,6 +27,7 @@ from fwcore import db as _db
 from fwcore.models import ScriptedAdapter
 from fwcore.policy import DirectPolicy
 from fwcore.runtime import Runner, RunResult
+from fwcore.tools import BOOTSTRAP_TARGET_PREFIX
 
 from .config import AppConfig, adapter_for
 from .services import Services, latest_run
@@ -139,6 +140,48 @@ class AgentSession:
             "SELECT name FROM targets WHERE status='active'"
             " ORDER BY created_at DESC LIMIT 1").fetchone()
         return row["name"] if row else None
+
+    def ensure_bootstrap_target(self) -> str | None:
+        """Create a temporary target for a prompt-only session.
+
+        The user does not have to choose a canonical target name before the
+        first model request.  The agent can later call session_set_target to
+        rename this row; target_id remains stable, so runs and research facts
+        are not moved.
+        """
+        with self._lock:
+            if self.target:
+                return self.target
+            if self._busy:
+                self.emit("error", "当前一轮仍在执行，暂时不能创建 bootstrap target。")
+                return None
+        last: Exception | None = None
+        for _ in range(4):
+            name = f"{BOOTSTRAP_TARGET_PREFIX}{uuid.uuid4().hex[:8]}"
+            try:
+                self.services.domain.create_target(name)
+            except Exception as e:  # noqa: BLE001 - name collision or storage error
+                last = e
+                continue
+            with self._lock:
+                if self.target:
+                    return self.target
+                self.target = name
+                self.run_id = None
+            self.emit("session.target", name, target=name, run=None,
+                      bootstrap=True)
+            return name
+        self.emit("error", f"bootstrap target 创建失败: {last or 'unknown error'}")
+        return None
+
+    def _on_target_set(self, name: str) -> None:
+        """Callback from the session_set_target tool (worker thread)."""
+        with self._lock:
+            self.target = name
+        self._tool_cache.clear()
+        self._model_cursor = None
+        self.emit("session.target", name, target=name, run=self.run_id,
+                  bootstrap=False)
 
     def _target_status(self, target: str | None = None) -> str:
         target = target or self.target
@@ -514,7 +557,7 @@ class AgentSession:
             limits=self.cfg.limits, watchdog=self._watchdog, mcp=self._mcp,
             watchdog_poll_s=5.0, mcp_call_timeout=120.0,
             on_stream=self._on_stream, stop_event=self._cancel_event,
-            policy=DirectPolicy(),
+            policy=DirectPolicy(), on_session_target=self._on_target_set,
         )
 
     def mcp_status(self) -> dict:

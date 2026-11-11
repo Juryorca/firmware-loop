@@ -45,6 +45,14 @@ def make_ws(tmp_path, name="t1"):
     return resolve(AppOptions(root=str(root), model="scripted", mcp=False, watchdog=False))
 
 
+def make_ws_without_target(tmp_path):
+    root = tmp_path / "ws"
+    root.mkdir()
+    con = _db.connect(_db.default_db_path(str(root)))
+    con.close()
+    return resolve(AppOptions(root=str(root), model="scripted", mcp=False, watchdog=False))
+
+
 def _script():
     return [
         {"content": "先登记假设。", "tool_calls": [{
@@ -1092,11 +1100,20 @@ def test_mouse_selection_works_on_assistant_markdown(tmp_path):
         rt.dispose()
 
 
-def test_fw_command_creates_target_and_starts_a_session(tmp_path):
-    cfg = make_ws(tmp_path)
-    rt = AppRuntime(cfg, target="t1",
-                    adapter_factory=lambda name: ScriptedAdapter(
-                        script=[{"content": "FINAL: fw started", "tool_calls": []}]),
+def test_fw_template_bootstraps_target_and_agent_names_it(tmp_path):
+    cfg = make_ws_without_target(tmp_path)
+    prompts = tmp_path / "ws" / ".pi" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "fw.md").write_text(
+        "---\ndescription: Firmware research\nargument-hint: <firmware>\n---\n"
+        "研究 $@\n", encoding="utf-8")
+    rt = AppRuntime(cfg, target=None,
+                    adapter_factory=lambda name: ScriptedAdapter(script=[
+                        {"content": "先确认固件名。", "tool_calls": [{
+                            "id": "c1", "name": "session_set_target",
+                            "args": {"name": "Zyxel-GS1900"}}]},
+                        {"content": "FINAL: named", "tool_calls": []},
+                    ]),
                     mcp=False, watchdog=False)
     app = FwApp(rt)
 
@@ -1104,22 +1121,25 @@ def test_fw_command_creates_target_and_starts_a_session(tmp_path):
         async with app.run_test(size=(100, 30)) as pilot:
             await pilot.pause(0.3)
             ed = app.query_one(PromptEditor)
-            ed.text = "/fw zyxel-demo"
+            ed.text = "/fw GS1900"
             await pilot.press("enter")
-            for _ in range(80):
+            for _ in range(120):
                 await pilot.pause(0.1)
-                if app.sess.target == "zyxel-demo" and not app.sess.busy:
+                if app.sess.target == "Zyxel-GS1900" and not app.sess.busy:
                     break
-            assert app.sess.target == "zyxel-demo"
+            assert app.sess.target == "Zyxel-GS1900"
             row = app.sess.services.con.execute(
-                "SELECT status FROM targets WHERE name=?", ("zyxel-demo",)).fetchone()
+                "SELECT status FROM targets WHERE name=?", ("Zyxel-GS1900",)).fetchone()
             assert row is not None and row["status"] == "active"
-            assert app.sess.run_id is not None
+            assert not app.sess.services.con.execute(
+                "SELECT 1 FROM targets WHERE name LIKE 'session-%'").fetchone()
+            users = [w for w in app.screen.walk_children(MessageWidget)
+                     if w.role == "user"]
+            assert any("研究 GS1900" in w._text for w in users)
     try:
         asyncio.run(scenario())
     finally:
         rt.dispose()
-
 
 def test_submit_prompt_template_command_expands_and_submits(tmp_path):
     """`/提交` is a Pi-style .pi/prompts template, not a hardcoded handler."""

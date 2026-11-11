@@ -22,7 +22,6 @@ from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from fwcore.commands import BY_NAME, COMMANDS, Command
-from fwcore.domain import InvariantViolation
 from fwcore.prompt_templates import discover, expand
 
 from ..config import ModelConfigError, adapter_for, available_models, model_detail
@@ -176,7 +175,7 @@ class FwApp(App):
             "SELECT COUNT(*) total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) active"
             " FROM targets").fetchone()
         if not counts["total"]:
-            self._notice("状态库还没有目标：请先运行 `fw-core init <目标>` 或迁移历史目标。", "warning")
+            self._notice("状态库还没有目标：用 `/fw <固件/型号>` 启动（会先建 bootstrap target），或运行 `fw-core init <目标>`。", "warning")
         elif not counts["active"]:
             self._notice("没有进行中的目标：已有目标已收尾或归档；可用 `/target` 查看，或执行 unarchive 恢复。",
                          "warning")
@@ -604,7 +603,7 @@ class FwApp(App):
             self._command(text)
             return
         if not self.sess.target:
-            self._notice("没有目标：请先选择目标，或运行 `fw-core init <目标>`。", "warning")
+            self._notice("没有目标：用 `/fw <固件/型号>` 启动，或先用 `/target` 选择目标。", "warning")
             return
         self._append(MessageWidget("user", text))
         self._stop_requested = False
@@ -628,8 +627,7 @@ class FwApp(App):
         if template is None:
             self._notice(f"未知命令: /{name}(/help 查看)", "error")
             return
-        if not self.sess.target:
-            self._notice("没有目标：请先运行 `/fw <目标>` 或 `fw-core init <目标>`。", "warning")
+        if not self.sess.target and not self.sess.ensure_bootstrap_target():
             return
         text = expand(template, arg)
         ed = self.query_one(PromptEditor)
@@ -867,41 +865,6 @@ class FwApp(App):
             self.sess.resume_run(value)
             self._load_transcript()
             self._update_status()
-
-    def _cmd_fw(self, arg: str) -> None:
-        """Create/select a target and immediately start a fresh research run."""
-        name = (arg or "").strip()
-        if not name:
-            self._notice("用法: /fw <目标型号>", "warning")
-            return
-        if self.sess.busy:
-            self._notice("当前一轮仍在执行，暂时不能启动新目标。", "warning")
-            return
-        row = self.sess.services.con.execute(
-            "SELECT status FROM targets WHERE name=?", (name,)).fetchone()
-        if row is None:
-            try:
-                self.sess.services.domain.create_target(name)
-            except (InvariantViolation, ValueError) as e:
-                self._notice(f"目标创建失败: {e}", "error")
-                return
-        elif (row["status"] or "active") != "active":
-            self._notice(f"目标 {name} 已收尾或归档，不能开始新研究。", "warning")
-            return
-        self.sess.set_target(name)
-        if self.sess.target != name:
-            return
-        self.sess.new_session()
-        self._load_transcript()
-        self._stop_requested = False
-        template = self._templates.get("fw")
-        task = expand(template, name) if template else (
-            f"研究目标：{name}。\n\n"
-            "从立项开始：确认/下载固件，提取 rootfs，枚举攻击面并按 AGENTS.md "
-            "的研究循环开始。能自己做的直接做，不要先问我。")
-        self._append(MessageWidget("user", task))
-        self.sess.submit(task)
-        self._update_status()
 
     def _cmd_new(self, arg: str) -> None:
         self.sess.new_session()

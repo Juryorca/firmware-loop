@@ -1,6 +1,7 @@
 """Pi-compatible Markdown prompt templates for the fw-core TUI.
 
-A direct child ``.pi/prompts/<name>.md`` becomes ``/<name>``.  This is the
+A direct child ``.pi/prompts/<name>.md`` becomes ``/<name>`` and overrides a
+same-named built-in template under ``fwcore/prompts/templates``.  This is the
 same lightweight contract as Pi's prompt templates: YAML-ish frontmatter for
 description/argument-hint, shell-like positional arguments, and no executable
 behavior.
@@ -41,14 +42,11 @@ def _frontmatter(text: str) -> tuple[dict[str, str], str]:
     return meta, body
 
 
-def discover(root: str) -> dict[str, PromptTemplate]:
-    """Load direct Markdown children; invalid templates are ignored."""
-    out: dict[str, PromptTemplate] = {}
-    directory = os.path.join(root, ".pi", "prompts")
+def _load_dir(directory: str, out: dict[str, PromptTemplate]) -> None:
     try:
         names = sorted(os.listdir(directory))
     except OSError:
-        return out
+        return
     for filename in names:
         if not filename.endswith(".md"):
             continue
@@ -73,8 +71,15 @@ def discover(root: str) -> dict[str, PromptTemplate]:
             name=name, description=description,
             arg_hint=meta.get("argument-hint", ""),
             body=body, path=path)
-    return out
 
+
+def discover(root: str) -> dict[str, PromptTemplate]:
+    """Load built-in defaults, then project overrides (same name wins)."""
+    out: dict[str, PromptTemplate] = {}
+    package_dir = os.path.join(os.path.dirname(__file__), "prompts", "templates")
+    _load_dir(package_dir, out)
+    _load_dir(os.path.join(root, ".pi", "prompts"), out)
+    return out
 
 def _matching_brace(text: str, start: int) -> int:
     """Return the ``}`` matching the ``${`` at *start* (nested-aware)."""

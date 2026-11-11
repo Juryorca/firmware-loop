@@ -122,7 +122,8 @@ class Runner:
                  summarizer: Callable[[list[dict]], str] | None = None,
                  on_stream: Callable[[dict], None] | None = None,
                  stream: bool = True,
-                 stop_event=None):
+                 stop_event=None,
+                 on_session_target: Callable[[str], None] | None = None):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -160,6 +161,7 @@ class Runner:
         self.stream_enabled = stream
         # 会话级取消(不等 DB 写锁):turn 循环在安全点检查
         self.stop_event = stop_event
+        self.on_session_target = on_session_target
         self.stream_control: StreamControl | None = None
         self._last_usage: dict = {}
         self._compact_cooldown_until = -1
@@ -1502,9 +1504,11 @@ class Runner:
                     break
                 if reply.tool_calls:
                     tool_timeout = min(self.timeout, self.limits.max_tool_seconds)
-                    ctx = ToolContext(domain=self.domain, root=self.root, run_id=rid, timeout=tool_timeout,
+                    ctx = ToolContext(domain=self.domain, root=self.root, run_id=rid,
+                                      target=target, timeout=tool_timeout,
                                       artifacts_dir=os.path.join(self.root, "state", "artifacts", rid),
-                                      policy=self.policy, research=self.research)
+                                      policy=self.policy, research=self.research,
+                                      set_session_target=self.on_session_target)
                     stalled = False
                     calls_this_turn = list(reply.tool_calls)
                     conv_failed = False
@@ -1547,6 +1551,10 @@ class Runner:
                             stalled = True
                         run_tools += 1
                         out = self._exec_tool_call(ctx, call, rid)
+                        if call.get("name") == "session_set_target" and out.get("target"):
+                            # Rename keeps target_id, but the rest of this turn must
+                            # use the new display name for closure/mirror checks.
+                            target = self._run_target_name(rid, target)
                         # Build the model-visible projection exactly once.  Calling
                         # _bounded_tool_result twice can create two temp paths for
                         # large structured/observation values.
@@ -1588,6 +1596,10 @@ class Runner:
                         _event(self.con, "run.stalled", rid, {"repeats": self.stall_repeats})
                         state = "paused"
                         break
+                    # session_set_target renames the target row without changing
+                    # its id.  The rest of this turn must use the new display name
+                    # for closure/mirror checks and round events.
+                    target = self._run_target_name(rid, target)
                 step += 1
                 _persist()
                 self._checkpoint(rid, step, history)
@@ -1627,6 +1639,13 @@ class Runner:
             return self._finish_state(rid, target, state, step, rounds, final, history)
         finally:
             self._watchdog_stop()
+
+    def _run_target_name(self, rid: str, fallback: str) -> str:
+        """Resolve the current target name from the run (renames keep the id)."""
+        row = self.con.execute(
+            "SELECT t.name FROM runs r JOIN targets t ON t.id=r.target_id WHERE r.id=?",
+            (rid,)).fetchone()
+        return row["name"] if row else fallback
 
     def _finish_state(self, rid: str, target: str, state: str, step: int, rounds: int,
                       final: str, history: list[dict]) -> RunResult:

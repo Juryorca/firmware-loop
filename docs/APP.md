@@ -63,11 +63,13 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
   阻塞的 SSE read 会立即退出;Run 暂停、部分 assistant 保留、预算只记一次。
 - 工具调用参数分片接收、完整组装并校验后才执行;状态实时更新,可折叠/展开
   (Ctrl+O),展示参数、结果、stdout 摘录。
-- Slash Commands 带补全:`/help /model /fw <目标> /target /resume /status /budget
+- Slash Commands 带补全:`/help /model /target /resume /status /budget
   /hypotheses /evidence /skills /knowledge /tools /mcp /tool-setup /new /continue /compact /clear /expand /quit`；
-  另从 `.pi/prompts/*.md` 加载 Pi 风格模板命令（如 `/提交 <报告>`），参数按 `$1` / `$@` 展开；
-  模板命令只在 model-facing `User Slash Commands` 目录列名称/说明，不注册成工具；
-  `/fw` 是 target bootstrap，任务正文可来自 `.pi/prompts/fw.md`。
+  包内置 `fwcore/prompts/templates/*.md` 提供 Pi 风格模板命令（`/fw <固件/型号>`、
+  `/提交 <报告>`），项目 `.pi/prompts/*.md` 同名覆盖；参数按 `$1` / `$@` 展开。
+  模板命令只在 model-facing `User Slash Commands` 目录列名称/说明，不注册成工具。
+  无 target 时 `/fw` 先建 `session-*` 占位 target，agent 用
+  `session_set_target` 改名，用户不需要先提供规范 target 名。
 - 目标生命周期：`targets.status` 为 `active` / `closed_confirmed` / `archived`。
   `archived` 只表示生命周期，不删除 SQLite 研究事实、`report/` 或 `SOURCE_URL.txt`；
   已归档/已收尾目标在 TUI 中只读显示，不能开始新研究或继续 run。

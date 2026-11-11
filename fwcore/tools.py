@@ -36,6 +36,11 @@ from .output import (
 )
 from .policy import Policy
 
+# TUI starts a targetless session with this temporary target name.  The agent
+# may replace it once via session_set_target; no user-facing target name is
+# required before the first model request.
+BOOTSTRAP_TARGET_PREFIX = "session-"
+
 
 @dataclass
 class ToolSpec:
@@ -63,11 +68,15 @@ class ToolContext:
     domain: Domain
     root: str
     run_id: str | None = None
+    target: str | None = None
     timeout: float = 60.0
     artifacts_dir: str = ""
     confirm: Callable[[str], bool] | None = None
     policy: Policy = None  # type: ignore[assignment]
     research: Research | None = None    # 工具用它记三镜(见 fwcore/research.py)
+    # Bootstrap-session hook: after an agent names/renames the current target,
+    # update the in-memory app session too (the DB row is renamed by the tool).
+    set_session_target: Callable[[str], None] | None = None
 
 
 @dataclass
@@ -772,6 +781,41 @@ def state_delete_conclusion(ctx: ToolContext, args: dict) -> dict:
             "invalidated_by": invalidated_by, "deleted": True, "reason": reason}
 
 
+def session_set_target(ctx: ToolContext, args: dict) -> dict:
+    """Give the current bootstrap session its real target name.
+
+    The target row (and therefore its id) already exists; runs/evidence/etc.
+    reference target_id, so this is a rename, not a new session.  The agent may
+    call it once after identifying the firmware.
+    """
+    current = (ctx.target or "").strip()
+    if not current:
+        return {"status": "error", "error": "当前运行没有 target，不能设置"}
+    if not current.startswith(BOOTSTRAP_TARGET_PREFIX):
+        return {"status": "error",
+                "error": f"当前 target 不是 bootstrap 占位目标({current})，不能用此工具改名"}
+    if ctx.set_session_target is None:
+        return {"status": "error", "error": "当前运行没有可更新的交互 session"}
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return {"status": "error", "error": "name 不能为空"}
+    try:
+        ctx.domain.rename_target(
+            current, name,
+            vendor=args.get("vendor"), product=args.get("product"),
+            version=args.get("version"), arch=args.get("arch"))
+    except Exception as e:  # noqa: BLE001 - report actionable error to the model
+        return {"status": "error", "error": str(e)}
+    try:
+        ctx.set_session_target(name)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error",
+                "error": f"数据库已改名为 {name}，但更新交互 session 失败: {e}",
+                "target": name, "renamed_from": current}
+    return {"status": "ok", "target": name, "renamed_from": current,
+            "note": "后续 state_* 工具请使用新的 target 名"}
+
+
 def _caps(ctx: ToolContext, args: dict) -> dict:
     from .providers import inventory
     from .toolmeta import ToolConfigError
@@ -1049,6 +1093,15 @@ def default_registry() -> Registry:
             "tags": {"type": "array", "items": {"type": "string"}},
             "source": {"type": "string"}},
          "required": ["kind", "title", "body_md"]}, _kb_propose))
+    r.register(ToolSpec(
+        "session_set_target",
+        "给当前 bootstrap session 设置/规范化 target 名(识别固件后调用一次;"
+        "只对 TUI 的 session-* 占位目标有效;不创建新 target,不改变 target id)",
+        {"type": "object", "properties": {
+            "name": {"type": "string", "description": "新的 target 名(唯一,不含 / \\ 或 ..,≤120 字符)"},
+            "vendor": {"type": "string"}, "product": {"type": "string"},
+            "version": {"type": "string"}, "arch": {"type": "string"}},
+         "required": ["name"]}, session_set_target))
     from .skills import register_tools as _register_skill_tools
     _register_skill_tools(r, "")
     # Pi Codemode + deferred tool discovery. Register lazily to avoid a cycle

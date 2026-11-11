@@ -237,3 +237,21 @@ def test_target_archive_lifecycle_preserves_research_rows(dom):
     dom.unarchive_target("t1")
     assert dom.status("t1")["target_status"] == "active"
     assert dom.require_active_target("t1").name == "t1"
+
+
+def test_rename_target_keeps_id_and_rejects_conflict(dom):
+    tid = dom.create_target("session-abc123")
+    before = dom.target("session-abc123")
+    assert before.id == tid
+    renamed = dom.rename_target(
+        "session-abc123", "Zyxel-GS1900-2.90", vendor="Zyxel",
+        product="GS1900-8HP", version="2.90")
+    assert renamed.id == tid and renamed.name == "Zyxel-GS1900-2.90"
+    row = dom.con.execute(
+        "SELECT id,vendor,product,version FROM targets WHERE name=?",
+        ("Zyxel-GS1900-2.90",)).fetchone()
+    assert row["id"] == tid and row["vendor"] == "Zyxel"
+    with pytest.raises(InvariantViolation):
+        dom.rename_target("Zyxel-GS1900-2.90", "t1")
+    with pytest.raises(InvariantViolation):
+        dom.rename_target("Zyxel-GS1900-2.90", "bad/name")
