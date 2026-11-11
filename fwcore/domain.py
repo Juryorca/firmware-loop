@@ -127,6 +127,41 @@ class Domain:
             _event(c, "target.created", tid, {"name": name, "version": version})
         return tid
 
+    def create_target_for_run(
+        self,
+        run_id: str,
+        name: str,
+        *,
+        vendor: str | None = None,
+        product: str | None = None,
+        version: str | None = None,
+        arch: str | None = None,
+        source_url: str | None = None,
+        source_sha256: str | None = None,
+    ) -> Target:
+        """Create a real target and bind one existing run to it atomically.
+
+        The run may start on the shared default target.  Creating a target does
+        not rename or delete that default; it only moves this run's target_id.
+        """
+        row = self.con.execute("SELECT target_id FROM runs WHERE id=?", (run_id,)).fetchone()
+        if not row:
+            raise NotFound(f"run 不存在: {run_id}")
+        tid = new_id("T")
+        with Tx(self.con) as c:
+            try:
+                c.execute(
+                    "INSERT INTO targets(id,name,vendor,product,version,arch,source_url,source_sha256,created_at)"
+                    " VALUES(?,?,?,?,?,?,?,?,?)",
+                    (tid, name, vendor, product, version, arch, source_url, source_sha256, _now()),
+                )
+            except sqlite3.IntegrityError as e:
+                raise InvariantViolation(f"目标已存在: {name}") from e
+            c.execute("UPDATE runs SET target_id=? WHERE id=?", (tid, run_id))
+            _event(c, "target.created", tid, {"name": name, "version": version})
+            _event(c, "run.target", run_id, {"from": row["target_id"], "to": tid})
+        return self.target(name)
+
     def target(self, name: str) -> Target:
         row = self.con.execute(
             "SELECT id,name,version,status FROM targets WHERE name=?", (name,)).fetchone()
@@ -165,38 +200,6 @@ class Domain:
         with Tx(self.con) as c:
             c.execute("UPDATE targets SET status='active' WHERE id=?", (t.id,))
             _event(c, "target.unarchived", t.id, {})
-
-    def rename_target(self, current: str, name: str, *, vendor: str | None = None,
-                      product: str | None = None, version: str | None = None,
-                      arch: str | None = None) -> Target:
-        """Rename a target while keeping its id.
-
-        Runs, hypotheses, evidence and conversation entries reference target_id,
-        not the display name, so renaming does not move any research fact.  This
-        is used by the bootstrap session tool when the agent has identified the
-        firmware and wants to replace the temporary ``session-*`` name.
-        """
-        t = self.target(current)
-        name = (name or "").strip()
-        if not name:
-            raise InvariantViolation("目标名不能为空")
-        if len(name) > 120 or name in (".", "..") or any(
-                ch in name for ch in ("/", "\\", "\x00")):
-            raise InvariantViolation("目标名不能含路径分隔符/空字符，且长度不能超过 120")
-        if name == current:
-            return t
-        with Tx(self.con) as c:
-            try:
-                c.execute(
-                    "UPDATE targets SET name=?, vendor=COALESCE(?,vendor),"
-                    " product=COALESCE(?,product), version=COALESCE(?,version),"
-                    " arch=COALESCE(?,arch) WHERE id=?",
-                    (name, vendor, product, version, arch, t.id),
-                )
-            except sqlite3.IntegrityError as e:
-                raise InvariantViolation(f"目标已存在: {name}") from e
-            _event(c, "target.renamed", t.id, {"old": current, "new": name})
-        return self.target(name)
 
     def status(self, name: str) -> dict:
         """UNKNOWN(没有这个目标) ≠ EMPTY(目标在,但还没有假设)。"""

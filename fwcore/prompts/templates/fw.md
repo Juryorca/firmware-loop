@@ -8,12 +8,14 @@ argument-hint: <固件路径或型号名>
 
 ## 启动
 
-- 启动时先看当前动态状态里的 target。TUI 可能给你一个占位 target(`session-*`),也可能已经有命名 target。
-- **占位 target**: 先识别固件(型号/路径/版本),立即调用
-  `session_set_target(name=..., vendor=..., product=..., version=..., arch=...)`
-  把它改成唯一、规范的目标名;在改名成功前不要写 `state/<target>`、报告或证据路径。
+- 启动时先看当前动态状态里的 target。TUI 可能给你共享默认 target(`session`,不绑定固件),
+  也可能已经有命名 target。
+- **默认 target(`session`)**: 先识别固件(型号/路径/版本),立即调用
+  `target_create(name=..., vendor=..., product=..., version=..., arch=...)`。
+  它会**新建**一个真实 target,并把当前 run 绑定过去;默认 `session` 保留给其他 session。
+  在创建成功前不要写 `state/<target>`、报告或证据路径。
   目标名由你决定,不需要用户先想好;拒绝 `/`、`\`、`..`,长度 ≤120。
-- **已有命名 target**: 直接沿用,不要再调用 `session_set_target`。
+- **已有命名 target**: 直接沿用,不要再调用 `target_create`。
 - **继续**已有 run 用 `/continue`;**收尾**按 `AGENTS.md`「Exit Criteria」另走收尾流程(知识沉淀 → 报告 → CLOSURE → `derived_check` → 清理),不要在 `/fw` 内假装收尾。厂商是 CNA ⇒ **不产** MITRE 件。
 - 历史原文/观察在 SQLite `documents` / `observations`;不重新立项、不重新提取固件。
 - **红线(别搞反)**: 对外文件(`advisory` / `VR-*` / CVE 材料)**禁**内部路径与工具名;内部归档(`INDEX` / `attack-surface` / `CLOSURE` / `report/` 内部材料)**反要求带证据引用**。细则见 `tools/templates/report.md`「通用原则」。

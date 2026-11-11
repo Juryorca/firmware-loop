@@ -113,14 +113,12 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
   model-facing 的 `User Slash Commands` 目录中，但模型仍不能自行调用。
 - 静态命令名优先于同名模板。**`/fw` 现在是普通 prompt template**
   （`.pi/prompts/fw.md`），不再有 `_cmd_fw` 原生 handler。
-- **target bootstrap**：没有 target 时，执行模板会先由 TUI 建一个唯一占位 target
-  （`session-<8hex>`，仅用于让会话启动），再提交模板正文。模型识别固件后调用低风险工具
-  `session_set_target(name=..., vendor=..., ...)` 把占位 target 改名；改名只改
-  `targets.name`，`target_id` 不变，因此 run/假设/证据/对话都不迁移，也不需要用户先想规范名。
-  该工具只对 `session-*` 占位目标生效；用户已有命名 target 时不会误改。
-  占位 target 每个 `AgentSession` 只惰性创建一次：启动时优先复用最新 active target，
-  `ensure_bootstrap_target()` 只在 target 为空时插入；`/new` 只清 run，不创建新 target。
-  绑定始终是 `targets.id` / `runs.target_id`，没有新增 session 表。
+- **target bootstrap**：没有 target 时，执行模板会先使用/创建共享默认 target
+  `session`（不含固件信息），再提交模板正文。模型识别固件后调用低风险工具
+  `target_create(name=..., vendor=..., ...)`：它**新建**一个真实 target，并把当前 run 的
+  `target_id` 原子地改绑过去；默认 `session` 保留，可继续被其他 session 共享。
+  这不是 target 改名；run/假设/证据/对话仍按 id/run_id 绑定，也不需要用户先想规范名，
+  不需要新增 session 表。该工具只接受默认 target（`session`/`session-*` fallback）。
 - 只有用户输入 `/xxx` 才触发；模型不能调用、不能伪造、不能把 Command 当 Skill。
 - 新增静态命令必须同时：登记元数据、实现 handler、补参数/错误/补全测试；
   新增模板只需放 `.pi/prompts/<name>.md`（重启 TUI 后出现，不做模型工具）。
@@ -239,7 +237,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 |---|---|---|---|
 | 根 `AGENTS.md` | 项目硬规则 | System Prompt 项目指令 | 每次 system，全文 |
 | `LOOP.md` | 流程细则 | `research-loop/references/LOOP.md` | Skill 按需 |
-| `.pi/prompts/fw.md` | `/fw` 模板 | fw-core TUI prompt-template loader | 启动时读取；无 target 时先建 `session-*` 占位 target |
+| `.pi/prompts/fw.md` | `/fw` 模板 | fw-core TUI prompt-template loader | 启动时读取；无 target 时使用共享 `session` 默认 target |
 | `.pi/prompts/提交.md` | `/提交` 操作模板 | fw-core TUI prompt-template loader | 启动时读取；通用模板路径 |
 | `prompts/*.txt` | 旧 OpenCode 子代理提示词 | 已删除（只保留职责映射） | 不再加载 |
 | `opencode.json` | 旧 OpenCode 配置 | 已删除 | 不再加载 |
@@ -315,7 +313,7 @@ knowledge_entry_fts(entry_id UNINDEXED, title, body_md, tags)  -- FTS5
 | 根 `AGENTS.md` | 保留；system prompt 的唯一项目规则输入 |
 | `fwcore/prompts/templates/*.md` | 包内置默认模板（`/fw`、`/提交`）；TUI 启动时加载 |
 | `.pi/prompts/*.md` | 本地/忽略的 Pi 风格覆盖模板；同名覆盖内置，只作文本，不执行代码 |
-| `.pi/prompts/fw.md` | `/fw` 模板；无 target 时 TUI 建 `session-*` 占位 target，agent 用 `session_set_target` 命名 |
+| `.pi/prompts/fw.md` | `/fw` 模板；无 target 时使用共享默认 `session`，agent 用 `target_create` 新建 target 并改绑当前 run |
 | `.pi/prompts/提交.md` | `/提交` 模板命令；参数按 Pi 规则展开 |
 | `.pi/guards/*` | 未迁入 fwcore runtime；工具台账遗留项 |
 | `prompts/*.txt` | 删除（旧 OpenCode 子代理空壳） |

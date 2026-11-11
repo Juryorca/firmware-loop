@@ -27,7 +27,7 @@ from fwcore import db as _db
 from fwcore.models import ScriptedAdapter
 from fwcore.policy import DirectPolicy
 from fwcore.runtime import Runner, RunResult
-from fwcore.tools import BOOTSTRAP_TARGET_PREFIX
+from fwcore.tools import DEFAULT_TARGET_NAME
 
 from .config import AppConfig, adapter_for
 from .services import Services, latest_run
@@ -137,18 +137,24 @@ class AgentSession:
 
     # ---------------- 生命周期 ----------------
     def _default_target(self) -> str | None:
+        # Prefer the shared, firmware-neutral bootstrap target so a new TUI
+        # session joins it instead of inventing another temporary target.
+        row = self.services.con.execute(
+            "SELECT name FROM targets WHERE status='active' AND name=? LIMIT 1",
+            (DEFAULT_TARGET_NAME,)).fetchone()
+        if row:
+            return row["name"]
         row = self.services.con.execute(
             "SELECT name FROM targets WHERE status='active'"
             " ORDER BY created_at DESC LIMIT 1").fetchone()
         return row["name"] if row else None
 
     def ensure_bootstrap_target(self) -> str | None:
-        """Create or reuse the temporary target for a prompt-only session.
+        """Create or reuse the shared, firmware-neutral default target.
 
-        The user does not have to choose a canonical target name before the
-        first model request.  The agent can later call session_set_target to
-        rename this row; target_id remains stable, so runs and research facts
-        are not moved.
+        The default target is not tied to a firmware.  A run starts there; the
+        agent can later call target_create to make a real target and move only
+        this run's target_id.  The default stays available for other sessions.
         """
         with self._bootstrap_lock:
             with self._lock:
@@ -157,13 +163,36 @@ class AgentSession:
                 if self._busy:
                     self.emit("error", "当前一轮仍在执行，暂时不能创建 bootstrap target。")
                     return None
+            # Another session may already have created the shared default.
+            row = self.services.con.execute(
+                "SELECT name FROM targets WHERE status='active' AND name=? LIMIT 1",
+                (DEFAULT_TARGET_NAME,)).fetchone()
+            if row is not None:
+                name = row["name"]
+                with self._lock:
+                    self.target = name
+                    self.run_id = None
+                self.emit("session.target", name, target=name, run=None,
+                          bootstrap=True)
+                return name
             last: Exception | None = None
-            for _ in range(4):
-                name = f"{BOOTSTRAP_TARGET_PREFIX}{uuid.uuid4().hex[:8]}"
+            names = [DEFAULT_TARGET_NAME]
+            names += [f"{DEFAULT_TARGET_NAME}-{uuid.uuid4().hex[:8]}" for _ in range(3)]
+            for name in names:
                 try:
                     self.services.domain.create_target(name)
-                except Exception as e:  # noqa: BLE001 - name collision or storage error
+                except Exception as e:  # noqa: BLE001 - collision or storage error
                     last = e
+                    row = self.services.con.execute(
+                        "SELECT name FROM targets WHERE status='active' AND name=? LIMIT 1",
+                        (name,)).fetchone()
+                    if row is not None:
+                        with self._lock:
+                            self.target = name
+                            self.run_id = None
+                        self.emit("session.target", name, target=name, run=None,
+                                  bootstrap=True)
+                        return name
                     continue
                 with self._lock:
                     if self.target:
@@ -177,7 +206,7 @@ class AgentSession:
             return None
 
     def _on_target_set(self, name: str) -> None:
-        """Callback from the session_set_target tool (worker thread)."""
+        """Callback from the target_create tool (worker thread)."""
         with self._lock:
             self.target = name
         self._tool_cache.clear()

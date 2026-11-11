@@ -68,8 +68,9 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
   包内置 `fwcore/prompts/templates/*.md` 提供 Pi 风格模板命令（`/fw <固件/型号>`、
   `/提交 <报告>`），项目 `.pi/prompts/*.md` 同名覆盖；参数按 `$1` / `$@` 展开。
   模板命令只在 model-facing `User Slash Commands` 目录列名称/说明，不注册成工具。
-  无 target 时 `/fw` 先建 `session-*` 占位 target，agent 用
-  `session_set_target` 改名，用户不需要先提供规范 target 名。
+  无 target 时 `/fw` 先使用共享默认 target `session`，agent 识别固件后用
+  `target_create` 新建真实 target 并把当前 run 改绑过去；默认 target 保留，
+  用户不需要先提供规范 target 名，也不需要新增 session 表。
 - 目标生命周期：`targets.status` 为 `active` / `closed_confirmed` / `archived`。
   `archived` 只表示生命周期，不删除 SQLite 研究事实、`report/` 或 `SOURCE_URL.txt`；
   已归档/已收尾目标在 TUI 中只读显示，不能开始新研究或继续 run。

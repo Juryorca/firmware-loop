@@ -486,7 +486,7 @@ def test_bootstrap_target_is_reused_until_new_target(tmp_path):
     sess = AgentSession(services, target=None, mcp=False, watchdog=False)
     try:
         first = sess.ensure_bootstrap_target()
-        assert first and first.startswith("session-")
+        assert first == "session"
         assert sess.ensure_bootstrap_target() == first
         sess.new_session()
         assert sess.ensure_bootstrap_target() == first

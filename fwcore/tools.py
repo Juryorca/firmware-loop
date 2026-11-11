@@ -36,10 +36,14 @@ from .output import (
 )
 from .policy import Policy
 
-# TUI starts a targetless session with this temporary target name.  The agent
-# may replace it once via session_set_target; no user-facing target name is
-# required before the first model request.
-BOOTSTRAP_TARGET_PREFIX = "session-"
+# TUI targetless sessions share this firmware-neutral default target.  An agent
+# may create a real target and move only its own run; the default remains.
+DEFAULT_TARGET_NAME = "session"
+
+
+def is_default_target(name: str | None) -> bool:
+    return name == DEFAULT_TARGET_NAME or bool(
+        name and name.startswith(DEFAULT_TARGET_NAME + "-"))
 
 
 @dataclass
@@ -781,27 +785,33 @@ def state_delete_conclusion(ctx: ToolContext, args: dict) -> dict:
             "invalidated_by": invalidated_by, "deleted": True, "reason": reason}
 
 
-def session_set_target(ctx: ToolContext, args: dict) -> dict:
-    """Give the current bootstrap session its real target name.
+def target_create(ctx: ToolContext, args: dict) -> dict:
+    """Create a real target and bind the current run to it.
 
-    The target row (and therefore its id) already exists; runs/evidence/etc.
-    reference target_id, so this is a rename, not a new session.  The agent may
-    call it once after identifying the firmware.
+    The run starts on the shared ``session`` default target.  This creates a new
+    target row and updates only this run's target_id; the default row remains
+    available to other sessions.  No rename and no session table are involved.
     """
     current = (ctx.target or "").strip()
     if not current:
-        return {"status": "error", "error": "当前运行没有 target，不能设置"}
-    if not current.startswith(BOOTSTRAP_TARGET_PREFIX):
+        return {"status": "error", "error": "当前运行没有 target，不能创建目标"}
+    if not is_default_target(current):
         return {"status": "error",
-                "error": f"当前 target 不是 bootstrap 占位目标({current})，不能用此工具改名"}
+                "error": f"当前 target 不是默认 target({current})，不能自动创建新目标"}
+    if not ctx.run_id:
+        return {"status": "error", "error": "当前没有 run，不能绑定新 target"}
     if ctx.set_session_target is None:
         return {"status": "error", "error": "当前运行没有可更新的交互 session"}
     name = str(args.get("name") or "").strip()
     if not name:
         return {"status": "error", "error": "name 不能为空"}
+    if len(name) > 120 or name in (".", "..") or any(
+            ch in name for ch in ("/", "\\", "\x00")):
+        return {"status": "error",
+                "error": "目标名不能含路径分隔符/空字符，且长度不能超过 120"}
     try:
-        ctx.domain.rename_target(
-            current, name,
+        ctx.domain.create_target_for_run(
+            ctx.run_id, name,
             vendor=args.get("vendor"), product=args.get("product"),
             version=args.get("version"), arch=args.get("arch"))
     except Exception as e:  # noqa: BLE001 - report actionable error to the model
@@ -810,11 +820,10 @@ def session_set_target(ctx: ToolContext, args: dict) -> dict:
         ctx.set_session_target(name)
     except Exception as e:  # noqa: BLE001
         return {"status": "error",
-                "error": f"数据库已改名为 {name}，但更新交互 session 失败: {e}",
-                "target": name, "renamed_from": current}
-    return {"status": "ok", "target": name, "renamed_from": current,
+                "error": f"目标已创建并绑定 run，但更新交互 session 失败: {e}",
+                "target": name}
+    return {"status": "ok", "target": name, "created_from": current,
             "note": "后续 state_* 工具请使用新的 target 名"}
-
 
 def _caps(ctx: ToolContext, args: dict) -> dict:
     from .providers import inventory
@@ -1094,14 +1103,14 @@ def default_registry() -> Registry:
             "source": {"type": "string"}},
          "required": ["kind", "title", "body_md"]}, _kb_propose))
     r.register(ToolSpec(
-        "session_set_target",
-        "给当前 bootstrap session 设置/规范化 target 名(识别固件后调用一次;"
-        "只对 TUI 的 session-* 占位目标有效;不创建新 target,不改变 target id)",
+        "target_create",
+        "从共享默认 target(session)创建真实固件 target,并把当前 run 绑定过去"
+        "(识别固件后调用一次;默认 target 保留,不覆盖其他 session)",
         {"type": "object", "properties": {
-            "name": {"type": "string", "description": "新的 target 名(唯一,不含 / \\ 或 ..,≤120 字符)"},
+            "name": {"type": "string", "description": "唯一 target 名(不含 / \\ 或 ..,≤120 字符)"},
             "vendor": {"type": "string"}, "product": {"type": "string"},
             "version": {"type": "string"}, "arch": {"type": "string"}},
-         "required": ["name"]}, session_set_target))
+         "required": ["name"]}, target_create))
     from .skills import register_tools as _register_skill_tools
     _register_skill_tools(r, "")
     # Pi Codemode + deferred tool discovery. Register lazily to avoid a cycle

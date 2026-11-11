@@ -1551,9 +1551,9 @@ class Runner:
                             stalled = True
                         run_tools += 1
                         out = self._exec_tool_call(ctx, call, rid)
-                        if call.get("name") == "session_set_target" and out.get("target"):
-                            # Rename keeps target_id, but the rest of this turn must
-                            # use the new display name for closure/mirror checks.
+                        if call.get("name") == "target_create" and out.get("target"):
+                            # target_create moves this run's target_id; use the
+                            # new target name for the rest of the turn.
                             target = self._run_target_name(rid, target)
                         # Build the model-visible projection exactly once.  Calling
                         # _bounded_tool_result twice can create two temp paths for
@@ -1596,9 +1596,9 @@ class Runner:
                         _event(self.con, "run.stalled", rid, {"repeats": self.stall_repeats})
                         state = "paused"
                         break
-                    # session_set_target renames the target row without changing
-                    # its id.  The rest of this turn must use the new display name
-                    # for closure/mirror checks and round events.
+                    # target_create atomically inserts a target and moves this
+                    # run's target_id.  The rest of this turn must use the new
+                    # name for closure/mirror checks and round events.
                     target = self._run_target_name(rid, target)
                 step += 1
                 _persist()

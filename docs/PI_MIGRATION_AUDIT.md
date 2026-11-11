@@ -3,7 +3,7 @@
 
 > **当前状态更新（2026-11-08）**：Chrome Live MCP 已真实连接并注册 32 个工具；Chrome/IDA 的真实 smoke 见 `state/_scratch` 之外的交付记录；旧 `tool-quirks`/`vuln-patterns`/`misreports` Markdown 与 `tools/kb.py` 已移出当前树；知识运行时只走 SQLite `knowledge_entries`。历史表格保留其审计时点结论，不代表当前事实。
 
-> **2026-11-11 prompt-template 更新**：fw-core TUI 现在通过 `fwcore/prompt_templates.py` 加载包内置 `fwcore/prompts/templates/*.md`，并用 `.pi/prompts/*.md` 同名覆盖为 `/name` 命令（如 `/fw`、`/提交`），并只把名称/说明列入 model-facing Slash Commands 目录；`/fw` 是模板，无 target 时 TUI 建 `session-*` 占位 target，agent 用 `session_set_target` 改名。下文历史表格中“fwcore 不加载”的描述是审计基线，不代表当前实现。
+> **2026-11-11 prompt-template 更新**：fw-core TUI 现在通过 `fwcore/prompt_templates.py` 加载包内置 `fwcore/prompts/templates/*.md`，并用 `.pi/prompts/*.md` 同名覆盖为 `/name` 命令（如 `/fw`、`/提交`），并只把名称/说明列入 model-facing Slash Commands 目录；`/fw` 是模板，无 target 时 TUI 使用共享默认 target `session`，agent 用 `target_create` 新建真实 target 并改绑当前 run；默认 target 保留。下文历史表格中“fwcore 不加载”的描述是审计基线，不代表当前实现。
 
 # Pi → firmware-loop 迁移完整性审计
 

@@ -1106,7 +1106,7 @@ def test_fw_template_bootstraps_target_and_agent_names_it(tmp_path):
     rt = AppRuntime(cfg, target=None,
                     adapter_factory=lambda name: ScriptedAdapter(script=[
                         {"content": "先确认固件名。", "tool_calls": [{
-                            "id": "c1", "name": "session_set_target",
+                            "id": "c1", "name": "target_create",
                             "args": {"name": "Zyxel-GS1900"}}]},
                         {"content": "FINAL: named", "tool_calls": []},
                     ]),
@@ -1127,8 +1127,9 @@ def test_fw_template_bootstraps_target_and_agent_names_it(tmp_path):
             row = app.sess.services.con.execute(
                 "SELECT status FROM targets WHERE name=?", ("Zyxel-GS1900",)).fetchone()
             assert row is not None and row["status"] == "active"
-            assert not app.sess.services.con.execute(
-                "SELECT 1 FROM targets WHERE name LIKE 'session-%'").fetchone()
+            default = app.sess.services.con.execute(
+                "SELECT status FROM targets WHERE name='session'").fetchone()
+            assert default is not None and default["status"] == "active"
             users = [w for w in app.screen.walk_children(MessageWidget)
                      if w.role == "user"]
             assert any("GS1900" in w._text for w in users)
