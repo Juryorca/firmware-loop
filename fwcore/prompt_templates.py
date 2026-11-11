@@ -58,8 +58,11 @@ def discover(root: str) -> dict[str, PromptTemplate]:
         try:
             with open(path, encoding="utf-8") as f:
                 raw = f.read()
-        except OSError:
+        except (OSError, UnicodeError):
             continue
+        # Templates may be edited on Windows; normalize before frontmatter
+        # parsing so CRLF does not turn the body into one opaque line.
+        raw = raw.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
         meta, body = _frontmatter(raw)
         if not body.strip():
             continue

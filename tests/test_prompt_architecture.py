@@ -116,3 +116,31 @@ def test_pi_prompt_templates_discover_and_expand(tmp_path):
     assert "all=" in empty
     assert "fallback=nothing" in empty
     assert "nested=" in empty
+
+
+def test_prompt_templates_are_in_the_system_command_catalog(tmp_path):
+    """The model-facing command catalog must match what the TUI exposes."""
+    prompts = tmp_path / ".pi" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "review.md").write_text(
+        "---\n"
+        "description: Review staged changes\n"
+        "argument-hint: \"[focus]\"\n"
+        "---\n"
+        "Review ${1:-everything}.\n",
+        encoding="utf-8")
+    prompt = build_system_prompt(str(tmp_path))
+    assert "`/review [focus]`: Review staged changes (prompt template)" in prompt
+    assert "prompt template" in prompt
+
+
+def test_prompt_templates_accept_crlf_and_bom(tmp_path):
+    from fwcore.prompt_templates import discover, expand
+    prompts = tmp_path / ".pi" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "windows.md").write_bytes(
+        b"\xef\xbb\xbf---\r\ndescription: Windows template\r\n---\r\nUse $1\r\n")
+    found = discover(str(tmp_path))
+    assert "windows" in found
+    assert found["windows"].description == "Windows template"
+    assert expand(found["windows"], "one") == "Use one\n"

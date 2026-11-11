@@ -1,6 +1,6 @@
 """System Prompt 的唯一组装入口。
 
-顺序固定：core system -> root AGENTS.md -> Skills 目录 -> Slash Commands。
+顺序固定：core system -> root AGENTS.md -> Skills 目录 -> Slash Commands（静态 + .pi/prompts 模板目录）。
 - 知识正文不进入 system；由 knowledge_search/get 按需返回。
 - LOOP/知识库正文不进入 system；由 Skill/知识工具按需加载。
 - 这里只做文本组装，不执行研究逻辑。
@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 
 from .commands import COMMANDS
+from .prompt_templates import discover
 from .skills import catalog as skill_catalog
 
 CORE_PATH = os.path.join(os.path.dirname(__file__), "prompts", "system.md")
@@ -46,11 +47,18 @@ def _skill_section(root: str) -> str:
     return "\n".join(lines)
 
 
-def _command_section() -> str:
+def _command_section(root: str) -> str:
     lines = ["## User Slash Commands（仅用户输入触发，不是模型工具）", ""]
     for c in COMMANDS:
         hint = f" {c.arg_hint}" if c.arg_hint else ""
         lines.append(f"- `/{c.name}{hint}`: {c.description}")
+    static_names = {c.name for c in COMMANDS}
+    for tpl in discover(root).values():
+        if tpl.name in static_names:
+            continue
+        hint = f" {tpl.arg_hint}" if tpl.arg_hint else ""
+        desc = " ".join(tpl.description.split())[:240]
+        lines.append(f"- `/{tpl.name}{hint}`: {desc} (prompt template)")
     lines += ["", "命令由 fwapp 解析并由用户输入触发；模型不得自行调用、伪造或把它们当作 Skill。"]
     return "\n".join(lines)
 
@@ -60,5 +68,5 @@ def build_system_prompt(root: str) -> str:
     skills = _skill_section(root)
     if skills:
         parts += [skills]
-    parts += [_command_section()]
+    parts += [_command_section(root)]
     return "\n\n".join(parts).strip() + "\n"

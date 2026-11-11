@@ -108,7 +108,8 @@ description: 一句话说明适用场景（Agent 据此判断是否加载）
   `.pi/prompts/*.md` 的直接子文件（不递归）。文件名即命令名，frontmatter 的
   `description` / `argument-hint` 进入补全；参数按 Pi 的 `$1` / `$@` / `$ARGUMENTS` /
   `${1:-default}` / `${@:N}` / `${@:N:L}` 规则展开。模板只是 Markdown 文本，不执行代码，
-  也不注册成模型工具；`.pi/` 是本地/忽略目录。
+  也不注册成模型工具；`.pi/` 是本地/忽略目录。模板命令还会以名称/说明出现在
+  model-facing 的 `User Slash Commands` 目录中，但模型仍不能自行调用。
 - 静态命令名优先于同名模板。`/fw` 是**目标引导**（target bootstrap）内置命令：
   它负责创建/选择 target、开新 session，再把 `.pi/prompts/fw.md` 的正文作为任务文本提交；
   没有模板时使用内置的最小 fallback。其他模板（如 `/提交`）走通用模板执行路径。

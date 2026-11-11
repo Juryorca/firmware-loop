@@ -66,6 +66,7 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
 - Slash Commands 带补全:`/help /model /fw <目标> /target /resume /status /budget
   /hypotheses /evidence /skills /knowledge /tools /mcp /tool-setup /new /continue /compact /clear /expand /quit`；
   另从 `.pi/prompts/*.md` 加载 Pi 风格模板命令（如 `/提交 <报告>`），参数按 `$1` / `$@` 展开；
+  模板命令只在 model-facing `User Slash Commands` 目录列名称/说明，不注册成工具；
   `/fw` 是 target bootstrap，任务正文可来自 `.pi/prompts/fw.md`。
 - 目标生命周期：`targets.status` 为 `active` / `closed_confirmed` / `archived`。
   `archived` 只表示生命周期，不删除 SQLite 研究事实、`report/` 或 `SOURCE_URL.txt`；
