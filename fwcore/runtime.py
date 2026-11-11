@@ -2145,6 +2145,10 @@ def _render_for_summary(messages: list[dict], limit: int = 2_000_000) -> str:
             if c:
                 lines.append(f"[assistant] {c}")
         elif role == "tool":
+            # Pi's compaction serialization caps each tool result at 2000 chars.
+            # Keep the marker so the summarizer knows something was omitted.
+            if len(c) > 2000:
+                c = c[:2000] + f"\n[... {len(c) - 2000} more characters truncated]"
             lines.append(f"[tool {m.get('tool_call_id')}] {c}")
             images = [p for p in (m.get("parts") or [])
                       if isinstance(p, dict) and p.get("type") == "image"]
