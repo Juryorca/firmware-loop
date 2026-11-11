@@ -205,3 +205,21 @@ def test_summarizer_failure_keeps_history_and_cools_down(tmp_path):
     msgs = r._load_history(rid)
     assert any(m.get("role") == "tool" for m in msgs)
     assert not any("历史摘要" in (m.get("content") or "") for m in msgs)
+
+
+def test_compact_history_single_call_matches_pi_shape():
+    hist = [
+        {"role": "user", "content": "u" * 4000},
+        {"role": "assistant", "content": "a" * 4000},
+        {"role": "user", "content": "recent"},
+    ]
+    calls = []
+    def summarize(chunk):
+        calls.append(list(chunk))
+        return "single summary"
+    new, info = compact_history(hist, summarize, keep_recent_tokens=100,
+                                single_call=True)
+    assert len(calls) == 1
+    assert info["summarize_calls"] == 1
+    assert new[0]["content"].startswith("## 历史摘要") and "single summary" in new[0]["content"]
+    assert new[-1]["content"] == "recent"

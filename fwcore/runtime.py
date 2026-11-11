@@ -519,7 +519,10 @@ class Runner:
             out.append(row)
         return out
 
-    def _load_history(self, rid: str) -> list[dict]:
+    def _model_id(self) -> str:
+        return str(getattr(self.model, "model", "") or getattr(self.model, "name", "") or "")
+
+    def _load_history(self, rid: str, current_model: str | None = None) -> list[dict]:
         """Rebuild the active branch from append-only conversation entries.
 
         Pi keeps session entries and appends a compaction marker; it does not
@@ -607,7 +610,12 @@ class Runner:
                                              "arguments": tc.get("args") or "{}"}})
                 if content or calls:
                     msg = {"role": "assistant", "content": content}
-                    if meta.get("reasoning"):
+                    # Pi replays thinking only for the model that produced it.
+                    # Legacy rows without a model id remain replayable.
+                    if (meta.get("reasoning")
+                            and (not current_model
+                                 or not meta.get("model")
+                                 or meta.get("model") == current_model)):
                         msg["reasoning_content"] = meta["reasoning"]
                     if calls:
                         msg["tool_calls"] = calls
@@ -708,7 +716,7 @@ class Runner:
         row = self.con.execute("SELECT target_id,state FROM runs WHERE id=?", (rid,)).fetchone()
         if not row:
             raise KeyError(f"run 不存在: {rid}")
-        history = self._load_history(rid)
+        history = self._load_history(rid, self._model_id())
         if not history:
             raise RuntimeError("当前 session 没有可压缩的历史")
         before = estimate_tokens(history)
@@ -734,7 +742,7 @@ class Runner:
             new_history, info = compact_history(
                 history, _summarize, self.limits.keep_recent_tokens,
                 chunk_tokens=self.limits.summarize_chunk_tokens,
-                max_calls=self.limits.summarize_max_calls)
+                max_calls=self.limits.summarize_max_calls, single_call=True)
             if not info.get("compacted"):
                 raise RuntimeError("没有可压缩的完整协议组")
             summary = new_history[0].get("content", "")
@@ -1865,7 +1873,7 @@ class Runner:
         # 续跑已有 run 必须从检查点恢复历史:否则模型只看到新 goal,
         # 之前所有工具结果/结论都"消失"(resume 一直是这么做的,advance 漏了)
         hist = list(history) if history is not None else (
-            self._load_history(rid) if run_id else [])
+            self._load_history(rid, self._model_id()) if run_id else [])
         if run_id and not hist:
             row = self.con.execute("SELECT step,rounds FROM runs WHERE id=?", (rid,)).fetchone()
             if row and row["step"] > 0:
@@ -1963,7 +1971,7 @@ class Runner:
         if not row:
             raise KeyError(f"run 不存在: {rid}")
         self.domain.require_active_target(row["target_name"])
-        history = self._load_history(rid)
+        history = self._load_history(rid, self._model_id())
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)
         if row["step"] > 0 and not history:

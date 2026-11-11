@@ -199,8 +199,8 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   不用固定事件条数窗口;没有 provider usage 时显示 unknown,不回退旧值。
 - 阈值 = `window − output_reserve`(Pi 语义);1M 窗口/8k 预留 = 992k。
 - 压缩:按**协议组**切(assistant.tool_calls + 全部 tool 结果),保留最近 `keep_recent_tokens`;
-  被丢弃的历史走 `summarize_covered`:分块(默认 60k/块)→ 超大消息切片 → 归并;超 `summarize_max_calls`
-  或任一块为空 ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
+  被丢弃的历史按 Pi 语义**一次摘要请求**发送(`single_call=True`),不再按 60k 分块;摘要为空
+  ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
 - 摘要调用与普通调用同一条**调用前**预算检查,计入 `run_calls` 与 `model.call(kind=summarize)`。
 
 ## 6. 外部开发工具的历史对照(不是依赖,不再扩展)
@@ -223,7 +223,8 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 5. 逐字节一致只证明迁移兼容,不证明语义正确。
 6. 工具名 `^[A-Za-z0-9_-]+$`(点号名被端点 400 拒)。
 7. thinking 模式要求每条 assistant 回传 `reasoning_content`(空串也要);新进程 env 未继承会 400
-   ⇒ 默认补、显式 `FW_REASONING_CONTENT=0` 才关。
+   ⇒ 默认补、显式 `FW_REASONING_CONTENT=0` 才关。历史重建时只回放**当前 provider/api/model**
+   产生的 reasoning;不同模型的历史 thinking 丢弃(Pi `transformMessages` 语义)。
 8. 步数预算是每次调用一份,不能当绝对上限(否则 resume 原地不动)。
 9. 高风险工具默认拒绝;授权范围内分析工具自主运行(`Authz` 区分)。
 10. 不要凭"命令存在"推断"能力可用"(aarch64 tracer 实为 x86-64 等),必须探针。
@@ -245,7 +246,7 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 ## 9. 已知限制
 
 1. 已移除每步全量 checkpoint;历史由 append-only `conversation_entries` 重建,compaction 只追加摘要标记。
-2. 摘要为"每次新生成",无增量更新;长历史压缩需要多次摘要调用(计入预算)。
+2. 摘要为"每次新生成",无增量更新;Pi 对齐后旧历史一次摘要请求发送,不再按 60k 分块。
 3. 证据来源强度:弱来源(`command-write`)不计入 direct;但多数真实证据仍是弱来源。
 4. 单模型适配;MCP 与 IDA 是适配器,Agent Loop 不感知其细节。
 5. 无 CI;验证靠 `tools/fwcore_verify.sh`(pytest 79 文件 + capabilities + gates + 隔离 + ROADMAP 一致性 + 运行产物边界 + 迁移一致性/幂等 + git clean)。

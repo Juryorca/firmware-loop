@@ -71,20 +71,31 @@ SUMMARY_HEADER = "## 历史摘要(程序压缩;原文仍可用 tool_calls/产物
 
 def compact_history(history: list[dict], summarize, keep_recent_tokens: int = 20_000,
                     chunk_tokens: int = 60_000, max_calls: int = 20,
-                    ) -> tuple[list[dict], dict]:
+                    *, single_call: bool = False) -> tuple[list[dict], dict]:
     """超阈值时把较早的消息压成一段摘要;返回 (新历史, 统计)。
 
-    **覆盖保证**:被丢弃的每条消息都进入某一块摘要(summarize_covered);任何一块失败/为空
-    ⇒ 抛 SummarizationIncomplete,调用方必须保留原历史。
+    Pi semantics use ``single_call=True``: one summarization request for the
+    whole discarded prefix.  The chunked path remains for explicit callers and
+    compatibility tests.
     """
     cut = find_cut(history, keep_recent_tokens)
     if cut <= 0:
         return history, {"compacted": 0}
     old, recent = history[:cut], history[cut:]
-    summary, cover = summarize_covered(old, summarize, chunk_tokens=chunk_tokens,
-                                       max_calls=max_calls)
-    if not summary.strip():
-        raise SummarizationIncomplete("摘要为空")
+    if single_call:
+        # Pi-style compaction: one summarization request over the whole
+        # discarded prefix.  This intentionally does not split the prefix into
+        # 60k chunks (which made a 1.1M-token compact take many minutes).
+        summary = (summarize(old) or "").strip()
+        if not summary:
+            raise SummarizationIncomplete("摘要为空")
+        cover = {"chunks": 1, "messages": len(old), "pieces": len(old),
+                 "calls": 1, "merge_calls": 0}
+    else:
+        summary, cover = summarize_covered(old, summarize, chunk_tokens=chunk_tokens,
+                                           max_calls=max_calls)
+        if not summary.strip():
+            raise SummarizationIncomplete("摘要为空")
     head = {"role": "assistant", "content": f"{SUMMARY_HEADER}\n{summary}"}
     return [head] + recent, {"compacted": cut, "summary_chars": len(summary),
                              "summarize_calls": cover["calls"],

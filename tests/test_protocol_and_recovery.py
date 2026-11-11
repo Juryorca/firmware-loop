@@ -282,3 +282,18 @@ def test_system_prompt_is_built_from_repo_rules(tmp_path):
     assert "Available Skills" in prompt
     assert "反例 1" not in prompt                         # 案例正文不常驻
     assert "本轮目标" in prompt and "验证解析器" in prompt
+
+
+def test_load_history_drops_reasoning_from_other_model(tmp_path):
+    """Pi keeps thinking only for the model that produced it."""
+    con = _db.connect(str(tmp_path / "state" / "fwcore.sqlite3"))
+    dom = Domain(con, str(tmp_path))
+    dom.create_target("t1", version="1")
+    r = Runner(con, str(tmp_path), ScriptedModel(script=[]))
+    rid = r.start("t1", "goal")
+    dom.add_conversation(rid, "assistant", "x", meta={
+        "reasoning": "secret", "model": "model-a"}, client_id="a1")
+    same = [m for m in r._load_history(rid, "model-a") if m.get("role") == "assistant"]
+    other = [m for m in r._load_history(rid, "model-b") if m.get("role") == "assistant"]
+    assert same and same[-1].get("reasoning_content") == "secret"
+    assert other and "reasoning_content" not in other[-1]
