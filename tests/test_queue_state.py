@@ -44,3 +44,14 @@ def test_queue_state_flags_cost_only_stop_reason(tmp_path):
     r = _run(str(tmp_path), "t1")
     assert r.returncode == 0, r.stderr
     assert "BAD=1" in r.stdout
+
+
+def test_queue_state_local_guard_disable_marker(tmp_path):
+    dom = _target(tmp_path)
+    dom.add_hypothesis("t1", "待处理", body="b", source="test")
+    marker = tmp_path / ".pi" / "continue-guard.disabled"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("disabled for this session", encoding="utf-8")
+    r = _run(str(tmp_path), "t1")
+    assert r.returncode == 0, r.stderr
+    assert "OPEN=0" in r.stdout and "STOP= " in r.stdout
