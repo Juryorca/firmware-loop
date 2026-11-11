@@ -21,6 +21,8 @@ from textual.app import App, ComposeResult
 from textual.css.query import NoMatches
 from textual.widgets import Static
 
+from fwcore.domain import InvariantViolation
+
 from ..commands import BY_NAME
 from ..config import ModelConfigError, adapter_for, available_models, model_detail
 from ..runtime import AppRuntime
@@ -844,6 +846,39 @@ class FwApp(App):
             self.sess.resume_run(value)
             self._load_transcript()
             self._update_status()
+
+    def _cmd_fw(self, arg: str) -> None:
+        """Create/select a target and immediately start a fresh research run."""
+        name = (arg or "").strip()
+        if not name:
+            self._notice("用法: /fw <目标型号>", "warning")
+            return
+        if self.sess.busy:
+            self._notice("当前一轮仍在执行，暂时不能启动新目标。", "warning")
+            return
+        row = self.sess.services.con.execute(
+            "SELECT status FROM targets WHERE name=?", (name,)).fetchone()
+        if row is None:
+            try:
+                self.sess.services.domain.create_target(name)
+            except (InvariantViolation, ValueError) as e:
+                self._notice(f"目标创建失败: {e}", "error")
+                return
+        elif (row["status"] or "active") != "active":
+            self._notice(f"目标 {name} 已收尾或归档，不能开始新研究。", "warning")
+            return
+        self.sess.set_target(name)
+        if self.sess.target != name:
+            return
+        self.sess.new_session()
+        self._load_transcript()
+        self._stop_requested = False
+        task = (f"研究目标：{name}。\n\n"
+                "从立项开始：确认/下载固件，提取 rootfs，枚举攻击面并按 AGENTS.md "
+                "的研究循环开始。能自己做的直接做，不要先问我。")
+        self._append(MessageWidget("user", task))
+        self.sess.submit(task)
+        self._update_status()
 
     def _cmd_new(self, arg: str) -> None:
         self.sess.new_session()

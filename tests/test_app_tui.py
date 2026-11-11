@@ -1090,3 +1090,32 @@ def test_mouse_selection_works_on_assistant_markdown(tmp_path):
         asyncio.run(scenario())
     finally:
         rt.dispose()
+
+
+def test_fw_command_creates_target_and_starts_a_session(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1",
+                    adapter_factory=lambda name: ScriptedAdapter(
+                        script=[{"content": "FINAL: fw started", "tool_calls": []}]),
+                    mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause(0.3)
+            ed = app.query_one(PromptEditor)
+            ed.text = "/fw zyxel-demo"
+            await pilot.press("enter")
+            for _ in range(80):
+                await pilot.pause(0.1)
+                if app.sess.target == "zyxel-demo" and not app.sess.busy:
+                    break
+            assert app.sess.target == "zyxel-demo"
+            row = app.sess.services.con.execute(
+                "SELECT status FROM targets WHERE name=?", ("zyxel-demo",)).fetchone()
+            assert row is not None and row["status"] == "active"
+            assert app.sess.run_id is not None
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()

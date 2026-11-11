@@ -63,7 +63,7 @@ fwcore/cli.py                     ← 统一入口(已有研究子命令不变)
   阻塞的 SSE read 会立即退出;Run 暂停、部分 assistant 保留、预算只记一次。
 - 工具调用参数分片接收、完整组装并校验后才执行;状态实时更新,可折叠/展开
   (Ctrl+O),展示参数、结果、stdout 摘录。
-- Slash Commands 带补全:`/help /model /target /resume /status /budget
+- Slash Commands 带补全:`/help /model /fw <目标> /target /resume /status /budget
   /hypotheses /evidence /skills /knowledge /tools /mcp /tool-setup /new /continue /compact /clear /expand /quit`。
 - 目标生命周期：`targets.status` 为 `active` / `closed_confirmed` / `archived`。
   `archived` 只表示生命周期，不删除 SQLite 研究事实、`report/` 或 `SOURCE_URL.txt`；
