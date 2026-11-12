@@ -407,14 +407,13 @@ class Runner:
         `operation` selects a fixed SQL statement; no caller-controlled SQL
         fragment is concatenated into the query.
         """
-        sql = _RUNNING_UPDATES.get(operation)
-        if sql is None:
+        if operation not in _RUNNING_UPDATES:
             raise ValueError(f"未知 run 更新操作: {operation}")
         me = os.getpid()
         st = _proc_starttime(me)
         cur = None
         with _db.Tx(self.con) as c:
-            cur = c.execute(sql, (*params, rid, me, st))
+            cur = c.execute(_RUNNING_UPDATES[operation], (*params, rid, me, st))
         return cur is not None and cur.rowcount > 0
 
     def _owns(self, rid: str) -> bool:
@@ -944,7 +943,13 @@ class Runner:
         st = _proc_starttime(me)
         cur = None
         with _db.Tx(self.con) as c:
-            cur = c.execute(_OWNER_COUNTERS, (calls, tools, elapsed, rid, me, st))
+            cur = c.execute(
+                "UPDATE runs SET model_calls=MAX(model_calls,?),"
+                " tool_calls=MAX(tool_calls,?), elapsed_s=MAX(elapsed_s,?)"
+                " WHERE id=? AND state IN ('running','paused')"
+                " AND IFNULL(pid,-1)=? AND IFNULL(pid_starttime,-1)=?",
+                (calls, tools, elapsed, rid, me, st),
+            )
         return cur is not None and cur.rowcount > 0
 
     def _persist_assistant(self, rid: str, reply: Reply, *, status: str,
@@ -1337,6 +1342,7 @@ class Runner:
 
         try:
             seen: dict[str, int] = {}
+            state_injected = False
             empty_streak = 0
             last_content_hashes: list[str] = []
             since = _now()
@@ -1464,24 +1470,54 @@ class Runner:
                     break
                 if steering == "ok":
                     _persist()
-                # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
-                # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
-                _sys = self.research.rules_prompt(target)
-                # 用户消息已在 history 中；动态状态只保留程序生成的研究事实。
-                # 这与 Pi 的 append-only custom/context message 语义一致。
-                _state = self.research.state_prompt(target, None, rid)
-                _last_usage = self._last_main_usage(rid)
-                _status = build_status(
-                    model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
-                    window=self.limits.context_tokens or None,
-                    output_reserve=self.limits.output_reserve_tokens,
-                    context_tokens=self.limits.context_tokens,
-                    last_prompt_tokens=_last_usage.get("prompt_tokens"),
-                    last_cached_tokens=_last_usage.get("cached_tokens"))
-                _state = _state + "\n\n" + _status.render()
-                _note = self._prepare_state.get("context_note")
-                if _note:
-                    _state += "\n\n## 轮前准备(程序注入)\n" + _note
+                # dynamic state is a turn boundary input, not a per-model-call
+                # trailer: injecting the full state after every tool result
+                # duplicates several KB of context without adding information.
+                if not state_injected:
+                    # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
+                    # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
+                    _sys = self.research.rules_prompt(target)
+                    # 用户消息已在 history 中；动态状态只保留程序生成的研究事实。
+                    _state = self.research.state_prompt(target, None, rid)
+                    _last_usage = self._last_main_usage(rid)
+                    _status = build_status(
+                        model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
+                        window=self.limits.context_tokens or None,
+                        output_reserve=self.limits.output_reserve_tokens,
+                        context_tokens=self.limits.context_tokens,
+                        last_prompt_tokens=_last_usage.get("prompt_tokens"),
+                        last_cached_tokens=_last_usage.get("cached_tokens"))
+                    _state = _state + "\n\n" + _status.render()
+                    _note = self._prepare_state.get("context_note")
+                    if _note:
+                        _state += "\n\n## 轮前准备(程序注入)\n" + _note
+                    # A failed session write must not consume a model call.
+                    next_call = run_calls + 1
+                    tail = history[-1] if history else None
+                    already = bool(tail and tail.get("role") == "user"
+                                   and tail.get("_context_only")
+                                   and tail.get("content") == _state)
+                    if not already:
+                        try:
+                            self._conversation_write(
+                                rid, "user", _state,
+                                client_id=f"context:{rid}:{step}:{next_call}",
+                                meta={"context_only": True, "source": "context"})
+                        except ConversationPersistError as e:
+                            _event(self.con, "context.persist_failed", rid,
+                                   {"error": str(e)[:300]})
+                            # A context that the model would have seen but the
+                            # session did not record makes resume diverge. Fail closed.
+                            self._set_paused(rid, f"context_persist_failed: {str(e)[:300]}")
+                            state = "paused"
+                            _persist()
+                            self._checkpoint(rid, step, history)
+                            break
+                        history.append({"role": "user", "content": _state,
+                                        "_context_only": True})
+                    state_injected = True
+                else:
+                    _sys = self.research.rules_prompt(target)
                 # 预算判定必须在**计数之前**:被挡住的调用不该记账(时间/次数都一样)
                 if self.limits.time_exhausted(run_elapsed + (time.time() - t0)):
                     state = "paused"
@@ -1496,33 +1532,6 @@ class Runner:
                     self._limit_hit(rid, "max_model_calls",
                                     {"calls": run_calls, "limit": self.limits.max_model_calls})
                     break
-                # A failed session write must not consume a model call.  Do not
-                # check ownership before the context write: the summary reserve
-                # may already have lost ownership, and the existing contract is
-                # to attempt the main reserve once before observing owner loss.
-                next_call = run_calls + 1
-                tail = history[-1] if history else None
-                already = bool(tail and tail.get("role") == "user"
-                               and tail.get("_context_only")
-                               and tail.get("content") == _state)
-                if not already:
-                    try:
-                        self._conversation_write(
-                            rid, "user", _state,
-                            client_id=f"context:{rid}:{step}:{next_call}",
-                            meta={"context_only": True, "source": "context"})
-                    except ConversationPersistError as e:
-                        _event(self.con, "context.persist_failed", rid,
-                               {"error": str(e)[:300]})
-                        # A context that the model would have seen but the
-                        # session did not record makes resume diverge. Fail closed.
-                        self._set_paused(rid, f"context_persist_failed: {str(e)[:300]}")
-                        state = "paused"
-                        _persist()
-                        self._checkpoint(rid, step, history)
-                        break
-                    history.append({"role": "user", "content": _state,
-                                    "_context_only": True})
                 run_calls += 1
                 if not self._reserve_call(rid, run_calls):
                     run_calls -= 1

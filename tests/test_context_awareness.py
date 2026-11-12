@@ -101,10 +101,13 @@ def test_context_note_is_appended_and_persisted(tmp_path):
     rid = r.start("t1", "感知")
     r.run(rid, "t1")
     assert m.calls
-    for msgs in m.calls:
-        assert msgs[0]["role"] == "system"
-        assert "[Context status]" not in msgs[0]["content"], "状态块不得进 system"
-        assert "[Context status]" in msgs[-1]["content"], "状态块应在尾部"
+    assert m.calls[0][0]["role"] == "system"
+    assert "[Context status]" not in m.calls[0][0]["content"], "状态块不得进 system"
+    assert "[Context status]" in m.calls[0][-1]["content"], "状态块应在首个请求尾部"
+    # 状态是 turn 输入，不是每个 tool result 后都要追加一份。
+    for prev, cur in zip(m.calls, m.calls[1:], strict=False):
+        assert not any("[Context status]" in (msg.get("content") or "")
+                       for msg in cur[len(prev):])
     # 动态 context 块不写入 session;session 只保留用户/assistant/tool 条目。
     assert r._load_history(rid)
 
@@ -176,6 +179,6 @@ def test_summarize_usage_is_ignored_for_last_main_usage(tmp_path):
     r = Runner(con, root, Rec(), mcp=False, watchdog=False)
     rid = r.start("t1", "usage ordering")
     _usage_event(con, rid, {"prompt_tokens": 11})
-    for i in range(40):
+    for _ in range(40):
         _usage_event(con, rid, {"prompt_tokens": 99_999}, kind="summarize")
     assert r._last_main_usage(rid)["prompt_tokens"] == 11
