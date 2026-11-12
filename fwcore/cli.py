@@ -4,6 +4,7 @@
   init <target> [--version V] [--vendor X] [--sha256 H]   建目标
   hyp add <target> <title> [--body B] [--source S] [--priority N]
   surface add <target> <key> [--disposition D] [--note N]
+  surface set <target> <key> --disposition D [--evidence E] [--note N]
   attempt start <hyp-id> <method> / attempt finish <attempt-id> <result> [--note N]
   evidence add <target> --kind K (--path P | --capture C) [--attempt A] [--hypothesis H]
   observe <target> --text T [--attempt A]
@@ -89,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     q = sp.add_parser("add"); q.add_argument("target"); q.add_argument("key")
     q.add_argument("--disposition", default="unjudged"); q.add_argument("--note")
     q.add_argument("--reachability"); q.add_argument("--input-control")
+    q = sp.add_parser("set"); q.add_argument("target"); q.add_argument("key")
+    q.add_argument("--disposition", required=True)
+    q.add_argument("--evidence"); q.add_argument("--note")
 
     p = sub.add_parser("attempt"); sp = p.add_subparsers(dest="att_cmd", required=True)
     q = sp.add_parser("start"); q.add_argument("hypothesis"); q.add_argument("method")
@@ -225,9 +229,14 @@ def main(argv: list[str] | None = None) -> int:
             print(dom.add_hypothesis(args.target, args.title, body=args.body,
                                      source=args.source, priority=args.priority))
         elif args.cmd == "surface":
-            print(dom.add_surface(args.target, args.key, disposition=args.disposition,
-                                  note=args.note, reachability=args.reachability,
-                                  input_control=args.input_control))
+            if args.surf_cmd == "set":
+                dom.set_surface_disposition(args.target, args.key, args.disposition,
+                                            evidence_id=args.evidence, note=args.note)
+                print(f"面 {args.key} → {args.disposition}")
+            else:
+                print(dom.add_surface(args.target, args.key, disposition=args.disposition,
+                                      note=args.note, reachability=args.reachability,
+                                      input_control=args.input_control))
         elif args.cmd == "attempt":
             if args.att_cmd == "start":
                 print(dom.start_attempt(args.hypothesis, args.method))
