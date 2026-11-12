@@ -236,6 +236,14 @@ def to_responses_input(messages: list[dict], *, supports_vision: bool = False) -
             if isinstance(text, str) and text:
                 out.append({"role": role, "content": text})
         elif role == "assistant":
+            signature = m.get("reasoning_signature")
+            if isinstance(signature, str) and signature:
+                try:
+                    reasoning_item = json.loads(signature)
+                except (TypeError, ValueError):
+                    reasoning_item = None
+                if isinstance(reasoning_item, dict) and reasoning_item.get("type") == "reasoning":
+                    out.append(reasoning_item)
             text = m.get("content")
             if isinstance(text, str) and text:
                 out.append({"role": "assistant",
@@ -317,11 +325,24 @@ class OpenAIResponsesModel:
         data = self.transport(url, {"Content-Type": "application/json",
                                     "Authorization": f"Bearer {key}"}, payload)
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        reasoning_signature = ""
+        reasoning_redacted = False
         calls: list[dict] = []
         for item in data.get("output") or []:
             if not isinstance(item, dict):
                 continue
-            if item.get("type") == "message":
+            if item.get("type") == "reasoning":
+                reasoning_signature = json.dumps(item, ensure_ascii=False)
+                for part in item.get("summary") or item.get("content") or []:
+                    if isinstance(part, dict):
+                        text = part.get("text")
+                        if isinstance(text, str) and text:
+                            reasoning_parts.append(text)
+                if item.get("encrypted_content") and not reasoning_parts:
+                    reasoning_parts.append("[Reasoning redacted]")
+                    reasoning_redacted = True
+            elif item.get("type") == "message":
                 for part in item.get("content") or []:
                     if isinstance(part, dict) and part.get("type") == "output_text":
                         text_parts.append(str(part.get("text") or ""))
@@ -337,6 +358,9 @@ class OpenAIResponsesModel:
                                            else json.dumps(raw, ensure_ascii=False)},
                               "_args": args})
         return {"content": "".join(text_parts), "tool_calls": calls,
+                "reasoning_content": "\n".join(reasoning_parts),
+                "reasoning_signature": reasoning_signature,
+                "reasoning_redacted": reasoning_redacted,
                 "finish_reason": data.get("status") or "",
                 "usage": data.get("usage") or {}}
 
@@ -486,7 +510,8 @@ class OpenAICompatModel:
                 "usage": data.get("usage") or {}}
 
 
-def assistant_message(content: str, calls: list[dict], reasoning: str = "") -> dict:
+def assistant_message(content: str, calls: list[dict], reasoning: str = "",
+                      reasoning_signature: str = "", reasoning_redacted: bool = False) -> dict:
     """把模型返回的 tool_calls 规范成"可以回填进历史"的 assistant 消息。
 
     `reasoning_content` 是 DeepSeek thinking 模式的**必需回传字段**(不回传 ⇒ 400),
@@ -497,6 +522,10 @@ def assistant_message(content: str, calls: list[dict], reasoning: str = "") -> d
     # 非 thinking provider 多带未知字段会被拒 ⇒ 用 FW_REASONING_CONTENT=1 显式开启。
     if reasoning or _emit_reasoning():
         base["reasoning_content"] = reasoning or ""
+    if reasoning_signature:
+        base["reasoning_signature"] = reasoning_signature
+    if reasoning_redacted:
+        base["reasoning_redacted"] = True
     if not calls:
         return base
     norm = []

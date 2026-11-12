@@ -135,3 +135,41 @@ def test_http_transport_rejects_bad_host_and_port():
     for url in ("http:///x", "http://127.0.0.1:bad/v1"):
         with pytest.raises(ModelHTTPError):
             http_transport(url, {}, {})
+
+
+def test_responses_reasoning_item_round_trips():
+    from fwcore.model_client import (
+        OpenAIResponsesModel,
+        assistant_message,
+        to_responses_input,
+    )
+
+    class Resp:
+        def __init__(self):
+            self.sent = None
+
+        def __call__(self, url, headers, payload):
+            self.sent = payload
+            return {
+                "status": "completed",
+                "output": [
+                    {"type": "reasoning", "id": "rs_1",
+                     "summary": [{"type": "summary_text", "text": "thought"}],
+                     "encrypted_content": "enc"},
+                    {"type": "message", "content": [
+                        {"type": "output_text", "text": "hello"}]},
+                ],
+            }
+
+    t = Resp()
+    model = OpenAIResponsesModel(model="m", api_key="k", transport=t)
+    raw = model.chat([{"role": "user", "content": "q"}], [])
+    assert raw["reasoning_content"] == "thought"
+    assert '"type": "reasoning"' in raw["reasoning_signature"]
+
+    msg = assistant_message("hello", [], raw["reasoning_content"],
+                            raw["reasoning_signature"], raw["reasoning_redacted"])
+    assert msg["reasoning_signature"] == raw["reasoning_signature"]
+    sent = to_responses_input([msg])
+    assert sent[0]["type"] == "reasoning" and sent[0]["encrypted_content"] == "enc"
+    assert sent[-1]["role"] == "assistant"

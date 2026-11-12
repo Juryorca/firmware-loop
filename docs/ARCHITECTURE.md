@@ -206,7 +206,7 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
 - 摘要尾部按 Pi 追加 `<read-files>` / `<modified-files>`；只从显式 `fs_read` / `write` / `edit`
   工具参数收集，`shell_exec` 的隐式文件改动不猜。
-- 主动压缩：模型可调用 `compact_now(keep,next_step)`。75% 起允许、80% 为硬边界；请求在工具批次
+- 主动压缩：模型可调用 `compact_now(keep,next_step)` 与 `context_status`。75% 起允许、80% 为硬边界；请求在工具批次
   结束后才真正压缩，成功后写入一条自动 resume user 消息，回到 `next_step`。每个 Runner 最多 5 次
   自动 resume，并带 20 个百分点冷却；上下文 usage 未知或低于阈值时拒绝。
 - 摘要调用与普通调用同一条**调用前**预算检查,计入 `run_calls` 与 `model.call(kind=summarize)`。
@@ -232,7 +232,9 @@ DeepSeek 自带**前缀缓存**(默认开启,客户端只需保持前缀稳定�
 6. 工具名 `^[A-Za-z0-9_-]+$`(点号名被端点 400 拒)。
 7. thinking 模式要求每条 assistant 回传 `reasoning_content`(空串也要);新进程 env 未继承会 400
    ⇒ 默认补、显式 `FW_REASONING_CONTENT=0` 才关。历史重建时只回放**当前 provider/api/model**
-   产生的 reasoning;不同模型的历史 thinking 丢弃(Pi `transformMessages` 语义)。
+   产生的 reasoning;不同模型的历史 thinking 丢弃(Pi `transformMessages` 语义)。OpenAI Responses
+   的 reasoning item 以原始 JSON signature 持久化并只在同一 scope 回放；Chat Completions 的
+   DeepSeek `reasoning_content` 仍按原协议回传。
 8. 步数预算是每次调用一份,不能当绝对上限(否则 resume 原地不动)。
 9. 高风险工具默认拒绝;授权范围内分析工具自主运行(`Authz` 区分)。
 10. 不要凭"命令存在"推断"能力可用"(aarch64 tracer 实为 x86-64 等),必须探针。

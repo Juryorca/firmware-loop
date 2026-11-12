@@ -628,3 +628,14 @@ def test_runner_refuses_archived_target(setup):
     with pytest.raises(Exception) as e:
         Runner(con, root, ScriptedModel(script=[]), mcp=False, watchdog=False).start("t1")
     assert "归档" in str(e.value) or "active" in str(e.value)
+
+
+def test_context_status_tool_uses_provider_usage(setup):
+    _con, dom, root = setup
+    ctx = ToolContext(domain=dom, root=root,
+                      context_usage=lambda: {"used": 800, "window": 1000,
+                                             "percent": 80.0})
+    out = default_registry().call(ctx, "context_status", {})
+    assert out["status"] == "ok"
+    assert out["usage"]["percent"] == 80.0
+    assert "provider prompt usage" in out["note"]

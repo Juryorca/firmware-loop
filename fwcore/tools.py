@@ -84,6 +84,7 @@ class ToolContext:
     # Self-compaction: called by the compact_now tool; the Runner defers the
     # actual summary until the current tool batch is persisted.
     compact_request: Callable[[str, str], dict] | None = None
+    context_usage: Callable[[], dict | None] | None = None
 
 
 @dataclass
@@ -838,6 +839,16 @@ def _compact_now(ctx: ToolContext, args: dict) -> dict:
     return ctx.compact_request(keep, next_step)
 
 
+def _context_status(ctx: ToolContext, args: dict) -> dict:
+    if ctx.context_usage is None:
+        return {"status": "error", "error": "当前运行没有上下文档位信息"}
+    usage = ctx.context_usage()
+    if usage is None:
+        return {"status": "error", "error": "上下文用量未知；不能据此判断是否该压缩"}
+    return {"status": "ok", "usage": usage,
+            "note": "这是最近一次 main 请求的 provider prompt usage；汇总调用不计入。"}
+
+
 def _caps(ctx: ToolContext, args: dict) -> dict:
     from .providers import inventory
     from .toolmeta import ToolConfigError
@@ -1115,6 +1126,12 @@ def default_registry() -> Registry:
             "tags": {"type": "array", "items": {"type": "string"}},
             "source": {"type": "string"}},
          "required": ["kind", "title", "body_md"]}, _kb_propose))
+    r.register(ToolSpec(
+        "context_status",
+        "查看当前上下文窗口用量：provider prompt tokens / window / 百分比 / 距自动压缩阈值。"
+        "不传参数；与模型请求尾部注入的 [Context status] 使用同一个 provider usage。",
+        {"type": "object", "properties": {}}, _context_status))
+
     r.register(ToolSpec(
         "compact_now",
         "主动压缩当前会话并自动继续。仅当上下文状态显示 >=75% 且当前任务已完成、测试通过、"

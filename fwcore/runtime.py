@@ -644,6 +644,10 @@ class Runner:
                             replay = False
                         if replay:
                             msg["reasoning_content"] = meta["reasoning"]
+                            if meta.get("reasoning_signature"):
+                                msg["reasoning_signature"] = meta["reasoning_signature"]
+                            if meta.get("reasoning_redacted"):
+                                msg["reasoning_redacted"] = True
                     if calls:
                         msg["tool_calls"] = calls
                     messages.append(msg)
@@ -953,6 +957,8 @@ class Runner:
                                   "args": c.get("args") or {}} for c in reply.tool_calls],
             "reasoning": reply.reasoning or "",
             "reasoning_len": len(reply.reasoning or ""),
+            "reasoning_signature": reply.reasoning_signature or "",
+            "reasoning_redacted": bool(reply.reasoning_redacted),
         }
         if error:
             meta["error"] = error[:300]
@@ -1629,7 +1635,8 @@ class Runner:
                                       policy=self.policy, research=self.research,
                                       set_session_target=self.on_session_target,
                                       compact_request=lambda keep, next_step: self._request_compaction(
-                                          rid, keep, next_step))
+                                          rid, keep, next_step),
+                                      context_usage=lambda: self._context_usage_for_tool(rid))
                     stalled = False
                     calls_this_turn = list(reply.tool_calls)
                     conv_failed = False

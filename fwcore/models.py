@@ -52,6 +52,9 @@ class Reply:
     usage: dict = field(default_factory=dict)     # token 统计(服务端给就给)
     tool_calls: list[dict] = field(default_factory=list)   # [{id, name, args(dict), args_raw(str)}]
     reasoning: str = ""
+    # Provider-native thinking replay material (e.g. OpenAI Responses reasoning JSON).
+    reasoning_signature: str = ""
+    reasoning_redacted: bool = False
     # 流式取消/截断时被丢弃的未完成 call 数;只用于本轮控制,不进入 assistant 历史
     dropped_tool_calls: int = 0
 
@@ -60,7 +63,8 @@ class Reply:
                   "function": {"name": c["name"], "arguments": c.get("args_raw") or json.dumps(c["args"] or {},
                                                                                               ensure_ascii=False)}}
                  for c in self.tool_calls]
-        return assistant_message(self.content, calls, self.reasoning)
+        return assistant_message(self.content, calls, self.reasoning,
+                                 self.reasoning_signature, self.reasoning_redacted)
 
 
 class Adapter(Protocol):
@@ -238,6 +242,9 @@ class OpenAIResponsesAdapter:
             calls.append({"id": c.get("id"), "name": fn.get("name"),
                           "args": c.get("_args") or {}, "args_raw": fn.get("arguments")})
         return Reply(content=r.get("content") or "", tool_calls=calls,
+                     reasoning=r.get("reasoning_content") or "",
+                     reasoning_signature=r.get("reasoning_signature") or "",
+                     reasoning_redacted=bool(r.get("reasoning_redacted")),
                      finish_reason=r.get("finish_reason") or "",
                      usage=r.get("usage") or {})
 
