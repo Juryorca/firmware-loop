@@ -198,7 +198,10 @@ def test_submit_while_busy_is_queued_and_steers_next_turn(tmp_path):
         sess = rt.session
         sess.submit("第一问")
         t0 = time.time()
-        while not sess.busy and time.time() - t0 < 3:
+        # Wait until the first model request has actually started.  If the
+        # message is queued before that boundary it is legitimately steering
+        # the first request, not a next-turn follow-up.
+        while (not sess.busy or adapter.n < 1) and time.time() - t0 < 3:
             time.sleep(0.02)
         sess.submit("第二问")            # 运行中 ⇒ 排队
         assert sess.pending == ["第二问"]
@@ -210,6 +213,52 @@ def test_submit_while_busy_is_queued_and_steers_next_turn(tmp_path):
         assert adapter.n == 2
         assert sess.pending == []
         assert sess.services.con.execute("SELECT COUNT(*) n FROM runs").fetchone()["n"] == 1
+    finally:
+        rt.dispose()
+
+
+def test_queued_message_is_injected_before_next_model_call(tmp_path):
+    _root, cfg = make_ws(tmp_path)
+
+    class ToolThenFinal:
+        name = "scripted"
+
+        def __init__(self):
+            self.calls: list[list[dict]] = []
+
+        def chat(self, messages, tools):
+            self.calls.append(list(messages))
+            if len(self.calls) == 1:
+                time.sleep(0.25)       # leave a window for the queued message
+                return Reply(content="", tool_calls=[{
+                    "id": "c1", "name": "shell_exec",
+                    "args": {"command": "true"},
+                }])
+            return Reply(content="FINAL: done", tool_calls=[])
+
+    adapter = ToolThenFinal()
+    rt = AppRuntime(cfg, target="t1", adapter_factory=lambda name: adapter,
+                    mcp=False, watchdog=False)
+    try:
+        sess = rt.session
+        sess.submit("first")
+        t0 = time.time()
+        while time.time() - t0 < 3:
+            if sess.busy and adapter.calls:
+                break
+            time.sleep(0.02)
+        assert sess.busy and adapter.calls
+        sess.submit("steer during the tool batch")
+        t0 = time.time()
+        while time.time() - t0 < 8:
+            if not sess.busy and not sess.pending:
+                break
+            time.sleep(0.02)
+        assert not sess.pending
+        assert len(adapter.calls) >= 2
+        assert any(m.get("role") == "user"
+                   and "steer during" in (m.get("content") or "")
+                   for m in adapter.calls[1])
     finally:
         rt.dispose()
 

@@ -312,6 +312,29 @@ class AgentSession:
             return
         self._q.put(("turn", text, client_id, target, run_id))
 
+    def _peek_steering(self, rid: str, target: str) -> dict | None:
+        """Return the next queued message that belongs to this run, without removing it.
+
+        The Runner persists it on its own SQLite connection and only then calls
+        ``_ack_steering``.  Keeping the item in memory until the write succeeds
+        avoids losing a queued message on a session-write failure.
+        """
+        with self._lock:
+            for text, client_id, item_target, item_run in self._pending:
+                if item_run not in (None, rid):
+                    continue
+                if item_target not in (None, target):
+                    continue
+                return {"text": text, "client_id": client_id}
+        return None
+
+    def _ack_steering(self, client_id: str) -> None:
+        with self._lock:
+            for i, (_text, cid, _target, _run) in enumerate(self._pending):
+                if cid == client_id:
+                    del self._pending[i]
+                    return
+
     def new_session(self, text: str | None = None) -> None:
         with self._lock:
             if self._busy:
@@ -589,6 +612,8 @@ class AgentSession:
             watchdog_poll_s=5.0, mcp_call_timeout=120.0,
             on_stream=self._on_stream, stop_event=self._cancel_event,
             policy=DirectPolicy(), on_session_target=self._on_target_set,
+            on_steering=self._peek_steering,
+            on_steering_ack=self._ack_steering,
         )
 
     def mcp_status(self) -> dict:

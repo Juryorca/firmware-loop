@@ -129,7 +129,9 @@ class Runner:
                  on_stream: Callable[[dict], None] | None = None,
                  stream: bool = True,
                  stop_event=None,
-                 on_session_target: Callable[[str], None] | None = None):
+                 on_session_target: Callable[[str], None] | None = None,
+                 on_steering: Callable[[str, str], dict | None] | None = None,
+                 on_steering_ack: Callable[[str], None] | None = None):
         self.con = con
         self.root = root
         self.domain = Domain(con, root)
@@ -168,6 +170,11 @@ class Runner:
         # 会话级取消(不等 DB 写锁):turn 循环在安全点检查
         self.stop_event = stop_event
         self.on_session_target = on_session_target
+        # A session-level queue may hand one user message in at a safe model
+        # boundary.  The callback persists the queued entry (queued -> ok) and
+        # returns its text; the core only inserts it into the current history.
+        self.on_steering = on_steering
+        self.on_steering_ack = on_steering_ack
         self.stream_control: StreamControl | None = None
         self._last_usage: dict = {}
         self._compact_cooldown_until = -1
@@ -515,7 +522,7 @@ class Runner:
         tool_call/tool_result protocol; cancelled/queued user input is not.
         """
         rows = self.con.execute(
-            "SELECT * FROM conversation_entries WHERE run_id=? ORDER BY rowid",
+            "SELECT * FROM conversation_entries WHERE run_id=? ORDER BY created_at, rowid",
             (rid,)).fetchall()
         out = []
         for row in rows:
@@ -1215,6 +1222,52 @@ class Runner:
         return ok
 
     # ---------------- 一轮 = 一个模型-工具交互序列 ----------------
+    def _inject_steering(self, rid: str, target: str, history: list[dict]) -> str:
+        """Persist and insert one queued user message before the next request.
+
+        Returns "none" when there is no queued item, "ok" after a successful
+        insert, and "error" when the session write failed (the caller must
+        pause; the pending item is not acknowledged and remains queued).
+        """
+        callback = self.on_steering
+        if callback is None:
+            return "none"
+        try:
+            item = callback(rid, target)
+        except Exception as e:  # noqa: BLE001 - a queue failure must not kill the turn
+            with contextlib.suppress(Exception):
+                _event(self.con, "run.steering_failed", rid,
+                       {"error": str(e)[:300]})
+            return "none"
+        if not item:
+            return "none"
+        text = str(item.get("text") or "").strip()
+        client_id = str(item.get("client_id") or "")
+        if not text:
+            return "none"
+        if not self.is_running_owner(rid):
+            return "none"
+        try:
+            # Runner's own connection owns the turn; do not write through the
+            # UI/application connection from the worker thread.
+            self._conversation_write(
+                rid, "user", text, status="ok", client_id=client_id or None,
+                meta={"source": "steer"})
+        except ConversationPersistError as e:
+            with contextlib.suppress(Exception):
+                _event(self.con, "run.steering_failed", rid,
+                       {"error": str(e)[:300], "client_id": client_id})
+            self._set_paused(rid, f"conversation_error: {str(e)[:300]}")
+            return "error"
+        ack = self.on_steering_ack
+        if ack is not None and client_id:
+            with contextlib.suppress(Exception):
+                ack(client_id)
+        history.append({"role": "user", "content": text})
+        with contextlib.suppress(Exception):
+            _event(self.con, "run.steering", rid, {"client_id": client_id})
+        return "ok"
+
     def turn(self, rid: str, target: str, goal: str | None, history: list[dict],
              budget: int | None = None) -> RunResult:
         budget = self.max_steps if budget is None else budget      # None = 不限步数
@@ -1400,6 +1453,17 @@ class Runner:
                         self._last_compact = {"before_tokens": before,
                                               "after_tokens": estimate_tokens(history), **_info}
                         _event(self.con, "run.compacted", rid, self._last_compact)
+                # A queued user message is steering input: deliver it at the
+                # next model boundary, after the current tool batch and before
+                # the next request.  It must be part of this turn's history.
+                steering = self._inject_steering(rid, target, history)
+                if steering == "error":
+                    state = "paused"
+                    _persist()
+                    self._checkpoint(rid, step, history)
+                    break
+                if steering == "ok":
+                    _persist()
                 # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
                 # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
                 _sys = self.research.rules_prompt(target)

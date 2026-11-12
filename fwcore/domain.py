@@ -532,10 +532,21 @@ class Domain:
                     "SELECT id,status FROM conversation_entries WHERE run_id=? AND client_id=?",
                     (run_id, client_id)).fetchone()
                 if row:
-                    # queued → ok:执行时把同一条消息的状态推进,不产生第二条
+                    # queued → ok:执行时把同一条消息的状态推进,不产生第二条。
+                    # 父节点也在投递时改到当前历史尾部；入队时记的 parent
+                    # 只代表“当时看到的尾部”，排队跨过多个 turn 后会过期。
                     if status != "queued" and row["status"] == "queued":
-                        c.execute("UPDATE conversation_entries SET status=? WHERE id=?",
-                                  (status, row["id"]))
+                        delivered_parent = parent_id
+                        if delivered_parent is None:
+                            tail = c.execute(
+                                "SELECT id FROM conversation_entries"
+                                " WHERE run_id=? AND id<>? ORDER BY rowid DESC LIMIT 1",
+                                (run_id, row["id"])).fetchone()
+                            delivered_parent = tail["id"] if tail else None
+                        c.execute(
+                            "UPDATE conversation_entries"
+                            " SET status=?, parent_id=?, created_at=? WHERE id=?",
+                            (status, delivered_parent, _now(), row["id"]))
                     return row["id"]
             if parent_id is None:
                 row = c.execute(
@@ -588,7 +599,7 @@ class Domain:
         固定 SQL + 内存过滤(role 是封闭枚举,不需要动态拼 SQL)。
         """
         rows = [dict(r) for r in self.con.execute(
-            "SELECT * FROM conversation_entries WHERE run_id=? ORDER BY rowid",
+            "SELECT * FROM conversation_entries WHERE run_id=? ORDER BY created_at, rowid",
             (run_id,)).fetchall()]
         if roles:
             rows = [r for r in rows if r["role"] in roles]
