@@ -97,3 +97,13 @@ def test_revision_keeps_history_and_requires_review(tmp_path):
     assert len(versions) == 2
     assert versions[-1]["body_md"] == "新的知识正文"
     assert versions[0]["body_md"] != versions[-1]["body_md"]
+
+
+def test_search_splits_natural_language_into_terms(tmp_path):
+    _root_path, con = _root(tmp_path)
+    # The old exact-phrase query returned 0 for this even though both terms
+    # exist separately in the seeded entries.
+    hits = search(con, "qemu-unblob 环境 提取")
+    assert hits, "multi-term query must use OR terms instead of one exact phrase"
+    assert any("qemu" in (h["title"] + h["excerpt"]).lower() or
+               "unblob" in (h["title"] + h["excerpt"]).lower() for h in hits)

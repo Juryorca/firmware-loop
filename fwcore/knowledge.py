@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import sys
 from datetime import UTC, datetime
@@ -59,18 +60,40 @@ def _row(con: sqlite3.Connection, entry_id: str) -> dict | None:
     return dict(r) if r else None
 
 
+def _query_terms(query: str, *, limit: int = 16) -> list[str]:
+    """Split a natural-language query into searchable terms.
+
+    The old implementation wrapped the whole query in FTS quotes and used the
+    whole string for LIKE fallback.  A query like
+    "qemu-user shm 守护进程 起不来" then required that exact phrase to exist,
+    so it returned 0 even though every token was present in the DB.
+    """
+    terms = [t for t in re.split(r"[\s,，;；:：/\\|()\[\]{}<>\"'`]+", query)
+             if t]
+    return terms[:limit] if terms else [query.strip()]
+
+
 def search(con: sqlite3.Connection, query: str, *, kind: str | None = None,
            status: str | None = None, limit: int = 20) -> list[dict]:
-    """FTS5 优先,失败/无结果时退回 LIKE;返回知识摘要而非整篇正文。"""
+    """FTS5 优先,失败/无结果时退回 LIKE;返回知识摘要而非整篇正文。
+
+    Natural-language queries are OR-ed by term.  The previous exact-phrase
+    matching made normal multi-keyword queries return 0 hits even when the
+    knowledge base contained all of the terms.
+    """
     q = (query or "").strip()
-    limit = max(1, min(int(limit or 20), 100))
+    try:
+        limit = max(1, min(int(limit or 20), 100))
+    except (TypeError, ValueError):
+        limit = 20
     if not q:
         return []
     if kind and kind not in KINDS:
         raise ValueError(f"未知 kind: {kind}")
     if status and status not in STATUSES:
         raise ValueError(f"未知 status: {status}")
-    fts_q = '"' + q.replace('"', '""') + '"'
+    terms = _query_terms(q)
+    fts_q = " OR ".join('"' + t.replace('"', '""') + '"' for t in terms)
     try:
         rows = con.execute(
             "SELECT e.id,e.title,e.kind,e.status,e.source,e.updated_at,"
@@ -84,16 +107,21 @@ def search(con: sqlite3.Connection, query: str, *, kind: str | None = None,
             return [dict(r) for r in rows]
     except sqlite3.OperationalError:
         pass
-    like = "%" + q + "%"
+    # LIKE fallback: OR terms instead of requiring one giant substring.
+    clauses = " OR ".join("(e.title LIKE ? OR e.body_md LIKE ?)" for _ in terms)
+    params: list[object] = []
+    for t in terms:
+        like = "%" + t + "%"
+        params.extend((like, like))
+    params.extend((kind, kind, status, status, limit))
     rows = con.execute(
         "SELECT e.id,e.title,e.kind,e.status,e.source,e.updated_at,"
         " substr(e.body_md,1,900) AS excerpt FROM knowledge_entries e"
-        " WHERE (e.title LIKE ? OR e.body_md LIKE ?)"
+        f" WHERE ({clauses})"
         " AND (? IS NULL OR e.kind=?) AND (? IS NULL OR e.status=?)"
         " ORDER BY e.updated_at DESC LIMIT ?",
-        (like, like, kind, kind, status, status, limit)).fetchall()
+        tuple(params)).fetchall()
     return [dict(r) for r in rows]
-
 
 def get(con: sqlite3.Connection, entry_id: str) -> dict | None:
     e = _row(con, entry_id)
