@@ -204,6 +204,8 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
   独立 system 身份(禁止调用工具/继续任务),若模型仍返回工具调用标记(如 DSML),摘要视为失败、
   原始历史保持不动;摘要为空同样失败。
   ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
+- 摘要尾部按 Pi 追加 `<read-files>` / `<modified-files>`；只从显式 `fs_read` / `write` / `edit`
+  工具参数收集，`shell_exec` 的隐式文件改动不猜。
 - 主动压缩：模型可调用 `compact_now(keep,next_step)`。75% 起允许、80% 为硬边界；请求在工具批次
   结束后才真正压缩，成功后写入一条自动 resume user 消息，回到 `next_step`。每个 Runner 最多 5 次
   自动 resume，并带 20 个百分点冷却；上下文 usage 未知或低于阈值时拒绝。

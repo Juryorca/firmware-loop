@@ -346,3 +346,22 @@ def test_split_turn_uses_separate_prefix_summary():
     assert "**Turn Context (split turn):**" in new[0]["content"]
     assert "PREFIX" in new[0]["content"]
     assert new[1]["content"] == "recent assistant"
+
+
+def test_compaction_appends_read_and_modified_file_lists():
+    hist = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "r1", "type": "function",
+             "function": {"name": "fs_read", "arguments": '{"path":"a.bin"}'}}]},
+        {"role": "tool", "tool_call_id": "r1", "content": "{}"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "w1", "type": "function",
+             "function": {"name": "write", "arguments": '{"path":"b.txt"}'}}]},
+        {"role": "tool", "tool_call_id": "w1", "content": "{}"},
+        {"role": "user", "content": "recent"},
+    ]
+    new, _info = compact_history(hist, lambda _old: "SUMMARY", keep_recent_tokens=1,
+                                 single_call=True)
+    text = new[0]["content"]
+    assert "<read-files>" in text and "a.bin" in text
+    assert "<modified-files>" in text and "b.txt" in text

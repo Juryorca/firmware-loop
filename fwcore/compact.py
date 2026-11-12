@@ -101,6 +101,48 @@ def find_cut(history: list[dict], keep_recent_tokens: int) -> int:
 SUMMARY_HEADER = "## 历史摘要(程序压缩;原文仍可用 tool_calls/产物路径回查)"
 
 
+def extract_file_ops(messages: list[dict]) -> tuple[list[str], list[str]]:
+    """Pi-compatible read/modified file hints from tool calls.
+
+    fwcore has ``fs_read`` (read) and no dedicated write/edit tool; shell edits
+    are intentionally not guessed.  Only explicit tool arguments are recorded.
+    """
+    read: set[str] = set()
+    modified: set[str] = set()
+    for m in messages:
+        for tc in m.get("tool_calls") or []:
+            fn = tc.get("function") or {}
+            name = fn.get("name") or tc.get("name") or ""
+            raw = fn.get("arguments") or tc.get("args") or {}
+            if isinstance(raw, str):
+                try:
+                    args = json.loads(raw)
+                except (TypeError, ValueError):
+                    args = {}
+            elif isinstance(raw, dict):
+                args = raw
+            else:
+                args = {}
+            path = args.get("path") if isinstance(args, dict) else None
+            if not isinstance(path, str) or not path:
+                continue
+            if name in ("fs_read", "read"):
+                read.add(path)
+            elif name in ("write", "edit"):
+                modified.add(path)
+    return sorted(read - modified), sorted(modified)
+
+
+def _append_file_ops(summary: str, messages: list[dict]) -> str:
+    read, modified = extract_file_ops(messages)
+    parts = []
+    if read:
+        parts.append("<read-files>\n" + "\n".join(read) + "\n</read-files>")
+    if modified:
+        parts.append("<modified-files>\n" + "\n".join(modified) + "\n</modified-files>")
+    return summary + ("\n\n" + "\n\n".join(parts) if parts else "")
+
+
 def compact_history(history: list[dict], summarize, keep_recent_tokens: int = 20_000,
                     chunk_tokens: int = 60_000, max_calls: int = 20,
                     *, single_call: bool = False, previous_summary: str = "",
@@ -143,6 +185,7 @@ def compact_history(history: list[dict], summarize, keep_recent_tokens: int = 20
                                                max_calls=max_calls)
         if not summary.strip():
             raise SummarizationIncomplete("摘要为空")
+    summary = _append_file_ops(summary, history[:cut])
     head = {"role": "assistant", "content": f"{SUMMARY_HEADER}\n{summary}"}
     return [head] + recent, {"compacted": cut, "summary_chars": len(summary),
                              "summarize_calls": cover["calls"],
