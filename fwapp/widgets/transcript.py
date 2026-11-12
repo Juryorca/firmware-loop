@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+from collections.abc import Callable
 
 from rich.text import Text
 from textual import events
@@ -42,6 +44,14 @@ class TranscriptView(VerticalScroll):
     """
 
     can_focus = False
+    # Keep the widget tree bounded. The full transcript remains in SQLite;
+    # this only limits what the renderer has to lay out at once.
+    MAX_WIDGETS: int = 300
+    on_drop: Callable[[Widget], None] | None = None
+
+    def __init__(self, *children, **kw):
+        self._trim_scheduled = False
+        super().__init__(*children, **kw)
 
     def at_bottom(self) -> bool:
         try:
@@ -58,8 +68,25 @@ class TranscriptView(VerticalScroll):
         # bottom; explicit command output such as /mcp may force the follow.
         stick = force_follow or self.at_bottom()
         self.mount(widget)
+        if not self._trim_scheduled:
+            self._trim_scheduled = True
+            self.call_after_refresh(self._trim_widgets)
         if stick:
             self.follow_end()
+
+    def _trim_widgets(self) -> None:
+        self._trim_scheduled = False
+        excess = len(self.children) - self.MAX_WIDGETS
+        for _ in range(max(0, excess)):
+            if not self.children:
+                break
+            dropped = self.children[0]
+            dropped.remove()
+            if self.on_drop is not None:
+                self.on_drop(dropped)
+        if len(self.children) > self.MAX_WIDGETS and not self._trim_scheduled:
+            self._trim_scheduled = True
+            self.call_after_refresh(self._trim_widgets)
 
     def follow_end(self) -> None:
         """Schedule a scroll after the next layout pass.
@@ -94,6 +121,7 @@ class ThinkingBlock(Vertical):
 
     def __init__(self, text: str = "", **kw):
         self._text = text or ""
+        self._rich = Text(self._text, style="dim italic")
         self._expanded = True
         self.header = Static(classes="thinking-head")
         self.body = Static(classes="thinking-body")
@@ -104,8 +132,9 @@ class ThinkingBlock(Vertical):
         n = len(self._text)
         action = "折叠" if self._expanded else "展开"
         self.header.update(Text(f"思考过程 · {n} 字 · 点击{action}", style="dim italic"))
-        self.body.update(Text(self._text, style="dim italic"))
         self.body.display = self._expanded
+        if self._expanded:
+            self.body.update(self._rich)
 
     def append_text(self, delta: str) -> None:
         if not delta:
@@ -113,6 +142,7 @@ class ThinkingBlock(Vertical):
         transcript = _find_transcript(self)
         stick = bool(transcript and transcript.at_bottom())
         self._text += delta
+        self._rich.append(delta)
         self._refresh()
         if stick and transcript is not None:
             transcript.follow_end()
@@ -154,6 +184,7 @@ class MessageWidget(Vertical):
         self.role = role
         self.body = body
         self._text = text or ""
+        self._stream_rich = Text(self._text) if self._streaming else None
         self._reasoning = ""
         self._thinking_widget: ThinkingBlock | None = None
         children: list[Widget] = [head]
@@ -171,7 +202,13 @@ class MessageWidget(Vertical):
         transcript = _find_transcript(self)
         stick = bool(transcript and transcript.at_bottom())
         self._text += delta
-        if isinstance(self.body, Markdown):
+        if self._stream_rich is not None:
+            self._stream_rich.append(delta)
+            if isinstance(self.body, Static):
+                self.body.update(self._stream_rich)
+            else:
+                self.body.update(self._text)
+        elif isinstance(self.body, Markdown):
             self.body.append(delta)
         else:
             self.body.update(Text(self._text))
@@ -198,6 +235,7 @@ class MessageWidget(Vertical):
             final = Markdown(self._text, classes="msg-body")
             self.body = final
             self._streaming = False
+            self._stream_rich = None
             self.mount(final)
             old.display = False
             # Keep the old Static mounted-hidden until Textual has mounted the
@@ -246,6 +284,9 @@ class ToolWidget(Vertical):
         self.call_data = dict(call)
         self.header = Static(classes="tool-header")
         self.body = Static(classes="tool-body")
+        self._body_built = False
+        self._stdout_key: tuple[str, int, int] | None = None
+        self._stdout_text = ""
         self.body.display = expanded
         super().__init__(self.header, self.body, classes="tool")
         self._refresh()
@@ -283,7 +324,27 @@ class ToolWidget(Vertical):
         for name_cls in set(STATUS_CLASS.values()):
             self.remove_class(name_cls)
         self.add_class(STATUS_CLASS.get(status, "pending"))
+        if self.body.display:
+            self._render_body()
+        else:
+            self._body_built = False
+
+    def _render_body(self) -> None:
         self.body.update(self._body())
+        self._body_built = True
+
+    def _cached_stdout(self, path) -> str:
+        if not path:
+            return ""
+        try:
+            st = os.stat(path)
+        except OSError:
+            return ""
+        key = (str(path), st.st_mtime_ns, st.st_size)
+        if key != self._stdout_key:
+            self._stdout_key = key
+            self._stdout_text = _stdout_excerpt(path)
+        return self._stdout_text
 
     def _body(self) -> Text:
         c = self.call_data
@@ -300,7 +361,7 @@ class ToolWidget(Vertical):
         if c.get("note"):
             t.append("结果\n", style="bold #8995A5")
             t.append(str(c["note"])[:4000] + "\n")
-        out = _stdout_excerpt(c.get("stdout_path"))
+        out = self._cached_stdout(c.get("stdout_path"))
         if out:
             t.append("标准输出\n", style="bold #8995A5")
             t.append(out + "\n")
@@ -317,8 +378,17 @@ class ToolWidget(Vertical):
         if stick and transcript is not None:
             transcript.follow_end()
 
+    def set_expanded(self, expanded: bool) -> None:
+        expanded = bool(expanded)
+        self.body.display = expanded
+        if expanded:
+            if not self._body_built:
+                self._render_body()
+        else:
+            self._body_built = False
+
     def toggle(self) -> None:
-        self.body.display = not self.body.display
+        self.set_expanded(not self.body.display)
 
 
 class PendingBar(Static):

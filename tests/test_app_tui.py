@@ -702,6 +702,118 @@ def test_tick_skips_status_refresh_when_nothing_changed(tmp_path):
         rt.dispose()
 
 
+def test_tick_does_not_poll_tool_updates_when_idle(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.2)
+
+            class IdleSession:
+                busy = False
+                pending = ()
+
+                def drain_events(self):
+                    return []
+
+                def tool_updates(self):
+                    raise AssertionError("idle tick must not scan tool_calls")
+
+            app.sess = cast(Any, IdleSession())  # type: ignore[assignment]
+            app._update_status = lambda: None  # type: ignore[method-assign]
+            app._tick()
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_tick_does_not_refresh_status_for_text_only_deltas(tmp_path):
+    from fwapp.session import UiEvent
+
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.2)
+
+            class DeltaSession:
+                busy = False
+                pending = ()
+
+                def drain_events(self):
+                    return [UiEvent("assistant_delta", "tick")]
+
+                def tool_updates(self):
+                    raise AssertionError("text-only tick must not scan tool_calls")
+
+            app.sess = cast(Any, DeltaSession())  # type: ignore[assignment]
+            calls: list[int] = []
+            app._update_status = lambda: calls.append(1)  # type: ignore[method-assign]
+            app._tick()
+            assert calls == []
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_tool_body_is_built_only_when_expanded(tmp_path):
+    output = tmp_path / "stdout.txt"
+    output.write_text("tool output", encoding="utf-8")
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            tool = ToolWidget({
+                "id": "t1", "tool": "shell_exec", "args": "{}",
+                "status": "ok", "stdout_path": str(output),
+            })
+            assert tool._body_built is False
+            tool.set_expanded(True)
+            assert tool._body_built is True
+            assert "tool output" in str(tool.body.render())
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_transcript_bounds_widget_tree(tmp_path):
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(80, 24)) as pilot:
+            await pilot.pause(0.2)
+            tv = app.query_one(TranscriptView)
+            tv.MAX_WIDGETS = 20
+            tv.remove_children()
+            for i in range(tv.MAX_WIDGETS + 5):
+                tv.append(NoticeWidget(f"line {i}"))
+            await pilot.pause(0.2)
+            assert len(tv.children) <= tv.MAX_WIDGETS
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
 def test_model_error_clears_busy_status(tmp_path):
     cfg = make_ws(tmp_path)
 

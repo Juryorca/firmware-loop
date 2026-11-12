@@ -137,6 +137,7 @@ class FwApp(App):
         self._last_title: str | None = None
         self._last_pending: tuple[str, ...] | None = None
         self._last_busy: bool | None = None
+        self._last_tool_poll = 0.0
         self._assistant_rendered = False
         self._stream_error_notified = False
         self._stop_requested = False
@@ -165,6 +166,7 @@ class FwApp(App):
         self.query_one(PromptEditor).completion_active = (
             lambda: self.query_one(CommandPalette).is_open)
         self.query_one(PromptEditor).focus()
+        self.query_one(TranscriptView).on_drop = self._on_transcript_drop
         self._update_title()
         self._update_status()
         self._load_transcript()
@@ -239,12 +241,27 @@ class FwApp(App):
             # interval 可能在 App 退出/卸载后仍触发一次；不能把退出变成异常。
             return
 
+    def _on_transcript_drop(self, widget) -> None:
+        """Drop references to widgets evicted from the bounded transcript."""
+        for table in (self._tool_widgets, self._stream_tools):
+            for key, item in list(table.items()):
+                if item is widget:
+                    table.pop(key, None)
+        self._stream_tool_by_index = {
+            key: value for key, value in self._stream_tool_by_index.items()
+            if value in self._stream_tools
+        }
+        self._stream_tool_by_call = {
+            key: value for key, value in self._stream_tool_by_call.items()
+            if value in self._stream_tools
+        }
+
     def _load_transcript(self) -> None:
         tv = self.query_one(TranscriptView)
         tv.remove_children()
         self._tool_widgets.clear()
         self._reset_stream()
-        for item in self.sess.transcript():
+        for item in self.sess.transcript(limit=tv.MAX_WIDGETS):
             if item.kind == "assistant":
                 self._append(MessageWidget("assistant", item.text, item.meta))
             elif item.kind == "user":
@@ -291,10 +308,22 @@ class FwApp(App):
             self._flush_stream_pending()
             self._handle_event(ev)
         self._flush_stream_pending()
-        changed = bool(events)
-        for call in self.sess.tool_updates():
-            self._upsert_tool(call)
-            changed = True
+        # Text/reasoning deltas only change the streamed widget. Rebuilding the
+        # footer snapshot for every token is unnecessary and makes the UI do
+        # database work at token rate. Control events still refresh it.
+        text_only = {"assistant_delta", "reasoning_delta",
+                     "toolcall_start", "toolcall_delta"}
+        control = any(ev.kind not in text_only for ev in events)
+        changed = control
+        # Tool rows can change while a turn is running, but polling the whole
+        # run's tool table ten times a second while idle is pure rendering cost.
+        now = time.monotonic()
+        poll_tools = control or (self.sess.busy and now - self._last_tool_poll >= 0.25)
+        if poll_tools:
+            self._last_tool_poll = now
+            for call in self.sess.tool_updates():
+                self._upsert_tool(call)
+                changed = True
         pending = tuple(self.sess.pending)
         if pending != self._last_pending:
             self._last_pending = pending
@@ -911,7 +940,11 @@ class FwApp(App):
         self._expand_tools = not self._expand_tools
         # 流式工具预览尚未进入 _tool_widgets;与已执行工具一起切换。
         for w in (*self._tool_widgets.values(), *self._stream_tools.values()):
-            w.body.display = self._expand_tools
+            setter = getattr(w, "set_expanded", None)
+            if callable(setter):
+                setter(self._expand_tools)
+            else:
+                w.body.display = self._expand_tools
         self._notice("工具输出: " + ("展开" if self._expand_tools else "折叠"))
 
     def _request_stop(self) -> None:
