@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 
 # 实测校准(QNAP 两个 run、224 次调用):实际 ~2.08 字符/token;
 # 用 2.0 让估算**略偏保守**(宁可早触发,不可晚触发)。只用于触发,计费仍以 usage 为准。
@@ -51,10 +52,26 @@ def message_groups(history: list[dict]) -> list[tuple[int, int]]:
     return groups
 
 
-def find_cut(history: list[dict], keep_recent_tokens: int) -> int:
-    """按**协议组**从尾部往前保留约 keep_recent_tokens,返回组边界处的切点。"""
+@dataclass(frozen=True)
+class CutPlan:
+    """Pi-style cut point: a split turn has a user-message prefix."""
+    cut: int
+    turn_start: int | None = None
+
+    @property
+    def is_split(self) -> bool:
+        return self.turn_start is not None
+
+
+def find_cut_plan(history: list[dict], keep_recent_tokens: int) -> CutPlan:
+    """Find a Pi-style cut boundary without splitting an assistant/tool group.
+
+    Pi prefers user-message boundaries; if the budget lands inside one long
+    user span, it cuts at an assistant message and summarizes the span prefix
+    separately.  This function returns both pieces so the caller can do that.
+    """
     if not history:
-        return 0
+        return CutPlan(0)
     groups = message_groups(history)
     acc = 0
     cut = 0
@@ -63,7 +80,22 @@ def find_cut(history: list[dict], keep_recent_tokens: int) -> int:
         if acc >= keep_recent_tokens:
             cut = start
             break
-    return cut
+    if cut <= 0:
+        return CutPlan(cut)
+    if history[cut].get("role") == "user":
+        return CutPlan(cut)
+    # The cut is an assistant group.  Find the user message that opened the
+    # current turn; messages before it are history, messages after it are the
+    # turn prefix that Pi summarizes separately.
+    for i in range(cut - 1, -1, -1):
+        if history[i].get("role") == "user":
+            return CutPlan(cut, i)
+    return CutPlan(cut)
+
+
+def find_cut(history: list[dict], keep_recent_tokens: int) -> int:
+    """Backward-compatible int-only cut (tests/old callers)."""
+    return find_cut_plan(history, keep_recent_tokens).cut
 
 
 SUMMARY_HEADER = "## 历史摘要(程序压缩;原文仍可用 tool_calls/产物路径回查)"
@@ -71,36 +103,50 @@ SUMMARY_HEADER = "## 历史摘要(程序压缩;原文仍可用 tool_calls/产物
 
 def compact_history(history: list[dict], summarize, keep_recent_tokens: int = 20_000,
                     chunk_tokens: int = 60_000, max_calls: int = 20,
-                    *, single_call: bool = False) -> tuple[list[dict], dict]:
-    """超阈值时把较早的消息压成一段摘要;返回 (新历史, 统计)。
+                    *, single_call: bool = False, previous_summary: str = "",
+                    summarize_prefix=None) -> tuple[list[dict], dict]:
+    """Compact the old prefix and return ``[summary_marker] + recent``.
 
-    Pi semantics use ``single_call=True``: one summarization request for the
-    whole discarded prefix.  The chunked path remains for explicit callers and
-    compatibility tests.
+    Normal cuts use one summary call (``single_call=True``).  A cut inside a
+    long user-message span follows Pi: summarize history and the turn prefix
+    separately, then merge with the Pi split-turn marker.
     """
-    cut = find_cut(history, keep_recent_tokens)
-    if cut <= 0:
+    plan = find_cut_plan(history, keep_recent_tokens)
+    if plan.cut <= 0:
         return history, {"compacted": 0}
-    old, recent = history[:cut], history[cut:]
-    if single_call:
-        # Pi-style compaction: one summarization request over the whole
-        # discarded prefix.  This intentionally does not split the prefix into
-        # 60k chunks (which made a 1.1M-token compact take many minutes).
-        summary = (summarize(old) or "").strip()
-        if not summary:
-            raise SummarizationIncomplete("摘要为空")
-        cover = {"chunks": 1, "messages": len(old), "pieces": len(old),
-                 "calls": 1, "merge_calls": 0}
+    cut = plan.cut
+    recent = history[cut:]
+    if plan.is_split:
+        turn_start = plan.turn_start
+        assert turn_start is not None and 0 <= turn_start < cut
+        old = history[:turn_start]
+        prefix = history[turn_start:cut]
+        history_summary = previous_summary or "No prior history."
+        if old:
+            history_summary = (summarize(old) or "").strip()
+        prefix_summary = ((summarize_prefix(prefix) if summarize_prefix else summarize(prefix))
+                          or "").strip()
+        if not prefix_summary:
+            raise SummarizationIncomplete("split-turn prefix summary is empty")
+        summary = (history_summary + "\n\n---\n\n"
+                   "**Turn Context (split turn):**\n\n" + prefix_summary)
+        cover = {"chunks": 1, "messages": cut, "pieces": cut,
+                 "calls": (1 if old else 0) + 1, "merge_calls": 0}
     else:
-        summary, cover = summarize_covered(old, summarize, chunk_tokens=chunk_tokens,
-                                           max_calls=max_calls)
+        old = history[:cut]
+        if single_call:
+            summary = (summarize(old) or "").strip()
+            cover = {"chunks": 1, "messages": len(old), "pieces": len(old),
+                     "calls": 1, "merge_calls": 0}
+        else:
+            summary, cover = summarize_covered(old, summarize, chunk_tokens=chunk_tokens,
+                                               max_calls=max_calls)
         if not summary.strip():
             raise SummarizationIncomplete("摘要为空")
     head = {"role": "assistant", "content": f"{SUMMARY_HEADER}\n{summary}"}
     return [head] + recent, {"compacted": cut, "summary_chars": len(summary),
                              "summarize_calls": cover["calls"],
                              "messages_covered": cover["messages"]}
-
 
 def threshold_tokens(context_tokens: int, reserve: int) -> int:
     """Pi threshold: contextTokens > contextWindow - reserveTokens."""

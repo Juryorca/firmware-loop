@@ -172,6 +172,11 @@ class Runner:
         self._last_usage: dict = {}
         self._compact_cooldown_until = -1
         self._last_compact: dict | None = None
+        # Pi context-awareness self-compaction: a model-called compact_now is
+        # deferred until the current tool batch is persisted.
+        self._compact_pending: dict | None = None
+        self._compact_auto_resumes = 0
+        self._compact_percent_after: float | None = None
         self.mcp_bridge = None
         self.mcp_skipped_reason: str | None = None
         # 注意:**构造时不启动 MCP**。MCP 服务器启动本身就有副作用(子进程/外网/登录态),
@@ -528,7 +533,14 @@ class Runner:
     def _model_id(self) -> str:
         return str(getattr(self.model, "model", "") or getattr(self.model, "name", "") or "")
 
-    def _load_history(self, rid: str, current_model: str | None = None) -> list[dict]:
+    def _model_scope(self) -> tuple[str, str, str]:
+        """Provider/api/model identity used for thinking replay (Pi semantics)."""
+        return (str(getattr(self.model, "name", "") or ""),
+                str(getattr(self.model, "api", "") or ""),
+                self._model_id())
+
+    def _load_history(self, rid: str, current_model: str | None = None,
+                      current_scope: tuple[str, str, str] | None = None) -> list[dict]:
         """Rebuild the active branch from append-only conversation entries.
 
         Pi keeps session entries and appends a compaction marker; it does not
@@ -617,12 +629,21 @@ class Runner:
                 if content or calls:
                     msg = {"role": "assistant", "content": content}
                     # Pi replays thinking only for the model that produced it.
-                    # Legacy rows without a model id remain replayable.
-                    if (meta.get("reasoning")
-                            and (not current_model
-                                 or not meta.get("model")
-                                 or meta.get("model") == current_model)):
-                        msg["reasoning_content"] = meta["reasoning"]
+                    # Compare provider/api/model; legacy rows missing a scope
+                    # component remain replayable for compatibility.
+                    if meta.get("reasoning"):
+                        replay = True
+                        if current_scope is not None:
+                            sp, sa, sm = current_scope
+                            if ((meta.get("provider") and meta["provider"] != sp)
+                                    or (meta.get("api") and meta["api"] != sa)
+                                    or (meta.get("model") and meta["model"] != sm)):
+                                replay = False
+                        elif (current_model and meta.get("model")
+                              and meta.get("model") != current_model):
+                            replay = False
+                        if replay:
+                            msg["reasoning_content"] = meta["reasoning"]
                     if calls:
                         msg["tool_calls"] = calls
                     messages.append(msg)
@@ -723,12 +744,52 @@ class Runner:
             (rid,)).fetchone()
         return (row["summary"] or "") if row else ""
 
+    def _context_usage_for_tool(self, rid: str) -> dict | None:
+        used = self._last_main_prompt_tokens(rid)
+        window = self.limits.context_tokens or 0
+        if not used or not window:
+            return None
+        return {"used": used, "window": window, "percent": used / window * 100.0}
+
+    def _request_compaction(self, rid: str, keep: str, next_step: str) -> dict:
+        """Validate/defer a model-called compact_now request (Pi fuel-gauge)."""
+        if self._compact_pending is not None:
+            return {"status": "error",
+                    "error": "A compaction is already queued or running."}
+        usage = self._context_usage_for_tool(rid)
+        if usage is None:
+            return {"status": "error",
+                    "error": "Not compacting: current context usage is unknown."}
+        percent = usage["percent"]
+        try:
+            minimum = float(os.environ.get("FW_COMPACT_MIN_PERCENT", "75"))
+        except ValueError:
+            minimum = 75.0
+        if percent < minimum and percent < 80.0:
+            return {"status": "error",
+                    "error": f"Not compacting: context is only {percent:.1f}% full; "
+                             f"compact at {minimum:.0f}% or more."}
+        if (percent < 80.0 and self._compact_percent_after is not None
+                and percent < self._compact_percent_after + 20.0):
+            return {"status": "error",
+                    "error": "Not compacting: context has not grown enough since the last compaction."}
+        if self._compact_auto_resumes >= 5:
+            return {"status": "error",
+                    "error": "Not compacting: self-compaction limit reached for this session (5)."}
+        self._compact_pending = {
+            "keep": str(keep).strip()[:8000],
+            "next_step": str(next_step).strip()[:4000],
+        }
+        return {"status": "ok", "queued": True,
+                "note": "Compaction queued for the idle boundary. Stop here; "
+                        "the next step will resume automatically."}
+
     def compact_now(self, rid: str, instructions: str = "") -> dict:
         """Pi-style manual compaction: append a summary marker, keep raw entries."""
         row = self.con.execute("SELECT target_id,state FROM runs WHERE id=?", (rid,)).fetchone()
         if not row:
             raise KeyError(f"run 不存在: {rid}")
-        history = self._load_history(rid, self._model_id())
+        history = self._load_history(rid, self._model_id(), self._model_scope())
         if not history:
             raise RuntimeError("当前 session 没有可压缩的历史")
         before = estimate_tokens(history)
@@ -751,11 +812,27 @@ class Runner:
             })
             return _summary_reply(reply)
 
+        def _summarize_prefix(chunk):
+            if self.summarizer:
+                return self.summarizer(chunk)
+            text = _render_turn_prefix(chunk, instructions)
+            reply = _coerce_reply(self.model.chat(_summary_request(text), []))
+            _event(self.con, "model.call", rid, {
+                "kind": "summarize", "manual": True, "split_prefix": True,
+                "n_messages": len(chunk),
+                "usage_known": bool(reply.usage), "usage": reply.usage or {},
+                "prompt_tokens": (reply.usage or {}).get("prompt_tokens"),
+                "completion_tokens": (reply.usage or {}).get("completion_tokens"),
+                "cached_tokens": ((reply.usage or {}).get("prompt_tokens_details") or {}).get("cached_tokens"),
+            })
+            return _summary_reply(reply)
+
         try:
             new_history, info = compact_history(
                 history, _summarize, self.limits.keep_recent_tokens,
                 chunk_tokens=self.limits.summarize_chunk_tokens,
-                max_calls=self.limits.summarize_max_calls, single_call=True)
+                max_calls=self.limits.summarize_max_calls, single_call=True,
+                previous_summary=previous_summary, summarize_prefix=_summarize_prefix)
             if not info.get("compacted"):
                 raise RuntimeError("没有可压缩的完整协议组")
             summary = new_history[0].get("content", "")
@@ -864,8 +941,11 @@ class Runner:
         """对话记录只存**面向用户**的内容;reasoning 只记长度,不混进正文。"""
         if not (reply.content or reply.reasoning or reply.tool_calls):
             return
+        scope = self._model_scope()
         meta = {
-            "model": str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
+            "provider": scope[0],
+            "api": scope[1],
+            "model": scope[2],
             "finish_reason": reply.finish_reason or "",
             "usage": reply.usage or {},
             "tool_calls": [c.get("id") for c in reply.tool_calls],
@@ -1271,11 +1351,29 @@ class Runner:
                         })
                         return _summary_reply(reply)
 
+                    def _summarize_prefix(chunk):
+                        if self.summarizer:
+                            return self.summarizer(chunk)
+                        text = _render_turn_prefix(chunk)
+                        reply = _coerce_reply(self.model.chat(_summary_request(text), []))
+                        _event(self.con, "model.call", rid, {
+                            "kind": "summarize", "split_prefix": True,
+                            "n_messages": len(chunk),
+                            "usage_known": bool(reply.usage), "usage": reply.usage or {},
+                            "prompt_tokens": (reply.usage or {}).get("prompt_tokens"),
+                            "completion_tokens": (reply.usage or {}).get("completion_tokens"),
+                            "cached_tokens": ((reply.usage or {}).get("prompt_tokens_details")
+                                              or {}).get("cached_tokens"),
+                        })
+                        return _summary_reply(reply)
+
                     try:
                         new_history, _info = compact_history(
                             history, _summarize, self.limits.keep_recent_tokens,
                             chunk_tokens=self.limits.summarize_chunk_tokens,
-                            max_calls=self.limits.summarize_max_calls)
+                            max_calls=self.limits.summarize_max_calls, single_call=True,
+                            previous_summary=previous_summary,
+                            summarize_prefix=_summarize_prefix)
                         if not _info.get("compacted"):        # 切不出东西 ⇒ 不动历史
                             raise RuntimeError("没有可压缩的完整协议组(keep_recent 过大)")
                     except Exception as e:  # noqa: BLE001
@@ -1529,7 +1627,9 @@ class Runner:
                                       target=target, timeout=tool_timeout,
                                       artifacts_dir=os.path.join(self.root, "state", "artifacts", rid),
                                       policy=self.policy, research=self.research,
-                                      set_session_target=self.on_session_target)
+                                      set_session_target=self.on_session_target,
+                                      compact_request=lambda keep, next_step: self._request_compaction(
+                                          rid, keep, next_step))
                     stalled = False
                     calls_this_turn = list(reply.tool_calls)
                     conv_failed = False
@@ -1621,6 +1721,45 @@ class Runner:
                     # run's target_id.  The rest of this turn must use the new
                     # name for closure/mirror checks and round events.
                     target = self._run_target_name(rid, target)
+                    # Pi fuel-gauge self-compaction: compact_now is deferred to
+                    # this idle-safe boundary, after every tool result in the
+                    # batch is persisted.  Then resume with one user message.
+                    if self._compact_pending is not None and not (
+                            conv_failed or lost_owner or stalled):
+                        request = self._compact_pending
+                        self._compact_pending = None
+                        instructions = (
+                            "Preserve precisely: the current task and its next step; paths "
+                            "of files read, changed, or created; test/check status; decisions; "
+                            "open problems; and the next action. "
+                            f"The agent's priorities: {request['keep']} "
+                            f"The agent's next step: {request['next_step']}"
+                        )
+                        try:
+                            info = self.compact_now(rid, instructions=instructions)
+                            self._compact_auto_resumes += 1
+                            window = int(self.limits.context_tokens or 0)
+                            after = int(info.get("after_tokens") or 0)
+                            if window and after:
+                                self._compact_percent_after = after / window * 100.0
+                            resume_text = (
+                                "[Automatic resume after self-compaction] The summary above "
+                                "holds the state of this work. Continue with: "
+                                f"{request['next_step']}. Re-read only the files you need, "
+                                "by line range where possible; verify current state instead "
+                                "of treating the summary as proof."
+                            )
+                            self._conversation_write(
+                                rid, "user", resume_text,
+                                meta={"source": "compact_resume"},
+                                client_id=f"compact-resume:{rid}:{self._compact_auto_resumes}")
+                            history = self._load_history(rid, self._model_id(), self._model_scope())
+                            _event(self.con, "run.compact_resumed", rid,
+                                   {"auto_resumes": self._compact_auto_resumes,
+                                    "next_step": request["next_step"][:300]})
+                        except Exception as e:  # noqa: BLE001
+                            _event(self.con, "run.compact_resume_failed", rid,
+                                   {"error": str(e)[:300]})
                 step += 1
                 _persist()
                 self._checkpoint(rid, step, history)
@@ -1886,7 +2025,7 @@ class Runner:
         # 续跑已有 run 必须从检查点恢复历史:否则模型只看到新 goal,
         # 之前所有工具结果/结论都"消失"(resume 一直是这么做的,advance 漏了)
         hist = list(history) if history is not None else (
-            self._load_history(rid, self._model_id()) if run_id else [])
+            self._load_history(rid, self._model_id(), self._model_scope()) if run_id else [])
         if run_id and not hist:
             row = self.con.execute("SELECT step,rounds FROM runs WHERE id=?", (rid,)).fetchone()
             if row and row["step"] > 0:
@@ -1984,7 +2123,7 @@ class Runner:
         if not row:
             raise KeyError(f"run 不存在: {rid}")
         self.domain.require_active_target(row["target_name"])
-        history = self._load_history(rid, self._model_id())
+        history = self._load_history(rid, self._model_id(), self._model_scope())
         self._load_authorization(row["target_name"])   # 新进程:授权/工具配置要重新装配
         self._claim_run(rid)          # 原子接管(活主 ⇒ 拒绝;CAS 防并发双跑)
         if row["step"] > 0 and not history:
@@ -2249,13 +2388,8 @@ def _summary_reply(reply: Reply) -> str:
     return _valid_summary(reply.content)
 
 
-def _render_for_summary(messages: list[dict], previous_summary: str = "",
-                         limit: int = 2_000_000) -> str:
-    """Serialize conversation like Pi's ``serializeConversation``.
-
-    Thinking is intentionally omitted; tool results are capped at 2000 chars.
-    The model gets a standalone summary prompt, never a continuation prompt.
-    """
+def _serialize_conversation(messages: list[dict]) -> str:
+    """Pi ``serializeConversation``: omit thinking and cap tool results at 2000."""
     parts: list[str] = []
     for m in messages:
         role = m.get("role")
@@ -2297,13 +2431,44 @@ def _render_for_summary(messages: list[dict], previous_summary: str = "",
                 c = f"{c[:2000]}\n\n[... {omitted} more characters truncated]"
             if c:
                 parts.append(f"[Tool result]: {c}")
-    conversation = "\n\n".join(parts)
+    return "\n\n".join(parts)
+
+
+def _render_for_summary(messages: list[dict], previous_summary: str = "",
+                         limit: int = 2_000_000) -> str:
+    """Standalone Pi summary prompt for the history being compacted."""
+    conversation = _serialize_conversation(messages)
     previous = (f"<previous-summary>\n{previous_summary}\n</previous-summary>\n\n"
                 if previous_summary else "")
     base = _UPDATE_SUMMARY_PROMPT if previous_summary else _SUMMARY_PROMPT
     prompt = f"<conversation>\n{conversation}\n</conversation>\n\n{previous}{base}"
     return prompt[:limit]
 
+
+_TURN_PREFIX_PROMPT = """The messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.
+
+Create a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.
+
+## Original Request
+[What did the user ask for?]
+
+## Progress So Far
+- [Key decisions and work completed in these messages]
+
+## Context Needed to Continue
+- [Information from these messages needed to understand the later work]
+
+Only summarize information explicitly present above. Do not infer or recreate later messages."""
+
+
+def _render_turn_prefix(messages: list[dict], instructions: str = "",
+                         limit: int = 2_000_000) -> str:
+    """Pi's separate prompt for the early part of a split user-message span."""
+    prompt = (f"# Conversation\n{_serialize_conversation(messages)}\n\n"
+              f"# Instructions\n{_TURN_PREFIX_PROMPT}")
+    if instructions.strip():
+        prompt += "\n\nAdditional focus: " + instructions.strip()[:4000]
+    return prompt[:limit]
 
 def _bounded_tool_result(out: dict, limit: int | None = None) -> str:
     """工具结果给模型看的版本。

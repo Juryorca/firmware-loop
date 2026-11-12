@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 
 from .compact import threshold_tokens
 
+PREPARE_PERCENT = 75.0
+HARD_COMPACT_PERCENT = 80.0
+
 
 @dataclass
 class ContextStatus:
@@ -22,7 +25,9 @@ class ContextStatus:
     output_reserve: int = 0
     threshold: int = 0                   # 压缩触发阈值(0 = 关闭)
     compaction_enabled: bool = False
-    prepare: bool = False                # 是否已到"准备压缩"区间(>=90% 阈值)
+    prepare: bool = False                # 是否已到"准备压缩"区间(>=75%)
+    hard: bool = False                   # 是否到硬压缩边界(>=80%)
+    percent: float | None = None         # provider prompt / window
     last_prompt_tokens: int | None = None
     last_cached_tokens: int | None = None
     extra: dict = field(default_factory=dict)
@@ -58,11 +63,21 @@ class ContextStatus:
             if self.used_source != "provider":
                 lines.append("Provider usage not reported yet: capacity is unknown; "
                              "do not claim the context is nearly full or nearly empty.")
+            elif self.hard:
+                lines.append(
+                    f"Hard compaction limit reached ({HARD_COMPACT_PERCENT:.0f}%). "
+                    "Stop normal work and compact immediately with compact_now; do not make "
+                    "another tool call first. Preserve unfinished work in keep and next_step.")
             elif self.prepare:
-                lines.append("Approaching the compaction threshold: save key progress now; "
-                             "the framework will compact automatically at a safe boundary.")
+                lines.append(
+                    "Context is getting full. Finish the current task, keep reads targeted, "
+                    "save key progress now. Compaction is allowed at this clean boundary: "
+                    "call compact_now with keep and next_step only if the task is finished, "
+                    "tests are green, notes/handoff are saved, and nothing is half-edited.")
             else:
-                lines.append("Plenty of room. Keep working; do not claim the context is nearly full.")
+                lines.append(
+                    f"Plenty of room. Keep working normally; do not wrap up early or compact "
+                    f"before {PREPARE_PERCENT:.0f}%.")
         elif self.window is None:
             lines.append("Context window is not configured for this model: capacity is unknown; "
                          "do not assume it is nearly full, and do not claim otherwise.")
@@ -75,6 +90,7 @@ class ContextStatus:
             "output_reserve": self.output_reserve,
             "available": self.available, "threshold": self.threshold,
             "compaction_enabled": self.compaction_enabled, "prepare": self.prepare,
+            "hard": self.hard, "percent": self.percent,
             "last_prompt_tokens": self.last_prompt_tokens,
             "last_cached_tokens": self.last_cached_tokens,
         }
@@ -95,10 +111,14 @@ def build_status(*, model: str, window: int | None,
     real = last_prompt_tokens if last_prompt_tokens and last_prompt_tokens > 0 else None
     used = real
     source = "provider" if real is not None else "unknown"
-    prepare = bool(thr) and real is not None and real >= int(thr * 0.9)
+    percent = ((real / int(window)) * 100.0
+               if real is not None and window else None)
+    prepare = bool(percent is not None and percent >= PREPARE_PERCENT)
+    hard = bool(percent is not None and percent >= HARD_COMPACT_PERCENT)
     return ContextStatus(model=model, window=window,
                          used_input=used, used_source=source,
                          output_reserve=output_reserve, threshold=thr,
-                         compaction_enabled=enabled, prepare=prepare,
+                         compaction_enabled=enabled, prepare=prepare, hard=hard,
+                         percent=percent,
                          last_prompt_tokens=last_prompt_tokens,
                          last_cached_tokens=last_cached_tokens)

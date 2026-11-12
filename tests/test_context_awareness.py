@@ -35,7 +35,7 @@ def test_status_reports_provider_usage_and_prepare():
     txt = st.render()
     assert "window=1,000,000" in txt and "context_used=950,000 (provider prompt)" in txt
     assert "estimated_input" not in txt
-    assert "save key progress" in txt
+    assert "Hard compaction limit" in txt and "compact_now" in txt
 
 
 def test_status_without_provider_usage_is_unknown():
@@ -56,11 +56,13 @@ def test_status_uses_provider_prompt_only():
                       last_prompt_tokens=789_176, last_cached_tokens=786_688)
     assert st.used_input == 789_176 and st.used_source == "provider"
     assert st.available == 1_048_576 - 789_176 - 8_000
-    assert st.prepare is False                 # provider 还没到 90% 阈值
+    assert st.prepare is True                  # 75% is the Pi preparation boundary
+    assert st.hard is False
     txt = st.render()
     assert "context_used=789,176 (provider prompt)" in txt
     assert "estimated_input" not in txt
-    assert "Plenty of room" in txt
+    assert "Context is getting full" in txt
+    assert "Plenty of room" not in txt
 
 
 class Rec:

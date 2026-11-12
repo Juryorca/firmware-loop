@@ -274,3 +274,75 @@ def test_compact_history_single_call_matches_pi_shape():
     assert info["summarize_calls"] == 1
     assert new[0]["content"].startswith("## 历史摘要") and "single summary" in new[0]["content"]
     assert new[-1]["content"] == "recent"
+
+
+def test_compact_now_tool_queues_and_auto_resumes(tmp_path):
+    """Pi fuel-gauge behavior: model tool -> defer -> compact -> resume next_step."""
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    from fwcore.models import ScriptedAdapter
+
+    class UsageModel(ScriptedAdapter):
+        def chat(self, messages, tools):
+            reply = super().chat(messages, tools)
+            reply.usage = {"prompt_tokens": 800}
+            return reply
+
+    model = UsageModel(script=[
+        {"content": "", "tool_calls": [{
+            "id": "c1", "name": "compact_now",
+            "args": {"keep": "保持当前任务与证据", "next_step": "继续下一步"},
+            "args_raw": "{}"}]},
+        {"content": "FINAL: 已继续"},
+    ])
+    r = Runner(con, root, model,
+               limits=Limits(context_tokens=1_000, keep_recent_tokens=20,
+                             max_model_calls=10),
+               policy=Policy(allow_high_risk=True),
+               summarizer=lambda old: "自动压缩摘要")
+    rid = r.start("t1", "主动压缩测试")
+    for i in range(12):
+        dom.add_conversation(rid, "user", f"u{i}:" + "x" * 100,
+                             client_id=f"feed-{i}")
+    r._last_usage = {"prompt_tokens": 800}       # provider usage already seen
+    r.run(rid, "t1")
+    assert con.execute("SELECT COUNT(*) FROM compactions WHERE run_id=?",
+                       (rid,)).fetchone()[0] == 1
+    kinds = [row["kind"] for row in con.execute(
+        "SELECT kind FROM events WHERE ref=? ORDER BY id", (rid,))]
+    assert "run.compact_resumed" in kinds
+    hist = r._load_history(rid)
+    assert any("Automatic resume after self-compaction" in (m.get("content") or "")
+               for m in hist)
+
+
+def test_split_turn_uses_separate_prefix_summary():
+    hist = [
+        {"role": "user", "content": "old user"},
+        {"role": "assistant", "content": "old assistant"},
+        {"role": "user", "content": "turn start"},
+        {"role": "assistant", "content": "early turn"},
+        {"role": "assistant", "content": "recent assistant"},
+    ]
+    calls: list[str] = []
+
+    def history_summary(chunk):
+        calls.append("history")
+        return "HISTORY"
+
+    def prefix_summary(chunk):
+        calls.append("prefix")
+        assert any(m.get("content") == "turn start" for m in chunk)
+        return "PREFIX"
+
+    new, info = compact_history(
+        hist, history_summary, keep_recent_tokens=1, single_call=True,
+        summarize_prefix=prefix_summary)
+    assert calls == ["history", "prefix"]
+    assert info["summarize_calls"] == 2
+    assert new[0]["content"].find("HISTORY") >= 0
+    assert "**Turn Context (split turn):**" in new[0]["content"]
+    assert "PREFIX" in new[0]["content"]
+    assert new[1]["content"] == "recent assistant"

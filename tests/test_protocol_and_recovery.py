@@ -297,3 +297,21 @@ def test_load_history_drops_reasoning_from_other_model(tmp_path):
     other = [m for m in r._load_history(rid, "model-b") if m.get("role") == "assistant"]
     assert same and same[-1].get("reasoning_content") == "secret"
     assert other and "reasoning_content" not in other[-1]
+
+
+def test_load_history_drops_reasoning_from_other_provider_or_api(tmp_path):
+    """Pi's thinking replay is scoped to provider/api/model, not just model id."""
+    con = _db.connect(str(tmp_path / "state" / "fwcore.sqlite3"))
+    dom = Domain(con, str(tmp_path))
+    dom.create_target("t1", version="1")
+    r = Runner(con, str(tmp_path), ScriptedModel(script=[]))
+    rid = r.start("t1", "goal")
+    dom.add_conversation(rid, "assistant", "x", meta={
+        "reasoning": "secret", "provider": "p1", "api": "a1", "model": "m1"},
+        client_id="scope-1")
+    same = r._load_history(rid, current_scope=("p1", "a1", "m1"))
+    other_provider = r._load_history(rid, current_scope=("p2", "a1", "m1"))
+    other_api = r._load_history(rid, current_scope=("p1", "a2", "m1"))
+    assert same[-1].get("reasoning_content") == "secret"
+    assert "reasoning_content" not in other_provider[-1]
+    assert "reasoning_content" not in other_api[-1]

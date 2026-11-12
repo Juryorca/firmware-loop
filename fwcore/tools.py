@@ -81,6 +81,9 @@ class ToolContext:
     # Bootstrap-session hook: after an agent names/renames the current target,
     # update the in-memory app session too (the DB row is renamed by the tool).
     set_session_target: Callable[[str], None] | None = None
+    # Self-compaction: called by the compact_now tool; the Runner defers the
+    # actual summary until the current tool batch is persisted.
+    compact_request: Callable[[str, str], dict] | None = None
 
 
 @dataclass
@@ -825,6 +828,16 @@ def target_create(ctx: ToolContext, args: dict) -> dict:
     return {"status": "ok", "target": name, "created_from": current,
             "note": "后续 state_* 工具请使用新的 target 名"}
 
+def _compact_now(ctx: ToolContext, args: dict) -> dict:
+    if ctx.compact_request is None:
+        return {"status": "error", "error": "当前运行不支持主动压缩"}
+    keep = str(args.get("keep") or "").strip()
+    next_step = str(args.get("next_step") or "").strip()
+    if not keep or not next_step:
+        return {"status": "error", "error": "keep 和 next_step 不能为空"}
+    return ctx.compact_request(keep, next_step)
+
+
 def _caps(ctx: ToolContext, args: dict) -> dict:
     from .providers import inventory
     from .toolmeta import ToolConfigError
@@ -1102,6 +1115,16 @@ def default_registry() -> Registry:
             "tags": {"type": "array", "items": {"type": "string"}},
             "source": {"type": "string"}},
          "required": ["kind", "title", "body_md"]}, _kb_propose))
+    r.register(ToolSpec(
+        "compact_now",
+        "主动压缩当前会话并自动继续。仅当上下文状态显示 >=75% 且当前任务已完成、测试通过、"
+        "关键进度已保存、没有半成品时调用；85% 是硬边界，超过时即使未完成也应立即压缩。"
+        "调用后本轮在持久化工具结果后结束，运行时会压缩历史并自动恢复 next_step。",
+        {"type": "object", "properties": {
+            "keep": {"type": "string", "description": "摘要必须保留的内容(文件/决策/未完成状态)"},
+            "next_step": {"type": "string", "description": "压缩完成后立即继续的动作"}},
+         "required": ["keep", "next_step"]}, _compact_now))
+
     r.register(ToolSpec(
         "target_create",
         "从共享默认 target(session)创建真实固件 target,并把当前 run 绑定过去"

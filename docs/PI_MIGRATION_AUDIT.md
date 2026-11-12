@@ -126,7 +126,7 @@ Pi 会话工具调用统计(10 个 firmware-loop 会话):
 | 证据/复核/结论 | `AGENTS`/`LOOP`/Domain | 结构化事实、复核、范围 | `fwcore/domain.py`、`gates_db.py` | 工具/闸门/DB | `test_evidence*`、`test_conclude*` | 完整 | 当前比旧文档更强 |
 | 三镜/误判回溯 | `LOOP` | 机制/作者/状态三镜、回溯 | `LOOP` + `Research.pool`/`record_mirror` | 但 `LOOP` 末尾未注入 | 无专项 runtime 测试 | **部分** | 文档完整,Agent 当前看不到该段 |
 | 报告/提交 | `AGENTS`/模板 | advisory/索引/CVE/不提交 | `tools/templates`、`gates_db` | 模板 + 文档 | `derived_check` | 适配 | 浏览器 MCP 缺失;Pi 命令引用失效 |
-| 长上下文/恢复 | Pi/Pi Core 参考 | 压缩、checkpoint、resume | `fwcore/compact.py`、`runtime`、DB | Runtime | 大量测试 | 完整 | Pi Extension 未复制(有意) |
+| 长上下文/恢复 | Pi/Pi Core 参考 | 压缩、checkpoint、resume、`compact_now` 自压缩 | `fwcore/compact.py`、`runtime`、DB、Tools | Runtime + `compact_now` Tool | 大量测试 + 定向自压缩测试 | 适配 | Pi fuel-gauge 的 `compact_now`/75–80% 策略已适配；Pi thinking content-block/signature 未复制 |
 | 日志/下一步 | 旧 notes | 逐轮/停止/决策 | DB `research_logs`、`state_add_log` | Runtime/工具 | 迁移/测试 | 完整 | 旧 Markdown notes 已迁移到 DB |
 | 子代理分工 | `prompts/*.txt` | hypothesis-scanner/triage/extractor | `LOOP` 内联步骤 | 文档 | — | 有意废弃 | 旧 OpenCode 子代理不存在;已折叠 |
 | Pi harness 护栏 | `.pi/guards/*` | 防假收尾/扫描/截图 | 无 fwcore runtime | 仅文档 | 无 | **部分/未迁移** | 需要产品侧 tool-call 拦截或 Gate |

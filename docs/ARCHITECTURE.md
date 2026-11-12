@@ -198,11 +198,15 @@ manifest 的 `capability` 不满足 ⇒ 进 `unavailable` 报告,不静默消失
 - 最近一次上下文 usage 取**最新 main call**(不是 summarize),由 SQLite 直接筛选,
   不用固定事件条数窗口;没有 provider usage 时显示 unknown,不回退旧值。
 - 阈值 = `window − output_reserve`(Pi 语义);1M 窗口/8k 预留 = 992k。
-- 压缩:按**协议组**切(assistant.tool_calls + 全部 tool 结果),保留最近 `keep_recent_tokens`;
-  被丢弃的历史按 Pi 语义**一次摘要请求**发送(`single_call=True`),不再按 60k 分块;摘要请求使用
+- 压缩切点按 Pi 的 user-message span：正常在 user 边界切；单个 span 超预算时切在 assistant，
+  前半段走独立的 `TURN_PREFIX_SUMMARIZATION_PROMPT`，再与历史摘要合并（split turn）。
+- 被丢弃的历史按 Pi 语义**一次摘要请求**发送(`single_call=True`),不再按 60k 分块;摘要请求使用
   独立 system 身份(禁止调用工具/继续任务),若模型仍返回工具调用标记(如 DSML),摘要视为失败、
   原始历史保持不动;摘要为空同样失败。
   ⇒ `SummarizationIncomplete` ⇒ **历史原样保留** + `run.compact_failed` + 冷却。
+- 主动压缩：模型可调用 `compact_now(keep,next_step)`。75% 起允许、80% 为硬边界；请求在工具批次
+  结束后才真正压缩，成功后写入一条自动 resume user 消息，回到 `next_step`。每个 Runner 最多 5 次
+  自动 resume，并带 20 个百分点冷却；上下文 usage 未知或低于阈值时拒绝。
 - 摘要调用与普通调用同一条**调用前**预算检查,计入 `run_calls` 与 `model.call(kind=summarize)`。
 
 ## 6. 外部开发工具的历史对照(不是依赖,不再扩展)
