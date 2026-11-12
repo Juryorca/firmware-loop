@@ -102,11 +102,11 @@ def test_context_note_is_appended_and_persisted(tmp_path):
     r.run(rid, "t1")
     assert m.calls
     assert m.calls[0][0]["role"] == "system"
-    assert "[Context status]" not in m.calls[0][0]["content"], "状态块不得进 system"
-    assert "[Context status]" in m.calls[0][-1]["content"], "状态块应在首个请求尾部"
-    # 状态是 turn 输入，不是每个 tool result 后都要追加一份。
+    assert "## 现状" not in m.calls[0][0]["content"], "状态块不得进 system"
+    assert "## 现状" in m.calls[0][-1]["content"], "状态卡应在首个请求尾部"
+    # 状态卡是 turn/advance 输入，不是每个 tool result 后都要追加一份。
     for prev, cur in zip(m.calls, m.calls[1:], strict=False):
-        assert not any("[Context status]" in (msg.get("content") or "")
+        assert not any("## 现状" in (msg.get("content") or "")
                        for msg in cur[len(prev):])
     # 动态 context 块不写入 session;session 只保留用户/assistant/tool 条目。
     assert r._load_history(rid)

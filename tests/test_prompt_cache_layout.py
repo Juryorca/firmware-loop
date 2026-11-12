@@ -67,3 +67,31 @@ def test_history_prefix_is_append_only(tmp_path):
     m = _run(tmp_path)
     for prev, cur in zip(m.calls, m.calls[1:], strict=False):
         assert cur[:len(prev)] == prev, "历史不得原地改写/重排"
+
+
+class _FinalRec:
+    name = "final-rec"
+
+    def __init__(self):
+        self.calls: list[list[dict]] = []
+
+    def chat(self, messages, tools):
+        self.calls.append([dict(m) for m in messages])
+        return Reply(content="FINAL: done", tool_calls=[])
+
+
+def test_advance_injects_state_only_once_across_auto_continue(tmp_path):
+    root = str(tmp_path)
+    con = _db.connect(os.path.join(root, "state", "fwcore.sqlite3"))
+    dom = Domain(con, root)
+    dom.create_target("t1", version="1")
+    dom.add_hypothesis("t1", "still open")
+    model = _FinalRec()
+    r = Runner(con, root, model, limits=Limits(max_model_calls=10),
+               policy=Policy(allow_high_risk=True))
+    rid = r.start("t1", "start")
+    r.advance("t1", run_id=rid, max_rounds=3)
+    assert len(model.calls) >= 2
+    assert any(m.get("_context_only") for m in model.calls[0])
+    for prev, cur in zip(model.calls, model.calls[1:], strict=False):
+        assert not any(m.get("_context_only") for m in cur[len(prev):])

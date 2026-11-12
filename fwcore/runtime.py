@@ -31,7 +31,6 @@ from .compact import (
     should_compact,
 )
 from .compact import find_cut as _find_cut
-from .contextinfo import build_status
 from .domain import ConversationPersistError, Domain, new_id
 from .limits import Limits
 from .models import Adapter, ModelHTTPError, Reply, ScriptedAdapter, assistant_message  # noqa: F401
@@ -1274,7 +1273,7 @@ class Runner:
         return "ok"
 
     def turn(self, rid: str, target: str, goal: str | None, history: list[dict],
-             budget: int | None = None) -> RunResult:
+             budget: int | None = None, *, inject_state: bool = True) -> RunResult:
         budget = self.max_steps if budget is None else budget      # None = 不限步数
         step = self.con.execute("SELECT step,rounds FROM runs WHERE id=?", (rid,)).fetchone()["step"]
         rounds = self.con.execute("SELECT rounds FROM runs WHERE id=?", (rid,)).fetchone()["rounds"]
@@ -1342,7 +1341,7 @@ class Runner:
 
         try:
             seen: dict[str, int] = {}
-            state_injected = False
+            state_injected = not inject_state
             empty_streak = 0
             last_content_hashes: list[str] = []
             since = _now()
@@ -1477,20 +1476,11 @@ class Runner:
                     # 前缀缓存:system 必须**静态**(规则),动态状态放历史之后的 user 消息;
                     # 否则 derived/进度一变,整段前缀作废(实测命中率 98% → 1%)
                     _sys = self.research.rules_prompt(target)
-                    # 用户消息已在 history 中；动态状态只保留程序生成的研究事实。
-                    _state = self.research.state_prompt(target, None, rid)
-                    _last_usage = self._last_main_usage(rid)
-                    _status = build_status(
-                        model=str(getattr(self.model, "model", "") or getattr(self.model, "name", "")),
-                        window=self.limits.context_tokens or None,
-                        output_reserve=self.limits.output_reserve_tokens,
-                        context_tokens=self.limits.context_tokens,
-                        last_prompt_tokens=_last_usage.get("prompt_tokens"),
-                        last_cached_tokens=_last_usage.get("cached_tokens"))
-                    _state = _state + "\n\n" + _status.render()
-                    _note = self._prepare_state.get("context_note")
-                    if _note:
-                        _state += "\n\n## 轮前准备(程序注入)\n" + _note
+                    # Only a compact card is injected.  Full hypotheses,
+                    # evidence, observations and conversation stay in the
+                    # authoritative store and are fetched on demand.
+                    _state = self.research.state_card(
+                        target, rid, self._prepare_state.get("context_note"))
                     # A failed session write must not consume a model call.
                     next_call = run_calls + 1
                     tail = history[-1] if history else None
@@ -2177,11 +2167,18 @@ class Runner:
                 return res
             if res.state == "paused":
                 return res                       # 预算是"检查点",不是研究结论
-            # 模型说 FINAL 但还有未收口项 ⇒ 带阻塞清单开下一轮(自动继续)
+            # 模型说 FINAL 但还有未收口项 ⇒ 带阻塞清单开下一轮(自动继续).
+            # The state card was already injected at the start of this advance;
+            # auto-continue carries only the blockers for this action.
             rounds_before = res.rounds
-            res2 = self.turn(rid, target,
-                             "继续推进未收口项:\n" + "\n".join(f"- {b}" for b in _blockers_of(res)),
-                             res.history)
+            blockers = _blockers_of(res)
+            lines = [f"- {b}" for b in blockers[:5]]
+            if len(blockers) > 5:
+                lines.append(f"- 另有 {len(blockers) - 5} 条，见 research_derived")
+            res2 = self.turn(
+                rid, target, "继续推进未收口项:\n" + "\n".join(lines),
+                res.history, inject_state=False,
+            )
             res2 = self._stop_on_finding(res2, finding_before, target)
             if res2.finding:
                 return res2

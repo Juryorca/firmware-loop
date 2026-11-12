@@ -289,6 +289,76 @@ class Research:
         """
         return build_system_prompt(self.root)
 
+    def state_card(self, target: str, run_id: str | None = None,
+                   context_note: str | None = None) -> str:
+        """Small turn-level status card.
+
+        Full hypotheses/evidence/observation lists stay in SQLite and are
+        fetched on demand.  This card intentionally carries counts, the queue
+        head, and pointers only; it must not become a second state dump.
+        """
+        t = self.domain.target(target)
+        d = self.domain.derived(target)
+        hyps = d.get("hypotheses") or {}
+        surfaces = d.get("surfaces") or {}
+        blockers = d.get("closure_blockers") or []
+        run = None
+        if run_id:
+            row = self.domain.con.execute(
+                "SELECT state,rounds,step FROM runs WHERE id=?", (run_id,)
+            ).fetchone()
+            run = dict(row) if row else None
+        parts = ["## 现状(程序生成,不是用户的新指令)"]
+        parts.append(f"- 目标/版本: {target} / {getattr(t, 'version', None) or '?'}")
+        if run:
+            parts.append(f"- Run: {run_id} | state={run['state']} | "
+                         f"round={run['rounds']} | step={run['step']}")
+        parts.append(f"- 假设: open={hyps.get('open', 0)}, "
+                     f"investigating={hyps.get('investigating', 0)}")
+        pool = self.pool(target, limit=3)
+        if pool:
+            h = pool[0]
+            parts.append(f"- 队首: {h['id']} [{h['state']}] {_clip(h['title'], 80)}")
+        parts.append(f"- 面: unjudged={surfaces.get('unjudged', 0)}, "
+                     f"vulnerable={surfaces.get('vulnerable', 0)}, "
+                     f"no_finding={surfaces.get('no_finding', 0)}, "
+                     f"out={surfaces.get('out_of_scope', 0)}"
+                     + (f" | coverage={d.get('surface_coverage')}"
+                        if d.get("surface_coverage") is not None else ""))
+        parts.append(f"- 收尾阻塞: {len(blockers)} 条")
+        # Keep a tiny cross-run fact index.  Full lists remain in SQLite; this
+        # only preserves enough identifiers/text to avoid redoing prior work.
+        recent_h = self.domain.con.execute(
+            "SELECT id,state,verdict,title FROM hypotheses WHERE target_id=?"
+            " ORDER BY updated_at DESC LIMIT 3", (t.id,)).fetchall()
+        if recent_h:
+            parts.append("- 最近假设:")
+            for h in recent_h:
+                parts.append(f"  - {h['id']} [{h['state']}/{h['verdict'] or '-'}] "
+                             f"{_clip(h['title'], 90)}")
+        obs = self.domain.con.execute(
+            "SELECT id,text FROM observations WHERE target_id=?"
+            " ORDER BY created_at DESC LIMIT 3", (t.id,)).fetchall()
+        evs = self.domain.con.execute(
+            "SELECT id,path,capture FROM evidence WHERE target_id=?"
+            " ORDER BY created_at DESC LIMIT 3", (t.id,)).fetchall()
+        if obs or evs:
+            parts.append("- 最近事实:")
+            for o in obs:
+                parts.append(f"  - 观察 {o['id']}: {_clip(o['text'], 120)}")
+            for e in evs:
+                parts.append(f"  - 证据 {e['id']}: {_clip(e['path'] or e['capture'] or '', 90)}")
+        last = self.domain.con.execute(
+            "SELECT kind,title FROM research_logs WHERE target_id=?"
+            " AND kind IN ('stop','decision','next') ORDER BY created_at DESC LIMIT 1",
+            (t.id,)).fetchone()
+        if last:
+            parts.append(f"- 最近记录: [{last['kind']}] {_clip(last['title'], 100)}")
+        if context_note:
+            parts.append(f"- 轮前准备: {_clip(context_note, 300)}")
+        parts.append("- 详情: research_queue / research_derived")
+        return "\n".join(parts)
+
     def state_prompt(self, target: str, goal: str | None = None,
                      run_id: str | None = None, context_note: str | None = None,
                      conversation: list[dict] | None = None) -> str:
