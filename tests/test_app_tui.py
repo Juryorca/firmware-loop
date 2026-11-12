@@ -814,6 +814,37 @@ def test_transcript_bounds_widget_tree(tmp_path):
         rt.dispose()
 
 
+def test_research_tables_only_rebuild_when_their_rows_change():
+    class FakeTable:
+        def __init__(self):
+            self.cleared = 0
+            self.rows: list[str] = []
+
+        def clear(self):
+            self.cleared += 1
+            self.rows.clear()
+
+        def add_row(self, value):
+            self.rows.append(value)
+
+    table = FakeTable()
+    screen = object.__new__(ResearchScreen)
+    screen._last_table_sigs = {}
+    cast(Any, screen).query_one = lambda selector, cls: table
+
+    def add(target, item):
+        target.add_row(item["id"])
+
+    screen._sync_table("#test", [{"id": "a"}], add)
+    screen._sync_table("#test", [{"id": "a"}], add)
+    assert table.cleared == 1
+    assert table.rows == ["a"]
+
+    screen._sync_table("#test", [{"id": "a"}, {"id": "b"}], add)
+    assert table.cleared == 2
+    assert table.rows == ["a", "b"]
+
+
 def test_model_error_clears_busy_status(tmp_path):
     cfg = make_ws(tmp_path)
 
@@ -1145,6 +1176,52 @@ def test_tick_coalesces_stream_deltas(tmp_path, monkeypatch):
             monkeypatch.setattr(app, "_update_status", lambda: None)
             app._tick()
             assert calls == ["abc"]
+            await pilot.press("ctrl+q")
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        rt.dispose()
+
+
+def test_tick_coalesces_tool_argument_deltas(tmp_path, monkeypatch):
+    from fwapp.session import UiEvent
+
+    cfg = make_ws(tmp_path)
+    rt = AppRuntime(cfg, target="t1", mcp=False, watchdog=False)
+    app = FwApp(rt)
+
+    async def scenario():
+        async with app.run_test(size=(90, 20)) as pilot:
+            await pilot.pause(0.1)
+
+            class FakeSession:
+                busy = False
+                pending = ()
+
+                def __init__(self):
+                    self.events = [
+                        UiEvent("toolcall_start", data={
+                            "index": 0, "name": "shell_exec", "call_id": "c1"}),
+                        UiEvent("toolcall_delta", data={"index": 0, "text": '{"a":'}),
+                        UiEvent("toolcall_delta", data={"index": 0, "text": '1}'}),
+                    ]
+
+                def drain_events(self):
+                    out, self.events = self.events, []
+                    return out
+
+                def tool_updates(self):
+                    return []
+
+            app.sess = cast(Any, FakeSession())  # type: ignore[assignment]
+            updates: list[dict] = []
+            monkeypatch.setattr(ToolWidget, "update_call",
+                                lambda self, call: updates.append(dict(call)))
+            app._update_status = lambda: None  # type: ignore[method-assign]
+            app._tick()
+            assert len(updates) == 1
+            assert updates[0]["args"] == '{"a":1}'
             await pilot.press("ctrl+q")
 
     try:

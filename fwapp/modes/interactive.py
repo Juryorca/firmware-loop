@@ -145,6 +145,7 @@ class FwApp(App):
         # Coalesce them per UI tick; Pi's TUI likewise coalesces render requests.
         self._stream_text_pending = ""
         self._stream_reason_pending = ""
+        self._stream_tool_pending: dict[int, str] = {}
         self._templates = discover(self.sess.services.cfg.root)
         static_names = {c.name for c in COMMANDS}
         self._commands = list(COMMANDS) + [
@@ -302,12 +303,23 @@ class FwApp(App):
             if ev.kind == "reasoning_delta":
                 self._stream_reason_pending += ev.data.get("text") or ev.text or ""
                 continue
+            if ev.kind == "toolcall_delta":
+                try:
+                    idx = int(ev.data.get("index") or 0)
+                except (TypeError, ValueError):
+                    idx = 0
+                self._stream_tool_pending[idx] = (
+                    self._stream_tool_pending.get(idx, "") + (ev.data.get("text") or ev.text or "")
+                )
+                continue
             # Flush before every control event (assistant_done/error/toolcall/
             # turn_done) so finalize sees the streamed text instead of creating
             # a second message after the batch.
             self._flush_stream_pending()
+            self._flush_stream_tool_pending()
             self._handle_event(ev)
         self._flush_stream_pending()
+        self._flush_stream_tool_pending()
         # Text/reasoning deltas only change the streamed widget. Rebuilding the
         # footer snapshot for every token is unnecessary and makes the UI do
         # database work at token rate. Control events still refresh it.
@@ -351,6 +363,12 @@ class FwApp(App):
             self._stream_msg.append_text(text)
             self._assistant_rendered = True
 
+    def _flush_stream_tool_pending(self) -> None:
+        pending, self._stream_tool_pending = self._stream_tool_pending, {}
+        for idx, text in pending.items():
+            if text:
+                self._stream_tool_event({"index": idx, "text": text})
+
     def _reset_stream(self) -> None:
         self._assistant_rendered = False
         self._stream_error_notified = False
@@ -361,6 +379,7 @@ class FwApp(App):
         self._stream_args.clear()
         self._stream_text_pending = ""
         self._stream_reason_pending = ""
+        self._stream_tool_pending.clear()
 
     def _stream_tool_event(self, data: dict) -> None:
         try:

@@ -192,6 +192,7 @@ class ResearchScreen(ModalScreen[None]):
         self.session = session
         self.initial_tab = tab
         self._last_refresh_sig: str | None = None
+        self._last_table_sigs: dict[str, str] = {}
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="dialog research"):
@@ -221,6 +222,16 @@ class ResearchScreen(ModalScreen[None]):
             self.query_one(tid, DataTable).add_columns(*cols)
         self.refresh_data()
         self.set_interval(2.0, self.refresh_data)
+
+    def _sync_table(self, selector: str, items, add_row) -> None:
+        sig = json.dumps(items, sort_keys=True, default=str)
+        if self._last_table_sigs.get(selector) == sig:
+            return
+        self._last_table_sigs[selector] = sig
+        table = self.query_one(selector, DataTable)
+        table.clear()
+        for item in items:
+            add_row(table, item)
 
     def refresh_data(self) -> None:
         sess = self.session
@@ -290,27 +301,38 @@ class ResearchScreen(ModalScreen[None]):
             gate.append("- 没有阻塞\n", style="green")
         self.query_one("#gate-body", Static).update(gate)
 
-        hyp = self.query_one("#hyp-table", DataTable)
-        hyp.clear()
-        for h in rows.get("hypotheses") or []:
-            hyp.add_row(h["id"], hypothesis_state_label(h["state"]),
-                        verdict_label(h.get("verdict") or ""), str(h["priority"]),
-                        (h["title"] or "")[:120])
-        obs = self.query_one("#obs-table", DataTable)
-        obs.clear()
-        for o in rows.get("observations") or []:
-            obs.add_row((o.get("created_at") or "")[:19], (o.get("text") or "")[:200])
-        ev = self.query_one("#ev-table", DataTable)
-        ev.clear()
-        for e in rows.get("evidence") or []:
-            ev.add_row(e["id"], e.get("kind") or "", "已复核" if e.get("verified") else "未复核",
-                       str(e.get("version") or ""), (e.get("path") or e.get("capture") or "")[:100])
-        con_table = self.query_one("#con-table", DataTable)
-        con_table.clear()
-        for c in rows.get("conclusions") or []:
-            con_table.add_row(c["id"], c.get("hypothesis_id") or "",
-                              verdict_label(c.get("verdict") or ""),
-                              (c.get("scope_note") or "")[:80], (c.get("created_at") or "")[:19])
+        self._sync_table(
+            "#hyp-table", rows.get("hypotheses") or [],
+            lambda table, h: table.add_row(
+                h["id"], hypothesis_state_label(h["state"]),
+                verdict_label(h.get("verdict") or ""), str(h["priority"]),
+                (h["title"] or "")[:120],
+            ),
+        )
+        self._sync_table(
+            "#obs-table", rows.get("observations") or [],
+            lambda table, o: table.add_row(
+                (o.get("created_at") or "")[:19], (o.get("text") or "")[:200],
+            ),
+        )
+        self._sync_table(
+            "#ev-table", rows.get("evidence") or [],
+            lambda table, e: table.add_row(
+                e["id"], e.get("kind") or "",
+                "已复核" if e.get("verified") else "未复核",
+                str(e.get("version") or ""),
+                (e.get("path") or e.get("capture") or "")[:100],
+            ),
+        )
+        self._sync_table(
+            "#con-table", rows.get("conclusions") or [],
+            lambda table, c: table.add_row(
+                c["id"], c.get("hypothesis_id") or "",
+                verdict_label(c.get("verdict") or ""),
+                (c.get("scope_note") or "")[:80],
+                (c.get("created_at") or "")[:19],
+            ),
+        )
 
     def action_close(self) -> None:
         self.dismiss(None)

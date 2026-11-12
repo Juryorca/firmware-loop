@@ -51,6 +51,7 @@ class TranscriptView(VerticalScroll):
 
     def __init__(self, *children, **kw):
         self._trim_scheduled = False
+        self._scroll_scheduled = False
         super().__init__(*children, **kw)
 
     def at_bottom(self) -> bool:
@@ -95,10 +96,12 @@ class TranscriptView(VerticalScroll):
         tool body updates, and initial transcript loading.  Calling
         ``scroll_end`` synchronously during mount sees the old max_scroll_y.
         """
-        if self.is_attached:
+        if self.is_attached and not self._scroll_scheduled:
+            self._scroll_scheduled = True
             self.call_after_refresh(self._scroll_to_end)
 
     def _scroll_to_end(self) -> None:
+        self._scroll_scheduled = False
         if self.is_attached:
             self.scroll_end(animate=False)
 
@@ -285,6 +288,7 @@ class ToolWidget(Vertical):
         self.header = Static(classes="tool-header")
         self.body = Static(classes="tool-body")
         self._body_built = False
+        self._body_sig: tuple[object, ...] | None = None
         self._stdout_key: tuple[str, int, int] | None = None
         self._stdout_text = ""
         self.body.display = expanded
@@ -330,6 +334,13 @@ class ToolWidget(Vertical):
             self._body_built = False
 
     def _render_body(self) -> None:
+        c = self.call_data
+        sig = (c.get("args"), c.get("note"), c.get("exit_code"),
+               c.get("stdout_path"), c.get("result_path"))
+        if (self._body_built and sig == self._body_sig
+                and c.get("status") in ("ok", "error", "timeout", "cancelled")):
+            return
+        self._body_sig = sig
         self.body.update(self._body())
         self._body_built = True
 
