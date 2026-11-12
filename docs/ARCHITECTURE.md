@@ -94,8 +94,9 @@ conclusions runs checkpoints compactions tool_calls events mirror_checks researc
 - **pgid 安全三条件**:杀进程组必须①同主机 ②`.pgids` 带 starttime ③进程组仍属该 starttime
   (缺 starttime ⇒ 不杀,防 pgid 复用误伤);接管死亡 owner 时清孤儿,并把它遗留的
   `tool_calls.status='running'` 标 cancelled。
-- **预算可核对**:`runs.budget_note` 记录每次 start/resume 生效的 limits 与最近 limit_hit;
-  计数每步落库;预算只暂停(不写结论),resume 延续同一计数。
+- **执行上限默认关闭**:模型调用次数/墙钟/单工具时长默认不设限;`limits_config` 只暴露
+  上下文/压缩配置。`Limits` 的 `max_*` 字段仅保留为测试/兼容钩子,不再暴露给用户配置。
+  `runs.budget_note` 仍记录计数和事件,但不会因默认上限暂停;resume 延续累计计数。
 
 对应测试:`test_runtime_core`(租约/心跳/批次/handback;接管后预留/计数/checkpoint 拒绝写、
 异常路径不覆盖新 owner、user_stop/异主 resume 拒绝)、`test_watchdog`(CAS 与 pgid 安全)、

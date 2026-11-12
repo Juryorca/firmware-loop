@@ -121,19 +121,19 @@ def test_system_prompt_identical_across_calls(tmp_path):
 def test_limits_config_from_model_json(tmp_path):
     os.makedirs(os.path.join(str(tmp_path), "state"), exist_ok=True)
     cfg = {"context_tokens": 1_000_000, "output_reserve_tokens": 12_000,
-           "max_model_calls": 1000}
+           "max_model_calls": 1000}  # legacy key must be ignored
     with open(os.path.join(str(tmp_path), "state", "model.json"), "w", encoding="utf-8") as f:
         json.dump(cfg, f)
     os.environ.pop("FW_CONTEXT_TOKENS", None)
     d = limits_config(str(tmp_path))
     assert d["context_tokens"] == 1_000_000 and d["output_reserve_tokens"] == 12_000
-    assert d["max_model_calls"] == 1000
+    assert "max_model_calls" not in d
     os.environ["FW_CONTEXT_TOKENS"] = "500000"
     os.environ["FW_MAX_MODEL_CALLS"] = "1500"
     try:
         d2 = limits_config(str(tmp_path))
         assert d2["context_tokens"] == 500_000   # env 覆盖
-        assert d2["max_model_calls"] == 1500
+        assert "max_model_calls" not in d2
     finally:
         os.environ.pop("FW_CONTEXT_TOKENS")
         os.environ.pop("FW_MAX_MODEL_CALLS")

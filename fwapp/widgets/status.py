@@ -145,11 +145,7 @@ def format_snapshot(s: Snapshot) -> Text:
         t.append(" · 正在处理", style="#D5B47A")
     if s.handback:
         t.append(f" · {handback_label(s.handback)}", style="#D5B47A")
-    lim = s.limits or {}
-    calls_max = lim.get("max_model_calls", "?")
-    if calls_max in (0, "unbounded"):
-        calls_max = "∞"
-    t.append(f" · 模型调用 {s.calls}/{calls_max}", style="#66717F")
+    t.append(f" · 模型调用 {s.calls}", style="#66717F")
     # tools 是 tool_calls 计数，不是“可用工具数”。
     t.append(f" · 工具调用 {s.tools}", style="#66717F")
     tok = s.tokens or {}

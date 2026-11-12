@@ -6,8 +6,8 @@
 - **执行资源边界**是工程保护:模型调用次数、工具时长。
   ⇒ 触发时**只允许暂停(run.state='paused')**,可恢复;绝不写结论、绝不放弃假设。
 
-默认模型调用次数和单工具时长有边界;墙钟 `max_seconds` 默认不设限
-(用户明确要求长研究不被 30 分钟墙钟切断)。需要时限时显式配置。
+默认**不设**模型调用次数、墙钟或单工具时长上限。旧的 `max_*` 字段保留为测试/兼容钩子，
+不会被 `limits_config` 暴露；生产配置不设置这些值。
 """
 
 from __future__ import annotations
@@ -17,11 +17,10 @@ from dataclasses import dataclass
 
 @dataclass
 class Limits:
-    # 软边界:0 表示"该维度不限"
-    max_model_calls: int = 200
-    # 墙钟默认不设限;需要时通过 state/model.json / FW_MAX_SECONDS 显式配置。
+    # 兼容/测试钩子:0 = 不限；生产配置不暴露这些字段。
+    max_model_calls: int = 0
     max_seconds: float = 0.0
-    max_tool_seconds: float = 120.0
+    max_tool_seconds: float = 0.0
     # 模型上下文窗口(token,显式配置):0 = 不做阈值压缩(仍受 provider 上限约束)。
     # 到达 context_tokens-reserve 时压缩较早历史,保留最近 keep_recent_tokens。
     context_tokens: int = 0

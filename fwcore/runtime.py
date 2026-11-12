@@ -1628,7 +1628,8 @@ class Runner:
                     self._checkpoint(rid, step, history)
                     break
                 if reply.tool_calls:
-                    tool_timeout = min(self.timeout, self.limits.max_tool_seconds)
+                    tool_timeout = (self.timeout if not self.limits.max_tool_seconds
+                                    else min(self.timeout, self.limits.max_tool_seconds))
                     ctx = ToolContext(domain=self.domain, root=self.root, run_id=rid,
                                       target=target, timeout=tool_timeout,
                                       artifacts_dir=os.path.join(self.root, "state", "artifacts", rid),

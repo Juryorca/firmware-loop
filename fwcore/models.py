@@ -335,15 +335,14 @@ def limits_config(root: str | None = None) -> dict:
     """上下文相关的**执行配置**(生产来源: env > state/model.json)。
 
     只认显式配置:没有 `context_tokens` 就是"窗口未知",不做按模型名的猜测。
-    返回的键可直接传给 `Limits(**)`:max_model_calls / max_seconds /
-    max_tool_seconds / context_tokens / output_reserve_tokens /
-    keep_recent_tokens / compact_retry_cooldown_calls。
+    返回的键可直接传给 `Limits(**)`:context_tokens / output_reserve_tokens /
+    keep_recent_tokens / compact_retry_cooldown_calls。模型调用/工具/墙钟上限
+    不再从配置读取。
     """
     import json as _json
     import os as _os
 
-    keys = ("max_model_calls", "max_seconds", "max_tool_seconds",
-            "context_tokens", "output_reserve_tokens",
+    keys = ("context_tokens", "output_reserve_tokens",
             "keep_recent_tokens", "compact_retry_cooldown_calls")
     out: dict = {}
     path = _os.environ.get("FW_MODEL_CONFIG") or (
