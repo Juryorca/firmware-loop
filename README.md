@@ -6,6 +6,8 @@
 
 [Quick Start](#quick-start) · [Commands](#commands) · [Configuration](#configuration) · [Design](#design) · [Docs](#docs)
 
+![firmware-loop TUI demo](docs/assets/firmware-loop-demo.gif)
+
 ## Quick Start
 
 **Requirements:** Python 3.10+、Git；真实研究需要兼容 OpenAI API 的模型端点。分析工具按需安装。
