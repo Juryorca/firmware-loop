@@ -1,0 +1,104 @@
+name: portability
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  uv:
+    name: uv / Python 3.12
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # astral-sh/setup-uv v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e
+        with:
+          enable-cache: true
+
+      - name: Install the checkout in isolation
+        run: |
+          uv venv --python 3.12 .venv
+          source .venv/bin/activate
+          uv pip install ".[tui]"
+          python -c "import fwcore, fwapp, textual; print('imports ok')"
+          fw-core --help
+
+      - name: Check built-in prompt templates
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+          from fwcore.prompt_templates import discover
+
+          templates = discover("/definitely-not-a-workspace")
+          assert {"fw", "提交"} <= set(templates), sorted(templates)
+          print("built-in templates:", sorted(templates))
+          PY
+
+      - name: Build a wheel and run it outside the checkout
+        run: |
+          uv build --wheel
+          uv venv --python 3.12 "${RUNNER_TEMP}/wheel-venv"
+          uv pip install --python \
+            "${RUNNER_TEMP}/wheel-venv/bin/python" dist/*.whl
+
+          cd "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/wheel-venv/bin/fw-core" --help
+          "${RUNNER_TEMP}/wheel-venv/bin/python" - <<'PY'
+          from fwcore.prompt_templates import discover
+
+          templates = discover("/definitely-not-a-workspace")
+          assert {"fw", "提交"} <= set(templates), sorted(templates)
+          print("wheel templates:", sorted(templates))
+          PY
+
+          "${RUNNER_TEMP}/wheel-venv/bin/fw-core" \
+            --root "${RUNNER_TEMP}/workspace" init demo --version 1.0
+          "${RUNNER_TEMP}/wheel-venv/bin/fw-core" \
+            --root "${RUNNER_TEMP}/workspace" derive demo
+
+  mamba:
+    name: mamba / Python 3.12
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      # conda-incubator/setup-miniconda v3
+      - uses: conda-incubator/setup-miniconda@fc2d68f6413eb2d87b895e92f8584b5b94a10167
+        with:
+          miniforge-version: latest
+          use-mamba: true
+          activate-environment: firmware-loop
+          python-version: "3.12"
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install the checkout in isolation
+        shell: bash -el {0}
+        run: |
+          python -m pip install ".[tui]"
+          python -c "import fwcore, fwapp, textual; print('imports ok')"
+          fw-core --help
+
+      - name: Check built-in prompt templates
+        shell: bash -el {0}
+        run: |
+          python - <<'PY'
+          from fwcore.prompt_templates import discover
+
+          templates = discover("/definitely-not-a-workspace")
+          assert {"fw", "提交"} <= set(templates), sorted(templates)
+          print("built-in templates:", sorted(templates))
+          PY
+
+      - name: Run the CLI outside the checkout
+        shell: bash -el {0}
+        run: |
+          cd "${RUNNER_TEMP}"
+          fw-core --root "${RUNNER_TEMP}/workspace" init demo --version 1.0
+          fw-core --root "${RUNNER_TEMP}/workspace" derive demo
