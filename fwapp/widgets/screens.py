@@ -357,15 +357,15 @@ def _toolset_user_text(report: dict) -> str:
     ready = report.get("required_ready", 0)
     lines.append(f"必需项：{ready}/{req} 就绪；未就绪 {report.get('required_incomplete', 0)} 项")
     if report.get("config_error"):
-        lines.append(f"配置错误：{report['config_error']}")
+        lines.append("工具配置读取失败，请关闭后用 fw-core toolset 查看诊断。")
         return "\n".join(lines)
     for item in report.get("items", []):
         if not item.get("required"):
             continue
         status = TOOLSET_STATUS_LABELS.get(item.get("status"), "状态未知")
         lines.append(f"- {item.get('label', '未命名工具')}：{status}")
-        for reason in (item.get("reasons") or [])[:2]:
-            lines.append(f"  · {reason}")
+    if report.get("required_incomplete"):
+        lines += ["", "未就绪项可关闭后运行 /tool-setup 处理；详细诊断见 fw-core toolset。"]
     return "\n".join(lines)
 
 

@@ -35,6 +35,7 @@ def test_default_toolset_report_and_repo_assets():
     text = render_report(rep)
     assert "Default Toolset Integrity" in text
     assert "qemu" in text.lower()
+    assert all("reasons" not in item for item in rep["items"])
 
 
 def test_repo_assets_are_executable():

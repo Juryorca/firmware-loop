@@ -354,6 +354,26 @@ def test_toggle_tools_includes_streaming_previews():
     assert tool.body.display is False and stream.body.display is False
 
 
+def test_toolset_user_text_keeps_internal_probes_out_of_tui():
+    from fwapp.widgets.screens import _toolset_user_text
+
+    report = {
+        "required_total": 2,
+        "required_ready": 1,
+        "required_incomplete": 1,
+        "config_error": None,
+        "items": [
+            {"label": "AFL++ fuzzing", "required": True, "status": "partial"},
+        ],
+    }
+    text = _toolset_user_text(report)
+    assert "AFL++ fuzzing" in text
+    assert "部分可用" in text
+    assert "tracer" not in text
+    assert "fuzz.aarch64" not in text
+    assert "/tool-setup" in text
+
+
 def test_toolset_screen_loads_in_worker(monkeypatch, tmp_path):
     from fwapp.widgets import screens
 

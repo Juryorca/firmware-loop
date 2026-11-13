@@ -170,25 +170,11 @@ def check_toolset(root: str, *, inventory_data: list[dict] | None = None) -> dic
         status = _worst([repo_status, ext_status] + [x["status"] for x in cap_rows])
         if item.optional and status != READY:
             status = "optional"
-        reasons = []
-        for r in repo_rows:
-            if not r["ok"]:
-                if not r["exists"]:
-                    reasons.append(f"仓库资产缺失: {r['path']}")
-                elif r["needs_executable"] and not r["executable"]:
-                    reasons.append(f"仓库脚本不可执行: {r['path']}")
-        for r in ext_rows:
-            if not r["path"]:
-                reasons.append(f"外部命令缺失: {r['name']}")
-        for r in cap_rows:
-            if r["status"] != READY:
-                reasons.append(f"能力 {r['capability']}={r['status']}: "
-                               f"{r.get('detail') or ''}".rstrip())
         results.append({
             "id": item.id, "label": item.label, "category": item.category,
             "required": item.required, "optional": item.optional,
             "status": status, "repo": repo_rows, "external": ext_rows,
-            "capabilities": cap_rows, "reasons": reasons, "notes": item.notes,
+            "capabilities": cap_rows, "notes": item.notes,
         })
     req = [r for r in results if r["required"]]
     ready = [r for r in req if r["status"] == READY]
@@ -222,12 +208,4 @@ def render_report(report: dict) -> str:
         mark = "OK" if item["status"] == "ready" else (
             "OPT" if item["status"] == "optional" else "FAIL")
         lines.append(f"[{mark}] {item['category']} {item['label']}: {item['status']}")
-        for reason in item["reasons"][:4]:
-            lines.append(f"      - {reason}")
-    if report["required_incomplete"]:
-        lines += ["", "修复建议:"]
-        for item in report["items"]:
-            if item["required"] and item["status"] != "ready":
-                lines.append(f"- {item['label']}: " +
-                             ("; ".join(item["reasons"][:2]) or "检查配置/启动服务"))
     return "\n".join(lines)
