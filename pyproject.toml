@@ -1,6 +1,7 @@
 [project]
 name = "fwcore"
 version = "0.3.0"
+readme = "README.md"
 description = "Firmware research agent framework core: authoritative domain state, open tool registry, resumable runtime"
 requires-python = ">=3.10"
 dependencies = ["quickjs>=1.19"]
@@ -20,4 +21,4 @@ build-backend = "setuptools.build_meta"
 packages = ["fwcore", "fwapp", "fwapp.modes", "fwapp.widgets"]
 
 [tool.setuptools.package-data]
-fwcore = ["prompts/*.md"]
+fwcore = ["prompts/*.md", "prompts/templates/*.md"]
